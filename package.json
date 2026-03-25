@@ -1,0 +1,48 @@
+{
+  "name": "@inferenco/nova-wallet-adapter",
+  "version": "0.1.0",
+  "description": "Standalone Nova wallet adapter for Cedra dapps",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./aip62": {
+      "types": "./dist/aip62.d.ts",
+      "import": "./dist/aip62.js",
+      "require": "./dist/aip62.cjs"
+    },
+    "./auto-register": {
+      "types": "./dist/auto-register.d.ts",
+      "import": "./dist/auto-register.js",
+      "require": "./dist/auto-register.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/aip62.ts src/auto-register.ts --format esm,cjs --dts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cedra-labs/ts-sdk": "^2.2.8",
+    "@cedra-labs/wallet-standard": "^0.5.1",
+    "eventemitter3": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "jsdom": "^26.0.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
+  }
+}
