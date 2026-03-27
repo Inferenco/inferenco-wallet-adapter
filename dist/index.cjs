@@ -868,33 +868,10 @@ var NovaClient = class extends import_eventemitter3.default {
           this.options
         );
       }
-      if (transaction && typeof transaction === "object" && "payload" in transaction && !("rawTransaction" in transaction) && !("data" in transaction)) {
-        throw new NovaAdapterError(
-          "UNSUPPORTED" /* Unsupported */,
-          "Nova provider fallback submit requires a raw transaction-compatible payload"
-        );
-      }
-      const normalized = normalizeTransactionPayload(transaction);
-      if (!normalized.rawTransaction) {
-        throw new NovaAdapterError(
-          "UNSUPPORTED" /* Unsupported */,
-          "Nova provider cannot fall back submit without a raw transaction"
-        );
-      }
-      const signed = await this.signTransaction(normalized.rawTransaction, options);
-      if (!signed || typeof signed !== "object" || !("authenticator" in signed)) {
-        throw new NovaAdapterError(
-          "UNSUPPORTED" /* Unsupported */,
-          "Nova provider signTransaction() fallback did not return an authenticator"
-        );
-      }
-      const submitted = await submitSignedTransaction({
-        network: await this.getNetwork().catch(() => null),
-        fullnodeUrl: this.options.fullnodeUrl,
-        transaction: normalized.rawTransaction,
-        authenticator: signed.authenticator
-      });
-      return { hash: submitted.hash };
+      throw new NovaAdapterError(
+        "UNSUPPORTED" /* Unsupported */,
+        "Nova provider signAndSubmitTransaction() unavailable"
+      );
     } catch (error) {
       remapNovaError(error);
     }
@@ -908,14 +885,6 @@ var NovaClient = class extends import_eventemitter3.default {
       }
       remapNovaError(error);
     }
-  }
-  async submitTransaction(input) {
-    return submitSignedTransaction({
-      network: await this.getNetwork().catch(() => null),
-      fullnodeUrl: this.options.fullnodeUrl,
-      transaction: input.transaction,
-      authenticator: input.authenticator
-    });
   }
   async subscribe() {
     const provider = this.refreshProvider();

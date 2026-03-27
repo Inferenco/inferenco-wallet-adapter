@@ -1,9 +1,7 @@
 import EventEmitter from "eventemitter3";
 import type {
-  AccountAuthenticator,
   AnyRawTransaction,
   Network,
-  PendingTransactionResponse
 } from "@cedra-labs/ts-sdk";
 import type {
   AccountInfo,
@@ -25,7 +23,7 @@ import {
   tryLocalBridgeSignMessage,
   tryLocalBridgeSignTransaction
 } from "./bridge";
-import { createFullMessage, normalizeNetwork, normalizeProviderAccount, normalizeSignMessageOutput, normalizeTransactionPayload, submitSignedTransaction } from "./conversion";
+import { createFullMessage, normalizeNetwork, normalizeProviderAccount, normalizeSignMessageOutput } from "./conversion";
 import { NovaAdapterError, NovaErrorCode, remapNovaError } from "./errors";
 import { buildDeeplinkUrl } from "./deeplink";
 import { detectProvider } from "./provider";
@@ -298,43 +296,10 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         );
       }
 
-      if (
-        transaction &&
-        typeof transaction === "object" &&
-        "payload" in transaction &&
-        !("rawTransaction" in transaction) &&
-        !("data" in transaction)
-      ) {
-        throw new NovaAdapterError(
-          NovaErrorCode.Unsupported,
-          "Nova provider fallback submit requires a raw transaction-compatible payload"
-        );
-      }
-
-      const normalized = normalizeTransactionPayload(transaction as AnyRawTransaction | NovaTransactionPayload);
-      if (!normalized.rawTransaction) {
-        throw new NovaAdapterError(
-          NovaErrorCode.Unsupported,
-          "Nova provider cannot fall back submit without a raw transaction"
-        );
-      }
-
-      const signed = await this.signTransaction(normalized.rawTransaction, options);
-      if (!signed || typeof signed !== "object" || !("authenticator" in signed)) {
-        throw new NovaAdapterError(
-          NovaErrorCode.Unsupported,
-          "Nova provider signTransaction() fallback did not return an authenticator"
-        );
-      }
-
-      const submitted = await submitSignedTransaction({
-        network: await this.getNetwork().catch(() => null),
-        fullnodeUrl: this.options.fullnodeUrl,
-        transaction: normalized.rawTransaction,
-        authenticator: signed.authenticator as AccountAuthenticator
-      });
-
-      return { hash: submitted.hash };
+      throw new NovaAdapterError(
+        NovaErrorCode.Unsupported,
+        "Nova provider signAndSubmitTransaction() unavailable"
+      );
     } catch (error) {
       remapNovaError(error);
     }
@@ -352,18 +317,6 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
       }
       remapNovaError(error);
     }
-  }
-
-  async submitTransaction(input: {
-    transaction: AnyRawTransaction;
-    authenticator: AccountAuthenticator;
-  }): Promise<PendingTransactionResponse> {
-    return submitSignedTransaction({
-      network: await this.getNetwork().catch(() => null),
-      fullnodeUrl: this.options.fullnodeUrl,
-      transaction: input.transaction,
-      authenticator: input.authenticator
-    });
   }
 
   async subscribe(): Promise<void> {

@@ -116,10 +116,6 @@ declare class NovaClient extends EventEmitter<NovaClientEvents> {
     signTransaction(transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1, options?: unknown): Promise<NovaSignTransactionResult>;
     signAndSubmitTransaction(transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignAndSubmitTransactionInput, options?: unknown): Promise<CedraSignAndSubmitTransactionOutput>;
     signAndSubmitBCSTransaction(transaction: AnyRawTransaction | NovaTransactionPayload, options?: unknown): Promise<CedraSignAndSubmitTransactionOutput>;
-    submitTransaction(input: {
-        transaction: AnyRawTransaction;
-        authenticator: AccountAuthenticator;
-    }): Promise<PendingTransactionResponse>;
     subscribe(): Promise<void>;
 }
 

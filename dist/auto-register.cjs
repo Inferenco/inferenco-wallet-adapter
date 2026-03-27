@@ -128,23 +128,6 @@ function normalizeNetwork(network) {
     chainId
   };
 }
-function normalizeTransactionPayload(transaction) {
-  if ("rawTransaction" in transaction) {
-    return {
-      rawTransaction: transaction
-    };
-  }
-  if ("data" in transaction) {
-    return {
-      sender: transaction.sender ? import_ts_sdk.AccountAddress.from(transaction.sender).toString() : void 0,
-      data: transaction.data,
-      options: transaction.options
-    };
-  }
-  return {
-    data: transaction
-  };
-}
 function normalizeSignMessageOutput(output) {
   return {
     address: output.address,
@@ -156,21 +139,6 @@ function normalizeSignMessageOutput(output) {
     prefix: output.prefix ?? "CEDRA",
     signature: output.signature
   };
-}
-function getSdkNetwork(networkInfo, fullnodeUrl) {
-  if (fullnodeUrl) {
-    return new import_ts_sdk.Cedra(new import_ts_sdk.CedraConfig({ network: import_ts_sdk.Network.CUSTOM, fullnode: fullnodeUrl }));
-  }
-  const name = networkInfo?.name;
-  const sdkNetwork = name === "mainnet" ? import_ts_sdk.Network.MAINNET : name === "testnet" ? import_ts_sdk.Network.TESTNET : name === "local" ? import_ts_sdk.Network.LOCAL : import_ts_sdk.Network.DEVNET;
-  return new import_ts_sdk.Cedra(new import_ts_sdk.CedraConfig({ network: sdkNetwork }));
-}
-async function submitSignedTransaction(args) {
-  const cedra = getSdkNetwork(args.network, args.fullnodeUrl);
-  return cedra.transaction.submit.simple({
-    transaction: args.transaction,
-    senderAuthenticator: args.authenticator
-  });
 }
 function createFullMessage(input, address, chainId) {
   return [
@@ -784,33 +752,10 @@ var NovaClient = class extends import_eventemitter3.default {
           this.options
         );
       }
-      if (transaction && typeof transaction === "object" && "payload" in transaction && !("rawTransaction" in transaction) && !("data" in transaction)) {
-        throw new NovaAdapterError(
-          "UNSUPPORTED" /* Unsupported */,
-          "Nova provider fallback submit requires a raw transaction-compatible payload"
-        );
-      }
-      const normalized = normalizeTransactionPayload(transaction);
-      if (!normalized.rawTransaction) {
-        throw new NovaAdapterError(
-          "UNSUPPORTED" /* Unsupported */,
-          "Nova provider cannot fall back submit without a raw transaction"
-        );
-      }
-      const signed = await this.signTransaction(normalized.rawTransaction, options);
-      if (!signed || typeof signed !== "object" || !("authenticator" in signed)) {
-        throw new NovaAdapterError(
-          "UNSUPPORTED" /* Unsupported */,
-          "Nova provider signTransaction() fallback did not return an authenticator"
-        );
-      }
-      const submitted = await submitSignedTransaction({
-        network: await this.getNetwork().catch(() => null),
-        fullnodeUrl: this.options.fullnodeUrl,
-        transaction: normalized.rawTransaction,
-        authenticator: signed.authenticator
-      });
-      return { hash: submitted.hash };
+      throw new NovaAdapterError(
+        "UNSUPPORTED" /* Unsupported */,
+        "Nova provider signAndSubmitTransaction() unavailable"
+      );
     } catch (error) {
       remapNovaError(error);
     }
@@ -824,14 +769,6 @@ var NovaClient = class extends import_eventemitter3.default {
       }
       remapNovaError(error);
     }
-  }
-  async submitTransaction(input) {
-    return submitSignedTransaction({
-      network: await this.getNetwork().catch(() => null),
-      fullnodeUrl: this.options.fullnodeUrl,
-      transaction: input.transaction,
-      authenticator: input.authenticator
-    });
   }
   async subscribe() {
     const provider = this.refreshProvider();

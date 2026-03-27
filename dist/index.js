@@ -56,7 +56,7 @@ import {
   tryLocalBridgeSignAndSubmit,
   tryLocalBridgeSignMessage,
   tryLocalBridgeSignTransaction
-} from "./chunk-FZW3LESP.js";
+} from "./chunk-SVH2I3BP.js";
 
 // src/types.ts
 var NovaWalletReadyState = /* @__PURE__ */ ((NovaWalletReadyState2) => {
