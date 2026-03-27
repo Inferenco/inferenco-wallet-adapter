@@ -20,25 +20,25 @@ import type {
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 
-export type LegacyWalletName<T extends string = string> = T & {
+export type NovaWalletName<T extends string = string> = T & {
   __brand__: "WalletName";
 };
 
-export enum LegacyWalletReadyState {
+export enum NovaWalletReadyState {
   Installed = "Installed",
   NotDetected = "NotDetected",
   Loadable = "Loadable",
   Unsupported = "Unsupported"
 }
 
-export interface LegacyAccountKeys {
+export interface NovaAccountKeys {
   publicKey: string | string[] | null;
   address: string | null;
   authKey: string | null;
   minKeysRequired?: number;
 }
 
-export interface LegacyNetworkInfo {
+export interface NovaNetworkInfo {
   api?: string;
   chainId?: string;
   name: string | undefined;
@@ -52,7 +52,7 @@ export interface SignMessagePayload {
   nonce: string;
 }
 
-export interface LegacySignMessageResponse {
+export interface NovaSignMessageResponse {
   address: string;
   application?: string;
   chainId?: number;
@@ -146,7 +146,7 @@ export interface NovaBridgeTransactionPoll {
   error?: string;
 }
 
-export type LegacyTransactionPayload =
+export type NovaTransactionPayload =
   | InputGenerateTransactionPayloadData
   | {
       sender?: AccountAddressInput;
@@ -182,13 +182,13 @@ export interface NovaProvider {
   network?: () => Promise<string | number | NetworkInfo | NovaProviderResponse<string | number | NetworkInfo>>;
   signMessage?: (
     input: CedraSignMessageInput | SignMessagePayload
-  ) => Promise<CedraSignMessageOutput | LegacySignMessageResponse | NovaProviderResponse<CedraSignMessageOutput | LegacySignMessageResponse>>;
+  ) => Promise<CedraSignMessageOutput | NovaSignMessageResponse | NovaProviderResponse<CedraSignMessageOutput | NovaSignMessageResponse>>;
   signTransaction?: (
-    transaction: AnyRawTransaction | LegacyTransactionPayload,
+    transaction: AnyRawTransaction | NovaTransactionPayload,
     options?: unknown
   ) => Promise<AccountAuthenticator | Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array } | CedraSignTransactionOutputV1_1 | NovaProviderResponse<AccountAuthenticator | Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array } | CedraSignTransactionOutputV1_1>>;
   signAndSubmitTransaction?: (
-    transaction: AnyRawTransaction | LegacyTransactionPayload,
+    transaction: AnyRawTransaction | NovaTransactionPayload,
     options?: unknown
   ) => Promise<CedraSignAndSubmitTransactionOutput | NovaProviderResponse<CedraSignAndSubmitTransactionOutput>>;
   onAccountChange?: (callback: (account: NovaProviderAccount) => void) => Promise<void> | void;
@@ -205,33 +205,33 @@ export interface NovaWindow extends Window {
   aptos?: NovaProvider;
 }
 
-export interface LegacyWalletAdapterLike {
-  name: LegacyWalletName;
+export interface NovaWalletAdapterLike {
+  name: NovaWalletName;
   url: string;
   icon: string;
-  readyState: LegacyWalletReadyState;
+  readyState: NovaWalletReadyState;
   connecting: boolean;
   connected: boolean;
-  publicAccount: LegacyAccountKeys;
-  network: LegacyNetworkInfo;
+  publicAccount: NovaAccountKeys;
+  network: NovaNetworkInfo;
   connect(): Promise<AccountInfo>;
   account(): Promise<AccountInfo>;
   disconnect(): Promise<void>;
   signAndSubmitTransaction(
-    transaction: LegacyTransactionPayload,
+    transaction: NovaTransactionPayload,
     options?: InputGenerateTransactionOptions
   ): Promise<CedraSignAndSubmitTransactionOutput>;
   signAndSubmitBCSTransaction(
-    transaction: LegacyTransactionPayload,
+    transaction: NovaTransactionPayload,
     options?: InputGenerateTransactionOptions
   ): Promise<CedraSignAndSubmitTransactionOutput>;
   signTransaction(
-    transaction: AnyRawTransaction | LegacyTransactionPayload,
+    transaction: AnyRawTransaction | NovaTransactionPayload,
     options?: InputGenerateTransactionOptions
   ): Promise<Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array }>;
   signMessage(
     message: CedraSignMessageInput | SignMessagePayload
-  ): Promise<CedraSignMessageOutput | LegacySignMessageResponse>;
+  ): Promise<CedraSignMessageOutput | NovaSignMessageResponse>;
   onAccountChange(callback: (account: AccountInfo) => void): Promise<void>;
   onNetworkChange(callback: (network: NetworkInfo) => void): Promise<void>;
   deeplinkProvider(url?: string): string;

@@ -30,10 +30,10 @@ import { NovaAdapterError, NovaErrorCode, remapNovaError } from "./errors";
 import { buildDeeplinkUrl } from "./deeplink";
 import { detectProvider } from "./provider";
 import type {
-  LegacySignMessageResponse,
-  LegacyTransactionPayload,
+  NovaSignMessageResponse,
   NovaProvider,
   NovaSignTransactionResult,
+  NovaTransactionPayload,
   NovaWalletOptions
 } from "./types";
 
@@ -200,7 +200,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
     try {
       const provider = this.refreshProvider();
       if (provider?.signMessage) {
-        const result = unwrap(await provider.signMessage(input)) as CedraSignMessageOutput | LegacySignMessageResponse;
+        const result = unwrap(await provider.signMessage(input)) as CedraSignMessageOutput | NovaSignMessageResponse;
         return normalizeSignMessageOutput(result);
       }
 
@@ -236,14 +236,14 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
   }
 
   async signTransaction(
-    transaction: AnyRawTransaction | LegacyTransactionPayload | CedraSignTransactionInputV1_1,
+    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
     options?: unknown
   ): Promise<NovaSignTransactionResult> {
     try {
       const provider = this.refreshProvider();
       if (provider?.signTransaction) {
         return unwrap(
-          await provider.signTransaction(transaction as AnyRawTransaction | LegacyTransactionPayload, options)
+          await provider.signTransaction(transaction as AnyRawTransaction | NovaTransactionPayload, options)
         );
       }
 
@@ -275,7 +275,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
   }
 
   async signAndSubmitTransaction(
-    transaction: AnyRawTransaction | LegacyTransactionPayload | CedraSignAndSubmitTransactionInput,
+    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignAndSubmitTransactionInput,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     try {
@@ -283,7 +283,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
       if (provider?.signAndSubmitTransaction) {
         return unwrap(
           await provider.signAndSubmitTransaction(
-            transaction as AnyRawTransaction | LegacyTransactionPayload,
+            transaction as AnyRawTransaction | NovaTransactionPayload,
             options
           )
         );
@@ -311,7 +311,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         );
       }
 
-      const normalized = normalizeTransactionPayload(transaction as AnyRawTransaction | LegacyTransactionPayload);
+      const normalized = normalizeTransactionPayload(transaction as AnyRawTransaction | NovaTransactionPayload);
       if (!normalized.rawTransaction) {
         throw new NovaAdapterError(
           NovaErrorCode.Unsupported,
@@ -341,7 +341,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
   }
 
   async signAndSubmitBCSTransaction(
-    transaction: AnyRawTransaction | LegacyTransactionPayload,
+    transaction: AnyRawTransaction | NovaTransactionPayload,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     try {

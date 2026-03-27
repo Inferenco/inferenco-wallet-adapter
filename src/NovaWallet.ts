@@ -21,26 +21,26 @@ import { buildDeeplinkUrl } from "./deeplink";
 import { detectProvider } from "./provider";
 import { NovaClient } from "./NovaClient";
 import {
-  LegacyAccountKeys,
-  LegacyNetworkInfo,
-  LegacyWalletAdapterLike,
-  LegacyWalletName,
-  LegacyWalletReadyState,
-  LegacySignMessageResponse,
-  LegacyTransactionPayload,
+  NovaAccountKeys,
+  NovaNetworkInfo,
+  NovaWalletAdapterLike,
+  NovaWalletName,
+  NovaWalletReadyState,
+  NovaSignMessageResponse,
+  NovaTransactionPayload,
   NovaWalletOptions
 } from "./types";
 
-type LegacyEvents = {
+type NovaWalletEvents = {
   accountChange: [string];
-  networkChange: [LegacyNetworkInfo];
+  networkChange: [NovaNetworkInfo];
 };
 
 export class NovaWallet
-  extends EventEmitter<LegacyEvents>
-  implements LegacyWalletAdapterLike
+  extends EventEmitter<NovaWalletEvents>
+  implements NovaWalletAdapterLike
 {
-  readonly name = (isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME) as LegacyWalletName<"Nova Wallet">;
+  readonly name = (isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME) as NovaWalletName<"Nova Wallet">;
   readonly url: string;
   readonly icon = NOVA_WALLET_ICON;
 
@@ -55,11 +55,11 @@ export class NovaWallet
     this.client = new NovaClient(options);
   }
 
-  get readyState(): LegacyWalletReadyState {
-    if (typeof window === "undefined") return LegacyWalletReadyState.Unsupported;
+  get readyState(): NovaWalletReadyState {
+    if (typeof window === "undefined") return NovaWalletReadyState.Unsupported;
     return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser()
-      ? LegacyWalletReadyState.Installed
-      : LegacyWalletReadyState.NotDetected;
+      ? NovaWalletReadyState.Installed
+      : NovaWalletReadyState.NotDetected;
   }
 
   get connecting(): boolean {
@@ -70,7 +70,7 @@ export class NovaWallet
     return !!this.cachedAccount;
   }
 
-  get publicAccount(): LegacyAccountKeys {
+  get publicAccount(): NovaAccountKeys {
     return {
       publicKey: this.cachedAccount?.publicKey.toString() ?? null,
       address: this.cachedAccount?.address.toString() ?? null,
@@ -78,7 +78,7 @@ export class NovaWallet
     };
   }
 
-  get network(): LegacyNetworkInfo {
+  get network(): NovaNetworkInfo {
     return {
       api: this.cachedNetwork?.url,
       chainId: this.cachedNetwork?.chainId?.toString(),
@@ -111,21 +111,21 @@ export class NovaWallet
   }
 
   async signAndSubmitTransaction(
-    transaction: LegacyTransactionPayload,
+    transaction: NovaTransactionPayload,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     return this.client.signAndSubmitTransaction(transaction, options);
   }
 
   async signAndSubmitBCSTransaction(
-    transaction: LegacyTransactionPayload,
+    transaction: NovaTransactionPayload,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     return this.client.signAndSubmitBCSTransaction(transaction, options);
   }
 
   async signTransaction(
-    transaction: AnyRawTransaction | LegacyTransactionPayload,
+    transaction: AnyRawTransaction | NovaTransactionPayload,
     options?: unknown
   ): Promise<Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array }> {
     const result = await this.client.signTransaction(transaction, options);
@@ -140,7 +140,7 @@ export class NovaWallet
 
   async signMessage(
     message: CedraSignMessageInput
-  ): Promise<CedraSignMessageOutput | LegacySignMessageResponse> {
+  ): Promise<CedraSignMessageOutput | NovaSignMessageResponse> {
     return this.client.signMessage(message);
   }
 

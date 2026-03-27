@@ -20,8 +20,8 @@ import type {
 } from "@cedra-labs/wallet-standard";
 import { AccountInfo } from "@cedra-labs/wallet-standard";
 import type {
-  LegacySignMessageResponse,
-  LegacyTransactionPayload,
+  NovaSignMessageResponse,
+  NovaTransactionPayload,
   NovaProviderAccount
 } from "./types";
 import { NovaAdapterError, NovaErrorCode } from "./errors";
@@ -79,7 +79,7 @@ export function normalizeNetwork(network: string | number | NetworkInfo): Networ
 }
 
 export function normalizeTransactionPayload(
-  transaction: AnyRawTransaction | LegacyTransactionPayload
+  transaction: AnyRawTransaction | NovaTransactionPayload
 ): {
   sender?: string;
   data?: InputGenerateTransactionPayloadData;
@@ -106,7 +106,7 @@ export function normalizeTransactionPayload(
 }
 
 export function normalizeSignMessageOutput(
-  output: CedraSignMessageOutput | LegacySignMessageResponse
+  output: CedraSignMessageOutput | NovaSignMessageResponse
 ): CedraSignMessageOutput {
   return {
     address: output.address,
