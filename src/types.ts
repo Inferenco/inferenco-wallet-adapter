@@ -11,9 +11,12 @@ import type {
 } from "@cedra-labs/ts-sdk";
 import type {
   AccountInfo,
+  CedraSignAndSubmitTransactionInput,
   CedraSignAndSubmitTransactionOutput,
   CedraSignMessageInput,
   CedraSignMessageOutput,
+  CedraSignTransactionInputV1_1,
+  CedraSignTransactionOutputV1_1,
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 
@@ -64,9 +67,83 @@ export interface NovaWalletOptions {
   deeplinkBaseUrl?: string;
   websiteUrl?: string;
   forceRegistration?: boolean;
+  desktopRegistration?: boolean;
   detectAliases?: boolean;
   networkOverride?: Network;
   fullnodeUrl?: string;
+  bridgeBaseUrl?: string;
+  bridgeConnectTimeoutMs?: number;
+  bridgePollIntervalMs?: number;
+  bridgePollTimeoutMs?: number;
+}
+
+export interface NovaExternalSession {
+  address: string;
+  publicKey: string;
+  network: string;
+  chainId: number;
+  sessionId: string;
+  bridgeUrl?: string;
+  protocolPublicKey?: string;
+  walletName?: string;
+}
+
+export interface NovaBridgeStartResponse {
+  requestId: string;
+  status?: string;
+}
+
+export interface NovaBridgeConnectPoll {
+  status?: string;
+  requestId?: string;
+  address?: string;
+  publicKey?: string;
+  public_key?: string;
+  network?: string;
+  chainId?: number;
+  chain_id?: number;
+  sessionId?: string;
+  session_id?: string;
+  bridgeUrl?: string;
+  bridge_url?: string;
+  walletName?: string;
+  wallet_name?: string;
+  error?: string;
+}
+
+export interface NovaBridgeMessagePoll {
+  status?: string;
+  requestId?: string;
+  address?: string;
+  publicKey?: string;
+  public_key?: string;
+  signature?: string;
+  fullMessage?: string;
+  full_message?: string;
+  message?: string;
+  error?: string;
+}
+
+export interface NovaBridgeSignTransactionPoll {
+  status?: string;
+  requestId?: string;
+  address?: string;
+  publicKey?: string;
+  public_key?: string;
+  authenticatorHex?: string;
+  authenticator_hex?: string;
+  rawTransactionBcsHex?: string;
+  raw_transaction_bcs_hex?: string;
+  role?: string;
+  sender?: string;
+  error?: string;
+}
+
+export interface NovaBridgeTransactionPoll {
+  status?: string;
+  requestId?: string;
+  hash?: string;
+  error?: string;
 }
 
 export type LegacyTransactionPayload =
@@ -109,7 +186,7 @@ export interface NovaProvider {
   signTransaction?: (
     transaction: AnyRawTransaction | LegacyTransactionPayload,
     options?: unknown
-  ) => Promise<AccountAuthenticator | Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array } | NovaProviderResponse<AccountAuthenticator | Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array }>>;
+  ) => Promise<AccountAuthenticator | Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array } | CedraSignTransactionOutputV1_1 | NovaProviderResponse<AccountAuthenticator | Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array } | CedraSignTransactionOutputV1_1>>;
   signAndSubmitTransaction?: (
     transaction: AnyRawTransaction | LegacyTransactionPayload,
     options?: unknown
@@ -165,3 +242,9 @@ export interface NovaWalletLikeResult {
   network: NetworkInfo | null;
   publicKey: AnyPublicKey;
 }
+
+export type NovaSignTransactionResult =
+  | AccountAuthenticator
+  | Uint8Array
+  | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array }
+  | CedraSignTransactionOutputV1_1;

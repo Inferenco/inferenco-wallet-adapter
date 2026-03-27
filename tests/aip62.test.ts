@@ -1,19 +1,29 @@
 import { getCedraWallets } from "@cedra-labs/wallet-standard";
-import { registerNovaWallet } from "../src/aip62";
 
 describe("registerNovaWallet", () => {
   afterEach(() => {
     delete (window as any).inferenco;
+    window.localStorage.clear();
+    vi.resetModules();
   });
 
-  it("does not register by default without a provider", () => {
+  it("does not register when desktop registration is disabled and no provider exists", async () => {
     const before = getCedraWallets().cedraWallets.length;
-    registerNovaWallet();
+    const { registerNovaWallet } = await import("../src/aip62");
+    registerNovaWallet({ desktopRegistration: false });
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before);
   });
 
-  it("registers when provider exists", () => {
+  it("registers on desktop without a provider by default", async () => {
+    const before = getCedraWallets().cedraWallets.length;
+    const { registerNovaWallet } = await import("../src/aip62");
+    registerNovaWallet();
+    const after = getCedraWallets().cedraWallets.length;
+    expect(after).toBe(before + 1);
+  });
+
+  it("registers when provider exists", async () => {
     (window as any).inferenco = {
       isNovaWallet: true,
       connect: async () => {
@@ -33,6 +43,7 @@ describe("registerNovaWallet", () => {
     };
 
     const before = getCedraWallets().cedraWallets.length;
+    const { registerNovaWallet } = await import("../src/aip62");
     registerNovaWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before + 1);

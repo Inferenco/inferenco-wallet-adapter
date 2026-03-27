@@ -11,10 +11,12 @@ import type {
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
+  NOVA_DESK_NAME,
   DEFAULT_WEBSITE_URL,
   NOVA_WALLET_ICON,
   NOVA_WALLET_NAME
 } from "./constants";
+import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
 import { buildDeeplinkUrl } from "./deeplink";
 import { detectProvider } from "./provider";
 import { NovaClient } from "./NovaClient";
@@ -38,7 +40,7 @@ export class NovaWallet
   extends EventEmitter<LegacyEvents>
   implements LegacyWalletAdapterLike
 {
-  readonly name = NOVA_WALLET_NAME as LegacyWalletName<"Nova Wallet">;
+  readonly name = (isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME) as LegacyWalletName<"Nova Wallet">;
   readonly url: string;
   readonly icon = NOVA_WALLET_ICON;
 
@@ -55,7 +57,7 @@ export class NovaWallet
 
   get readyState(): LegacyWalletReadyState {
     if (typeof window === "undefined") return LegacyWalletReadyState.Unsupported;
-    return detectProvider(this.options)
+    return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser()
       ? LegacyWalletReadyState.Installed
       : LegacyWalletReadyState.NotDetected;
   }

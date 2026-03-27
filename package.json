@@ -28,6 +28,7 @@
     "dist"
   ],
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsup src/index.ts src/aip62.ts src/auto-register.ts --format esm,cjs --dts",
     "test": "vitest run",
     "test:watch": "vitest",

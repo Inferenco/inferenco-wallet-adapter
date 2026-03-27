@@ -3,6 +3,10 @@ import {
   CEDRA_CHAINS,
   UserResponseStatus,
   registerWallet,
+  type CedraSignAndSubmitTransactionInput,
+  type CedraSignTransactionInputV1_1,
+  type CedraSignTransactionMethod,
+  type CedraSignTransactionMethodV1_1,
   type CedraFeatures,
   type CedraWallet,
   type CedraWalletAccount
@@ -10,10 +14,13 @@ import {
 import { SigningScheme, type AnyRawTransaction } from "@cedra-labs/ts-sdk";
 import {
   NOVA_WALLET_ICON,
+  NOVA_DESK_NAME,
   NOVA_WALLET_NAME,
+  DEFAULT_DESKTOP_REGISTRATION,
   DEFAULT_WEBSITE_URL,
   DEFAULT_REGISTER_FORCE
 } from "./constants";
+import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
 import { buildDeeplinkUrl } from "./deeplink";
 import { NovaClient } from "./NovaClient";
 import type { NovaWalletOptions } from "./types";
@@ -30,7 +37,8 @@ class NovaWalletAccount implements CedraWalletAccount {
     "cedra:onAccountChange",
     "cedra:onNetworkChange",
     "cedra:signMessage",
-    "cedra:signTransaction"
+    "cedra:signTransaction",
+    "cedra:signAndSubmitTransaction"
   ] as const;
   signingScheme = SigningScheme.Ed25519;
 
@@ -99,8 +107,8 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
       }
     },
     "cedra:signTransaction": {
-      version: "1.0.0",
-      signTransaction: async (input: AnyRawTransaction) => {
+      version: "1.1",
+      signTransaction: (async (input: CedraSignTransactionInputV1_1 | AnyRawTransaction) => {
         const result = await client.signTransaction(input);
         if (result instanceof Uint8Array) {
           throw new Error("Nova signTransaction returned bytes instead of an authenticator");
@@ -108,9 +116,21 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
         if (result && typeof result === "object" && "authenticator" in result) {
           return {
             status: UserResponseStatus.APPROVED,
-            args: result.authenticator
+            args: "rawTransaction" in result && result.rawTransaction
+              ? result
+              : result.authenticator
           };
         }
+        return {
+          status: UserResponseStatus.APPROVED,
+          args: result
+        };
+      }) as CedraSignTransactionMethod & CedraSignTransactionMethodV1_1
+    },
+    "cedra:signAndSubmitTransaction": {
+      version: "1.1.0",
+      signAndSubmitTransaction: async (input: CedraSignAndSubmitTransactionInput) => {
+        const result = await client.signAndSubmitTransaction(input);
         return {
           status: UserResponseStatus.APPROVED,
           args: result
@@ -129,7 +149,7 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
 
   return {
     version: "1.0.0",
-    name: NOVA_WALLET_NAME,
+    name: isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME,
     icon: NOVA_WALLET_ICON,
     url: options.websiteUrl ?? DEFAULT_WEBSITE_URL,
     chains: CEDRA_CHAINS,
@@ -149,7 +169,9 @@ export function registerNovaWallet(options: NovaWalletOptions = {}): void {
 
   const client = new NovaClient(options);
   const forceRegistration = options.forceRegistration ?? DEFAULT_REGISTER_FORCE;
-  if (!client.hasProvider() && !forceRegistration) return;
+  const desktopRegistration = options.desktopRegistration ?? DEFAULT_DESKTOP_REGISTRATION;
+  const shouldRegisterDesktop = desktopRegistration && typeof window !== "undefined" && !isMobileBrowser();
+  if (!client.hasProvider() && !client.hasExternalSession() && !forceRegistration && !shouldRegisterDesktop) return;
 
   registerWallet(createNovaAIP62Wallet(options));
   registered = true;

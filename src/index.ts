@@ -3,6 +3,7 @@ export * from "./types";
 export * from "./errors";
 export * from "./provider";
 export * from "./deeplink";
+export * from "./bridge";
 export * from "./conversion";
 export * from "./NovaClient";
 export * from "./NovaWallet";
