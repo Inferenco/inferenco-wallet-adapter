@@ -40,6 +40,7 @@ import {
   hasStoredExternalSession,
   isBrowser,
   isMobileBrowser,
+  launchDesktopOrMobileConnect,
   normalizeNetwork,
   normalizeProviderAccount,
   normalizeSignMessageOutput,
@@ -55,8 +56,9 @@ import {
   tryLocalBridgeConnect,
   tryLocalBridgeSignAndSubmit,
   tryLocalBridgeSignMessage,
-  tryLocalBridgeSignTransaction
-} from "./chunk-SVH2I3BP.js";
+  tryLocalBridgeSignTransaction,
+  waitForExternalSession
+} from "./chunk-5JWNK4SZ.js";
 
 // src/types.ts
 var NovaWalletReadyState = /* @__PURE__ */ ((NovaWalletReadyState2) => {
@@ -215,6 +217,7 @@ export {
   hasStoredExternalSession,
   isBrowser,
   isMobileBrowser,
+  launchDesktopOrMobileConnect,
   normalizeNetwork,
   normalizeProviderAccount,
   normalizeSignMessageOutput,
@@ -230,5 +233,6 @@ export {
   tryLocalBridgeConnect,
   tryLocalBridgeSignAndSubmit,
   tryLocalBridgeSignMessage,
-  tryLocalBridgeSignTransaction
+  tryLocalBridgeSignTransaction,
+  waitForExternalSession
 };
