@@ -13,15 +13,16 @@ import type {
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
-  buildDesktopOrMobileConnectUrl,
   clearExternalSession,
+  launchDesktopOrMobileConnect,
   readExternalSession,
   sessionToAccountInfo,
   storeCallbackSession,
   tryLocalBridgeConnect,
   tryLocalBridgeSignAndSubmit,
   tryLocalBridgeSignMessage,
-  tryLocalBridgeSignTransaction
+  tryLocalBridgeSignTransaction,
+  waitForExternalSession
 } from "./bridge";
 import { createFullMessage, normalizeNetwork, normalizeProviderAccount, normalizeSignMessageOutput } from "./conversion";
 import { NovaAdapterError, NovaErrorCode, remapNovaError } from "./errors";
@@ -29,6 +30,7 @@ import { buildDeeplinkUrl } from "./deeplink";
 import { detectProvider } from "./provider";
 import type {
   NovaSignMessageResponse,
+  NovaExternalSession,
   NovaProvider,
   NovaSignTransactionResult,
   NovaTransactionPayload,
@@ -81,6 +83,21 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
     return this.networkInfo;
   }
 
+  private connectResultFromExternalSession(
+    externalSession: NovaExternalSession
+  ): { account: AccountInfo; network: NetworkInfo } {
+    const account = sessionToAccountInfo(externalSession);
+    const network = normalizeNetwork({
+      name: externalSession.network as Network,
+      chainId: externalSession.chainId
+    });
+
+    this.accountInfo = account;
+    this.networkInfo = network;
+
+    return { account, network };
+  }
+
   async connect(): Promise<{ account: AccountInfo; network: NetworkInfo | null }> {
     try {
       const provider = this.refreshProvider();
@@ -97,12 +114,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
 
       const externalSession = readExternalSession();
       if (externalSession) {
-        this.accountInfo = sessionToAccountInfo(externalSession);
-        this.networkInfo = normalizeNetwork({
-          name: externalSession.network as Network,
-          chainId: externalSession.chainId
-        });
-        return { account: this.accountInfo, network: this.networkInfo };
+        return this.connectResultFromExternalSession(externalSession);
       }
 
       const bridgedAccount = await tryLocalBridgeConnect(this.options);
@@ -119,7 +131,17 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
       }
 
       if (typeof window !== "undefined") {
-        window.location.href = buildDesktopOrMobileConnectUrl(this.options);
+        launchDesktopOrMobileConnect(this.options);
+
+        const handoffSession = await waitForExternalSession(this.options);
+        if (handoffSession) {
+          return this.connectResultFromExternalSession(handoffSession);
+        }
+
+        throw new NovaAdapterError(
+          NovaErrorCode.ConnectionTimeout,
+          "Timed out waiting for Nova Desk to complete the external connection handoff."
+        );
       }
 
       throw new NovaAdapterError(

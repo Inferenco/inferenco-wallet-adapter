@@ -90,6 +90,9 @@ function remapNovaError(error) {
   if (status === "InvalidParams" || status === 400 || /invalid/i.test(message)) {
     throw new NovaAdapterError("INVALID_PARAMS" /* InvalidParams */, message, error);
   }
+  if (status === "Timeout" || /timed out waiting for nova desk/i.test(message)) {
+    throw new NovaAdapterError("CONNECTION_TIMEOUT" /* ConnectionTimeout */, message, error);
+  }
   if (/not installed|no provider|missing provider/i.test(message)) {
     throw new NovaAdapterError("NOT_INSTALLED" /* NotInstalled */, message, error);
   }
@@ -208,6 +211,12 @@ function buildDesktopOrMobileConnectUrl(options = {}, callbackUrl = currentUrlWi
   });
   return `${DEFAULT_DESKTOP_LOGIN_URL}?${params.toString()}`;
 }
+function launchDesktopOrMobileConnect(options = {}, callbackUrl = currentUrlWithoutCallbackKey()) {
+  const url = buildDesktopOrMobileConnectUrl(options, callbackUrl);
+  if (!isBrowser()) return url;
+  window.location.href = url;
+  return url;
+}
 function readExternalSession() {
   if (!isBrowser()) return null;
   const raw = window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
@@ -315,6 +324,21 @@ function storeCallbackSession() {
     url.searchParams.delete(key);
   }
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+async function waitForExternalSession(options = {}) {
+  if (!isBrowser()) return null;
+  const deadline = Date.now() + bridgePollTimeoutMs(options);
+  while (Date.now() < deadline) {
+    storeCallbackSession();
+    const session = readExternalSession();
+    if (session) {
+      return session;
+    }
+    await new Promise(
+      (resolve) => window.setTimeout(resolve, bridgePollIntervalMs(options))
+    );
+  }
+  return null;
 }
 async function fetchJsonWithTimeout(url, timeoutMs, init) {
   const controller = new AbortController();
@@ -582,6 +606,16 @@ var NovaClient = class extends import_eventemitter3.default {
   get cachedNetwork() {
     return this.networkInfo;
   }
+  connectResultFromExternalSession(externalSession) {
+    const account = sessionToAccountInfo(externalSession);
+    const network = normalizeNetwork({
+      name: externalSession.network,
+      chainId: externalSession.chainId
+    });
+    this.accountInfo = account;
+    this.networkInfo = network;
+    return { account, network };
+  }
   async connect() {
     try {
       const provider = this.refreshProvider();
@@ -595,12 +629,7 @@ var NovaClient = class extends import_eventemitter3.default {
       }
       const externalSession = readExternalSession();
       if (externalSession) {
-        this.accountInfo = sessionToAccountInfo(externalSession);
-        this.networkInfo = normalizeNetwork({
-          name: externalSession.network,
-          chainId: externalSession.chainId
-        });
-        return { account: this.accountInfo, network: this.networkInfo };
+        return this.connectResultFromExternalSession(externalSession);
       }
       const bridgedAccount = await tryLocalBridgeConnect(this.options);
       if (bridgedAccount) {
@@ -613,7 +642,15 @@ var NovaClient = class extends import_eventemitter3.default {
         return { account: bridgedAccount, network: this.networkInfo };
       }
       if (typeof window !== "undefined") {
-        window.location.href = buildDesktopOrMobileConnectUrl(this.options);
+        launchDesktopOrMobileConnect(this.options);
+        const handoffSession = await waitForExternalSession(this.options);
+        if (handoffSession) {
+          return this.connectResultFromExternalSession(handoffSession);
+        }
+        throw new NovaAdapterError(
+          "CONNECTION_TIMEOUT" /* ConnectionTimeout */,
+          "Timed out waiting for Nova Desk to complete the external connection handoff."
+        );
       }
       throw new NovaAdapterError(
         "NOT_INSTALLED" /* NotInstalled */,

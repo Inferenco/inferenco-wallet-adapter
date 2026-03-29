@@ -3,6 +3,7 @@ export enum NovaErrorCode {
   Unauthorized = "UNAUTHORIZED",
   Unsupported = "UNSUPPORTED",
   NotInstalled = "NOT_INSTALLED",
+  ConnectionTimeout = "CONNECTION_TIMEOUT",
   InvalidParams = "INVALID_PARAMS",
   InvalidNetwork = "INVALID_NETWORK",
   InternalError = "INTERNAL_ERROR"
@@ -43,6 +44,9 @@ export function remapNovaError(error: unknown): never {
   }
   if (status === "InvalidParams" || status === 400 || /invalid/i.test(message)) {
     throw new NovaAdapterError(NovaErrorCode.InvalidParams, message, error);
+  }
+  if (status === "Timeout" || /timed out waiting for nova desk/i.test(message)) {
+    throw new NovaAdapterError(NovaErrorCode.ConnectionTimeout, message, error);
   }
   if (/not installed|no provider|missing provider/i.test(message)) {
     throw new NovaAdapterError(NovaErrorCode.NotInstalled, message, error);

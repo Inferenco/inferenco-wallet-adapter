@@ -111,6 +111,17 @@ export function buildDesktopOrMobileConnectUrl(
   return `${DEFAULT_DESKTOP_LOGIN_URL}?${params.toString()}`;
 }
 
+export function launchDesktopOrMobileConnect(
+  options: NovaWalletOptions = {},
+  callbackUrl = currentUrlWithoutCallbackKey()
+): string {
+  const url = buildDesktopOrMobileConnectUrl(options, callbackUrl);
+  if (!isBrowser()) return url;
+
+  window.location.href = url;
+  return url;
+}
+
 export function readExternalSession(): NovaExternalSession | null {
   if (!isBrowser()) return null;
   const raw = window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
@@ -246,6 +257,28 @@ export function storeCallbackSession(): void {
   }
 
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+export async function waitForExternalSession(
+  options: NovaWalletOptions = {}
+): Promise<NovaExternalSession | null> {
+  if (!isBrowser()) return null;
+
+  const deadline = Date.now() + bridgePollTimeoutMs(options);
+
+  while (Date.now() < deadline) {
+    storeCallbackSession();
+    const session = readExternalSession();
+    if (session) {
+      return session;
+    }
+
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, bridgePollIntervalMs(options))
+    );
+  }
+
+  return null;
 }
 
 export async function fetchJsonWithTimeout<T>(
