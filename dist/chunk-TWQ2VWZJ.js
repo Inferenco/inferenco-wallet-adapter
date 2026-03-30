@@ -1,103 +1,13 @@
-"use strict";
-var __create = Object.create;
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
-var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
-
-// src/index.ts
-var index_exports = {};
-__export(index_exports, {
-  BridgeHttpError: () => BridgeHttpError,
-  CALLBACK_ADDRESS_PARAM: () => CALLBACK_ADDRESS_PARAM,
-  CALLBACK_BRIDGE_URL_PARAM: () => CALLBACK_BRIDGE_URL_PARAM,
-  CALLBACK_CHAIN_ID_PARAM: () => CALLBACK_CHAIN_ID_PARAM,
-  CALLBACK_NETWORK_PARAM: () => CALLBACK_NETWORK_PARAM,
-  CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM: () => CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
-  CALLBACK_PUBLIC_KEY_PARAM: () => CALLBACK_PUBLIC_KEY_PARAM,
-  CALLBACK_SESSION_ID_PARAM: () => CALLBACK_SESSION_ID_PARAM,
-  CALLBACK_WALLET_NAME_PARAM: () => CALLBACK_WALLET_NAME_PARAM,
-  DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS: () => DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS,
-  DEFAULT_BRIDGE_POLL_INTERVAL_MS: () => DEFAULT_BRIDGE_POLL_INTERVAL_MS,
-  DEFAULT_BRIDGE_POLL_TIMEOUT_MS: () => DEFAULT_BRIDGE_POLL_TIMEOUT_MS,
-  DEFAULT_DEEPLINK_BASE_URL: () => DEFAULT_DEEPLINK_BASE_URL,
-  DEFAULT_DESKTOP_BRIDGE_URL: () => DEFAULT_DESKTOP_BRIDGE_URL,
-  DEFAULT_DESKTOP_LOGIN_URL: () => DEFAULT_DESKTOP_LOGIN_URL,
-  DEFAULT_DESKTOP_REGISTRATION: () => DEFAULT_DESKTOP_REGISTRATION,
-  DEFAULT_DETECT_ALIASES: () => DEFAULT_DETECT_ALIASES,
-  DEFAULT_REGISTER_FORCE: () => DEFAULT_REGISTER_FORCE,
-  DEFAULT_WEBSITE_URL: () => DEFAULT_WEBSITE_URL,
-  NOVA_DESK_NAME: () => NOVA_DESK_NAME,
-  NOVA_EXTERNAL_SESSION_STORAGE_KEY: () => NOVA_EXTERNAL_SESSION_STORAGE_KEY,
-  NOVA_PROTOCOL_KEY_STORAGE_KEY: () => NOVA_PROTOCOL_KEY_STORAGE_KEY,
-  NOVA_WALLET_ICON: () => NOVA_WALLET_ICON,
-  NOVA_WALLET_NAME: () => NOVA_WALLET_NAME,
-  NovaAdapterError: () => NovaAdapterError,
-  NovaClient: () => NovaClient,
-  NovaErrorCode: () => NovaErrorCode,
-  NovaWallet: () => NovaWallet,
-  NovaWalletReadyState: () => NovaWalletReadyState,
-  bridgeBaseUrl: () => bridgeBaseUrl,
-  buildCallbackUrl: () => buildCallbackUrl,
-  buildDeeplinkUrl: () => buildDeeplinkUrl,
-  buildDesktopOrMobileConnectUrl: () => buildDesktopOrMobileConnectUrl,
-  clearExternalSession: () => clearExternalSession,
-  createFullMessage: () => createFullMessage,
-  createNovaAIP62Wallet: () => createNovaAIP62Wallet,
-  currentUrlWithoutCallbackKey: () => currentUrlWithoutCallbackKey,
-  detectProvider: () => detectProvider,
-  fetchJsonWithTimeout: () => fetchJsonWithTimeout,
-  getSdkNetwork: () => getSdkNetwork,
-  hasStoredExternalSession: () => hasStoredExternalSession,
-  isBrowser: () => isBrowser,
-  isMobileBrowser: () => isMobileBrowser,
-  launchDesktopOrMobileConnect: () => launchDesktopOrMobileConnect,
-  normalizeNetwork: () => normalizeNetwork,
-  normalizeProviderAccount: () => normalizeProviderAccount,
-  normalizeSignMessageOutput: () => normalizeSignMessageOutput,
-  normalizeTransactionPayload: () => normalizeTransactionPayload,
-  readExternalSession: () => readExternalSession,
-  readValidatedExternalSession: () => readValidatedExternalSession,
-  registerNovaWallet: () => registerNovaWallet,
-  remapNovaError: () => remapNovaError,
-  sessionToAccountInfo: () => sessionToAccountInfo,
-  storeCallbackSession: () => storeCallbackSession,
-  storeExternalSession: () => storeExternalSession,
-  submitSignedTransaction: () => submitSignedTransaction,
-  toUint8Array: () => toUint8Array,
-  tryLocalBridgeConnect: () => tryLocalBridgeConnect,
-  tryLocalBridgeSignAndSubmit: () => tryLocalBridgeSignAndSubmit,
-  tryLocalBridgeSignMessage: () => tryLocalBridgeSignMessage,
-  tryLocalBridgeSignTransaction: () => tryLocalBridgeSignTransaction,
-  validateExternalSession: () => validateExternalSession,
-  waitForExternalSession: () => waitForExternalSession
-});
-module.exports = __toCommonJS(index_exports);
+// src/aip62.ts
+import {
+  CEDRA_CHAINS,
+  UserResponseStatus,
+  registerWallet
+} from "@cedra-labs/wallet-standard";
+import { SigningScheme } from "@cedra-labs/ts-sdk";
 
 // src/constants.ts
-var import_node_buffer = require("buffer");
+import { Buffer } from "buffer";
 var NOVA_WALLET_NAME = "Nova Wallet";
 var NOVA_DESK_NAME = "Nova Desk";
 var DEFAULT_WEBSITE_URL = "https://inferenco.com";
@@ -121,16 +31,26 @@ var CALLBACK_BRIDGE_URL_PARAM = "bridgeUrl";
 var CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM = "protocolPublicKey";
 var CALLBACK_WALLET_NAME_PARAM = "walletName";
 var svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#0a3d91"/><path d="M32 12 40 28 56 32 40 36 32 52 24 36 8 32 24 28Z" fill="#66d9ff"/></svg>`;
-var NOVA_WALLET_ICON = `data:image/svg+xml;base64,${import_node_buffer.Buffer.from(svg).toString("base64")}`;
+var NOVA_WALLET_ICON = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 
-// src/types.ts
-var NovaWalletReadyState = /* @__PURE__ */ ((NovaWalletReadyState2) => {
-  NovaWalletReadyState2["Installed"] = "Installed";
-  NovaWalletReadyState2["NotDetected"] = "NotDetected";
-  NovaWalletReadyState2["Loadable"] = "Loadable";
-  NovaWalletReadyState2["Unsupported"] = "Unsupported";
-  return NovaWalletReadyState2;
-})(NovaWalletReadyState || {});
+// src/bridge.ts
+import {
+  AccountAuthenticator,
+  Deserializer,
+  RawTransaction,
+  SimpleTransaction
+} from "@cedra-labs/ts-sdk";
+
+// src/conversion.ts
+import {
+  AccountAddress,
+  AnyPublicKey,
+  Cedra,
+  CedraConfig,
+  Ed25519PublicKey,
+  Network
+} from "@cedra-labs/ts-sdk";
+import { AccountInfo } from "@cedra-labs/wallet-standard";
 
 // src/errors.ts
 var NovaErrorCode = /* @__PURE__ */ ((NovaErrorCode2) => {
@@ -182,41 +102,7 @@ function remapNovaError(error) {
   throw new NovaAdapterError("INTERNAL_ERROR" /* InternalError */, message, error);
 }
 
-// src/provider.ts
-function isBrowser() {
-  return typeof window !== "undefined";
-}
-function isBrandedNovaProvider(provider) {
-  return !!provider && provider.isNovaWallet === true;
-}
-function detectProvider(options = {}) {
-  if (!isBrowser()) return void 0;
-  const win = window;
-  if (win.inferenco) return win.inferenco;
-  if (win.nova) return win.nova;
-  const detectAliases = options.detectAliases ?? DEFAULT_DETECT_ALIASES;
-  if (!detectAliases) return void 0;
-  if (isBrandedNovaProvider(win.cedra)) return win.cedra;
-  if (isBrandedNovaProvider(win.aptos)) return win.aptos;
-  return void 0;
-}
-
-// src/deeplink.ts
-function buildCallbackUrl() {
-  if (typeof window === "undefined") return "";
-  return window.location.href;
-}
-function buildDeeplinkUrl(options = {}, callbackUrl = buildCallbackUrl()) {
-  const base = options.deeplinkBaseUrl ?? DEFAULT_DEEPLINK_BASE_URL;
-  return `${base}${encodeURIComponent(callbackUrl)}`;
-}
-
-// src/bridge.ts
-var import_ts_sdk2 = require("@cedra-labs/ts-sdk");
-
 // src/conversion.ts
-var import_ts_sdk = require("@cedra-labs/ts-sdk");
-var import_wallet_standard = require("@cedra-labs/wallet-standard");
 function toUint8Array(input) {
   if (input instanceof Uint8Array) return input;
   const hex = input.startsWith("0x") ? input.slice(2) : input;
@@ -224,16 +110,16 @@ function toUint8Array(input) {
 }
 function normalizeProviderAccount(account) {
   const publicKey = account.publicKey instanceof Uint8Array ? account.publicKey : toUint8Array(account.publicKey);
-  return new import_wallet_standard.AccountInfo({
-    address: import_ts_sdk.AccountAddress.from(account.address),
-    publicKey: new import_ts_sdk.AnyPublicKey(new import_ts_sdk.Ed25519PublicKey(publicKey))
+  return new AccountInfo({
+    address: AccountAddress.from(account.address),
+    publicKey: new AnyPublicKey(new Ed25519PublicKey(publicKey))
   });
 }
 function normalizeNetwork(network) {
   if (typeof network === "object") {
     return {
       chainId: network.chainId ?? 3,
-      name: network.name ?? import_ts_sdk.Network.DEVNET,
+      name: network.name ?? Network.DEVNET,
       url: network.url
     };
   }
@@ -241,7 +127,7 @@ function normalizeNetwork(network) {
   if (!rawName) {
     throw new NovaAdapterError("INVALID_NETWORK" /* InvalidNetwork */, `Unsupported network value: ${String(network)}`);
   }
-  const name = rawName === "mainnet" ? import_ts_sdk.Network.MAINNET : rawName === "testnet" ? import_ts_sdk.Network.TESTNET : rawName === "local" ? import_ts_sdk.Network.LOCAL : import_ts_sdk.Network.DEVNET;
+  const name = rawName === "mainnet" ? Network.MAINNET : rawName === "testnet" ? Network.TESTNET : rawName === "local" ? Network.LOCAL : Network.DEVNET;
   const chainId = typeof network === "number" ? network : { mainnet: 1, testnet: 2, devnet: 3, local: 4 }[rawName] ?? 3;
   return {
     name,
@@ -256,7 +142,7 @@ function normalizeTransactionPayload(transaction) {
   }
   if ("data" in transaction) {
     return {
-      sender: transaction.sender ? import_ts_sdk.AccountAddress.from(transaction.sender).toString() : void 0,
+      sender: transaction.sender ? AccountAddress.from(transaction.sender).toString() : void 0,
       data: transaction.data,
       options: transaction.options
     };
@@ -279,11 +165,11 @@ function normalizeSignMessageOutput(output) {
 }
 function getSdkNetwork(networkInfo, fullnodeUrl) {
   if (fullnodeUrl) {
-    return new import_ts_sdk.Cedra(new import_ts_sdk.CedraConfig({ network: import_ts_sdk.Network.CUSTOM, fullnode: fullnodeUrl }));
+    return new Cedra(new CedraConfig({ network: Network.CUSTOM, fullnode: fullnodeUrl }));
   }
   const name = networkInfo?.name;
-  const sdkNetwork = name === "mainnet" ? import_ts_sdk.Network.MAINNET : name === "testnet" ? import_ts_sdk.Network.TESTNET : name === "local" ? import_ts_sdk.Network.LOCAL : import_ts_sdk.Network.DEVNET;
-  return new import_ts_sdk.Cedra(new import_ts_sdk.CedraConfig({ network: sdkNetwork }));
+  const sdkNetwork = name === "mainnet" ? Network.MAINNET : name === "testnet" ? Network.TESTNET : name === "local" ? Network.LOCAL : Network.DEVNET;
+  return new Cedra(new CedraConfig({ network: sdkNetwork }));
 }
 async function submitSignedTransaction(args) {
   const cedra = getSdkNetwork(args.network, args.fullnodeUrl);
@@ -311,11 +197,11 @@ var BridgeHttpError = class extends Error {
     this.name = "BridgeHttpError";
   }
 };
-function isBrowser2() {
+function isBrowser() {
   return typeof window !== "undefined";
 }
 function isMobileBrowser() {
-  if (!isBrowser2()) return false;
+  if (!isBrowser()) return false;
   const userAgent = navigator.userAgent.toLowerCase();
   const coarsePointer = typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
   return /android|iphone|ipad|ipod|mobile/.test(userAgent) || coarsePointer;
@@ -333,7 +219,7 @@ function bridgePollTimeoutMs(options = {}) {
   return options.bridgePollTimeoutMs ?? DEFAULT_BRIDGE_POLL_TIMEOUT_MS;
 }
 function currentUrlWithoutCallbackKey() {
-  if (!isBrowser2()) return "";
+  if (!isBrowser()) return "";
   const url = new URL(window.location.href);
   for (const key of [
     CALLBACK_ADDRESS_PARAM,
@@ -362,7 +248,7 @@ function buildDesktopOrMobileConnectUrl(options = {}, callbackUrl = currentUrlWi
 }
 function launchDesktopOrMobileConnect(options = {}, callbackUrl = currentUrlWithoutCallbackKey()) {
   const url = buildDesktopOrMobileConnectUrl(options, callbackUrl);
-  if (!isBrowser2()) return url;
+  if (!isBrowser()) return url;
   window.location.href = url;
   return url;
 }
@@ -382,7 +268,7 @@ function parseExternalSession(candidate) {
   };
 }
 function readExternalSession() {
-  if (!isBrowser2()) return null;
+  if (!isBrowser()) return null;
   const raw = window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
   if (!raw) return null;
   try {
@@ -395,14 +281,14 @@ function hasStoredExternalSession() {
   return !!readExternalSession();
 }
 function storeExternalSession(session) {
-  if (!isBrowser2()) return;
+  if (!isBrowser()) return;
   window.localStorage.setItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
   if (session.protocolPublicKey) {
     window.localStorage.setItem(NOVA_PROTOCOL_KEY_STORAGE_KEY, session.protocolPublicKey);
   }
 }
 function clearExternalSession() {
-  if (!isBrowser2()) return;
+  if (!isBrowser()) return;
   window.localStorage.removeItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
   window.localStorage.removeItem(NOVA_PROTOCOL_KEY_STORAGE_KEY);
 }
@@ -452,7 +338,7 @@ function sessionFromBridgePoll(payload) {
   };
 }
 function storeCallbackSession() {
-  if (!isBrowser2()) return;
+  if (!isBrowser()) return;
   const url = new URL(window.location.href);
   const address = url.searchParams.get(CALLBACK_ADDRESS_PARAM);
   const publicKey = url.searchParams.get(CALLBACK_PUBLIC_KEY_PARAM);
@@ -494,7 +380,7 @@ function storeCallbackSession() {
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 async function waitForExternalSession(options = {}) {
-  if (!isBrowser2()) return null;
+  if (!isBrowser()) return null;
   const deadline = Date.now() + bridgePollTimeoutMs(options);
   while (Date.now() < deadline) {
     storeCallbackSession();
@@ -509,7 +395,7 @@ async function waitForExternalSession(options = {}) {
   return null;
 }
 async function validateExternalSession(session, options = {}) {
-  if (!isBrowser2()) return null;
+  if (!isBrowser()) return null;
   try {
     const sessionUrl = new URL(
       `/session/${encodeURIComponent(session.sessionId)}`,
@@ -577,7 +463,7 @@ async function pollBridge(url, options) {
   throw new Error("Timed out waiting for Nova Desk approval");
 }
 async function tryLocalBridgeConnect(options = {}) {
-  if (!isBrowser2() || isMobileBrowser()) return null;
+  if (!isBrowser() || isMobileBrowser()) return null;
   const connectUrl = new URL("/connect", bridgeBaseUrl(options));
   connectUrl.searchParams.set("origin", window.location.origin);
   connectUrl.searchParams.set("app", typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk");
@@ -632,8 +518,8 @@ function normalizeBridgeSignTransactionOutput(payload) {
     throw new Error("Nova Desk bridge returned an incomplete signTransaction payload");
   }
   return {
-    authenticator: import_ts_sdk2.AccountAuthenticator.deserialize(import_ts_sdk2.Deserializer.fromHex(authenticatorHex)),
-    rawTransaction: new import_ts_sdk2.SimpleTransaction(import_ts_sdk2.RawTransaction.deserialize(import_ts_sdk2.Deserializer.fromHex(rawTransactionBcsHex)))
+    authenticator: AccountAuthenticator.deserialize(Deserializer.fromHex(authenticatorHex)),
+    rawTransaction: new SimpleTransaction(RawTransaction.deserialize(Deserializer.fromHex(rawTransactionBcsHex)))
   };
 }
 async function startBridgeRequest(path, body, options, reconnectError) {
@@ -674,7 +560,7 @@ async function pollSignedResult(path, requestId, options, reconnectError) {
   }
 }
 async function tryLocalBridgeSignMessage(input, session, options = {}) {
-  if (!isBrowser2() || !session.sessionId) throw reconnectSigningError();
+  if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
   const requestId = await startBridgeRequest(
     "/sign-message",
     {
@@ -696,7 +582,7 @@ async function tryLocalBridgeSignMessage(input, session, options = {}) {
   throw new Error(payload.error ?? "Nova Desk rejected the signMessage request");
 }
 async function tryLocalBridgeSignTransaction(input, session, options = {}) {
-  if (!isBrowser2() || !session.sessionId) throw reconnectSigningError();
+  if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
   const requestId = await startBridgeRequest(
     "/sign-transaction",
     {
@@ -718,7 +604,7 @@ async function tryLocalBridgeSignTransaction(input, session, options = {}) {
   throw new Error(payload.error ?? "Nova Desk rejected the signTransaction request");
 }
 async function tryLocalBridgeSignAndSubmit(input, session, options = {}) {
-  if (!isBrowser2() || !session.sessionId) throw reconnectTransactionError();
+  if (!isBrowser() || !session.sessionId) throw reconnectTransactionError();
   const requestId = await startBridgeRequest(
     "/transaction",
     {
@@ -742,8 +628,39 @@ async function tryLocalBridgeSignAndSubmit(input, session, options = {}) {
   throw new Error(payload.error ?? "Nova Desk rejected the transaction request");
 }
 
+// src/deeplink.ts
+function buildCallbackUrl() {
+  if (typeof window === "undefined") return "";
+  return window.location.href;
+}
+function buildDeeplinkUrl(options = {}, callbackUrl = buildCallbackUrl()) {
+  const base = options.deeplinkBaseUrl ?? DEFAULT_DEEPLINK_BASE_URL;
+  return `${base}${encodeURIComponent(callbackUrl)}`;
+}
+
 // src/NovaClient.ts
-var import_eventemitter3 = __toESM(require("eventemitter3"), 1);
+import EventEmitter from "eventemitter3";
+
+// src/provider.ts
+function isBrowser2() {
+  return typeof window !== "undefined";
+}
+function isBrandedNovaProvider(provider) {
+  return !!provider && provider.isNovaWallet === true;
+}
+function detectProvider(options = {}) {
+  if (!isBrowser2()) return void 0;
+  const win = window;
+  if (win.inferenco) return win.inferenco;
+  if (win.nova) return win.nova;
+  const detectAliases = options.detectAliases ?? DEFAULT_DETECT_ALIASES;
+  if (!detectAliases) return void 0;
+  if (isBrandedNovaProvider(win.cedra)) return win.cedra;
+  if (isBrandedNovaProvider(win.aptos)) return win.aptos;
+  return void 0;
+}
+
+// src/NovaClient.ts
 function unwrap(value) {
   if (value && typeof value === "object") {
     if ("data" in value && value.data !== void 0) return value.data;
@@ -752,7 +669,7 @@ function unwrap(value) {
   }
   return value;
 }
-var NovaClient = class extends import_eventemitter3.default {
+var NovaClient = class extends EventEmitter {
   constructor(options = {}) {
     super();
     this.options = options;
@@ -996,118 +913,11 @@ var NovaClient = class extends import_eventemitter3.default {
   }
 };
 
-// src/NovaWallet.ts
-var import_eventemitter32 = __toESM(require("eventemitter3"), 1);
-var NovaWallet = class extends import_eventemitter32.default {
-  constructor(options = {}) {
-    super();
-    this.options = options;
-    this.url = options.websiteUrl ?? DEFAULT_WEBSITE_URL;
-    this.client = new NovaClient(options);
-  }
-  name = isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME;
-  url;
-  icon = NOVA_WALLET_ICON;
-  client;
-  cachedAccount = null;
-  cachedNetwork = null;
-  isConnecting = false;
-  get readyState() {
-    if (typeof window === "undefined") return "Unsupported" /* Unsupported */;
-    return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser() ? "Installed" /* Installed */ : "NotDetected" /* NotDetected */;
-  }
-  get connecting() {
-    return this.isConnecting;
-  }
-  get connected() {
-    return !!this.cachedAccount;
-  }
-  get publicAccount() {
-    return {
-      publicKey: this.cachedAccount?.publicKey.toString() ?? null,
-      address: this.cachedAccount?.address.toString() ?? null,
-      authKey: null
-    };
-  }
-  get network() {
-    return {
-      api: this.cachedNetwork?.url,
-      chainId: this.cachedNetwork?.chainId?.toString(),
-      name: this.cachedNetwork?.name
-    };
-  }
-  async connect() {
-    this.isConnecting = true;
-    try {
-      const result = await this.client.connect();
-      this.cachedAccount = result.account;
-      this.cachedNetwork = result.network;
-      await this.client.subscribe();
-      return result.account;
-    } finally {
-      this.isConnecting = false;
-    }
-  }
-  async account() {
-    this.cachedAccount = await this.client.getAccount();
-    return this.cachedAccount;
-  }
-  async disconnect() {
-    await this.client.disconnect();
-    this.cachedAccount = null;
-    this.cachedNetwork = null;
-  }
-  async signAndSubmitTransaction(transaction, options) {
-    return this.client.signAndSubmitTransaction(transaction, options);
-  }
-  async signAndSubmitBCSTransaction(transaction, options) {
-    return this.client.signAndSubmitBCSTransaction(transaction, options);
-  }
-  async signTransaction(transaction, options) {
-    const result = await this.client.signTransaction(transaction, options);
-    if (result instanceof Uint8Array) return result;
-    if (result && typeof result === "object" && "authenticator" in result) {
-      return result;
-    }
-    return {
-      authenticator: result
-    };
-  }
-  async signMessage(message) {
-    return this.client.signMessage(message);
-  }
-  async onAccountChange(callback) {
-    this.client.on("accountChange", (account) => {
-      this.cachedAccount = account;
-      callback(account);
-      this.emit("accountChange", account.address.toString());
-    });
-    await this.client.subscribe();
-  }
-  async onNetworkChange(callback) {
-    this.client.on("networkChange", (network) => {
-      this.cachedNetwork = network;
-      callback(network);
-      this.emit("networkChange", {
-        api: network.url,
-        chainId: network.chainId?.toString(),
-        name: network.name
-      });
-    });
-    await this.client.subscribe();
-  }
-  deeplinkProvider(url) {
-    return buildDeeplinkUrl(this.options, url);
-  }
-};
-
 // src/aip62.ts
-var import_wallet_standard2 = require("@cedra-labs/wallet-standard");
-var import_ts_sdk3 = require("@cedra-labs/ts-sdk");
 var NovaWalletAccount = class {
   address;
   publicKey;
-  chains = import_wallet_standard2.CEDRA_CHAINS;
+  chains = CEDRA_CHAINS;
   features = [
     "cedra:connect",
     "cedra:disconnect",
@@ -1119,7 +929,7 @@ var NovaWalletAccount = class {
     "cedra:signTransaction",
     "cedra:signAndSubmitTransaction"
   ];
-  signingScheme = import_ts_sdk3.SigningScheme.Ed25519;
+  signingScheme = SigningScheme.Ed25519;
   constructor(account) {
     this.address = account.address.toString();
     this.publicKey = account.publicKey.toUint8Array();
@@ -1139,7 +949,7 @@ function createNovaAIP62Wallet(options = {}) {
       connect: async () => {
         const { account } = await client.connect();
         accounts = [new NovaWalletAccount(account)];
-        return { status: import_wallet_standard2.UserResponseStatus.APPROVED, args: account };
+        return { status: UserResponseStatus.APPROVED, args: account };
       }
     },
     "cedra:disconnect": {
@@ -1176,7 +986,7 @@ function createNovaAIP62Wallet(options = {}) {
       signMessage: async (input) => {
         const output = await client.signMessage(input);
         return {
-          status: import_wallet_standard2.UserResponseStatus.APPROVED,
+          status: UserResponseStatus.APPROVED,
           args: output
         };
       }
@@ -1190,12 +1000,12 @@ function createNovaAIP62Wallet(options = {}) {
         }
         if (result && typeof result === "object" && "authenticator" in result) {
           return {
-            status: import_wallet_standard2.UserResponseStatus.APPROVED,
+            status: UserResponseStatus.APPROVED,
             args: "rawTransaction" in result && result.rawTransaction ? result : result.authenticator
           };
         }
         return {
-          status: import_wallet_standard2.UserResponseStatus.APPROVED,
+          status: UserResponseStatus.APPROVED,
           args: result
         };
       })
@@ -1205,7 +1015,7 @@ function createNovaAIP62Wallet(options = {}) {
       signAndSubmitTransaction: async (input) => {
         const result = await client.signAndSubmitTransaction(input);
         return {
-          status: import_wallet_standard2.UserResponseStatus.APPROVED,
+          status: UserResponseStatus.APPROVED,
           args: result
         };
       }
@@ -1224,7 +1034,7 @@ function createNovaAIP62Wallet(options = {}) {
     name: isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME,
     icon: NOVA_WALLET_ICON,
     url: options.websiteUrl ?? DEFAULT_WEBSITE_URL,
-    chains: import_wallet_standard2.CEDRA_CHAINS,
+    chains: CEDRA_CHAINS,
     get accounts() {
       return accounts;
     },
@@ -1241,72 +1051,70 @@ function registerNovaWallet(options = {}) {
   const desktopRegistration = options.desktopRegistration ?? DEFAULT_DESKTOP_REGISTRATION;
   const shouldRegisterDesktop = desktopRegistration && typeof window !== "undefined" && !isMobileBrowser();
   if (!client.hasProvider() && !client.hasExternalSession() && !forceRegistration && !shouldRegisterDesktop) return;
-  (0, import_wallet_standard2.registerWallet)(createNovaAIP62Wallet(options));
+  registerWallet(createNovaAIP62Wallet(options));
   registered = true;
 }
-// Annotate the CommonJS export names for ESM import in node:
-0 && (module.exports = {
-  BridgeHttpError,
-  CALLBACK_ADDRESS_PARAM,
-  CALLBACK_BRIDGE_URL_PARAM,
-  CALLBACK_CHAIN_ID_PARAM,
-  CALLBACK_NETWORK_PARAM,
-  CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
-  CALLBACK_PUBLIC_KEY_PARAM,
-  CALLBACK_SESSION_ID_PARAM,
-  CALLBACK_WALLET_NAME_PARAM,
+
+export {
+  NOVA_WALLET_NAME,
+  NOVA_DESK_NAME,
+  DEFAULT_WEBSITE_URL,
+  DEFAULT_DEEPLINK_BASE_URL,
+  DEFAULT_DESKTOP_LOGIN_URL,
+  DEFAULT_DESKTOP_BRIDGE_URL,
+  DEFAULT_DETECT_ALIASES,
+  DEFAULT_REGISTER_FORCE,
+  DEFAULT_DESKTOP_REGISTRATION,
   DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS,
   DEFAULT_BRIDGE_POLL_INTERVAL_MS,
   DEFAULT_BRIDGE_POLL_TIMEOUT_MS,
-  DEFAULT_DEEPLINK_BASE_URL,
-  DEFAULT_DESKTOP_BRIDGE_URL,
-  DEFAULT_DESKTOP_LOGIN_URL,
-  DEFAULT_DESKTOP_REGISTRATION,
-  DEFAULT_DETECT_ALIASES,
-  DEFAULT_REGISTER_FORCE,
-  DEFAULT_WEBSITE_URL,
-  NOVA_DESK_NAME,
-  NOVA_EXTERNAL_SESSION_STORAGE_KEY,
   NOVA_PROTOCOL_KEY_STORAGE_KEY,
+  NOVA_EXTERNAL_SESSION_STORAGE_KEY,
+  CALLBACK_ADDRESS_PARAM,
+  CALLBACK_PUBLIC_KEY_PARAM,
+  CALLBACK_NETWORK_PARAM,
+  CALLBACK_CHAIN_ID_PARAM,
+  CALLBACK_SESSION_ID_PARAM,
+  CALLBACK_BRIDGE_URL_PARAM,
+  CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
+  CALLBACK_WALLET_NAME_PARAM,
   NOVA_WALLET_ICON,
-  NOVA_WALLET_NAME,
-  NovaAdapterError,
-  NovaClient,
   NovaErrorCode,
-  NovaWallet,
-  NovaWalletReadyState,
-  bridgeBaseUrl,
-  buildCallbackUrl,
-  buildDeeplinkUrl,
-  buildDesktopOrMobileConnectUrl,
-  clearExternalSession,
-  createFullMessage,
-  createNovaAIP62Wallet,
-  currentUrlWithoutCallbackKey,
-  detectProvider,
-  fetchJsonWithTimeout,
-  getSdkNetwork,
-  hasStoredExternalSession,
-  isBrowser,
-  isMobileBrowser,
-  launchDesktopOrMobileConnect,
-  normalizeNetwork,
-  normalizeProviderAccount,
-  normalizeSignMessageOutput,
-  normalizeTransactionPayload,
-  readExternalSession,
-  readValidatedExternalSession,
-  registerNovaWallet,
+  NovaAdapterError,
   remapNovaError,
+  toUint8Array,
+  normalizeProviderAccount,
+  normalizeNetwork,
+  normalizeTransactionPayload,
+  normalizeSignMessageOutput,
+  getSdkNetwork,
+  submitSignedTransaction,
+  createFullMessage,
+  BridgeHttpError,
+  isMobileBrowser,
+  bridgeBaseUrl,
+  currentUrlWithoutCallbackKey,
+  buildDesktopOrMobileConnectUrl,
+  launchDesktopOrMobileConnect,
+  readExternalSession,
+  hasStoredExternalSession,
+  storeExternalSession,
+  clearExternalSession,
   sessionToAccountInfo,
   storeCallbackSession,
-  storeExternalSession,
-  submitSignedTransaction,
-  toUint8Array,
+  waitForExternalSession,
+  validateExternalSession,
+  readValidatedExternalSession,
+  fetchJsonWithTimeout,
   tryLocalBridgeConnect,
-  tryLocalBridgeSignAndSubmit,
   tryLocalBridgeSignMessage,
   tryLocalBridgeSignTransaction,
-  validateExternalSession,
-  waitForExternalSession
-});
+  tryLocalBridgeSignAndSubmit,
+  buildCallbackUrl,
+  buildDeeplinkUrl,
+  isBrowser2 as isBrowser,
+  detectProvider,
+  NovaClient,
+  createNovaAIP62Wallet,
+  registerNovaWallet
+};

@@ -1,5 +1,6 @@
 import { Account } from "@cedra-labs/ts-sdk";
 import * as bridge from "../src/bridge";
+import { NOVA_EXTERNAL_SESSION_STORAGE_KEY } from "../src/constants";
 import { NovaErrorCode } from "../src/errors";
 import { NovaClient } from "../src/NovaClient";
 
@@ -27,6 +28,80 @@ describe("NovaClient", () => {
     expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
     expect(client.account?.address.toString()).toBe(signer.accountAddress.toString());
     expect(client.cachedNetwork?.name).toBe("devnet");
+  });
+
+  it("restores a cached external session only after bridge validation", async () => {
+    const signer = Account.generate();
+    bridge.storeExternalSession({
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "session-123",
+      bridgeUrl: "http://127.0.0.1:21984/session/session-123",
+      walletName: "Nova Desk"
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          address: signer.accountAddress.toString(),
+          publicKey: signer.publicKey.toString(),
+          network: "testnet",
+          chainId: 2,
+          sessionId: "session-123",
+          bridgeUrl: "http://127.0.0.1:21984",
+          walletName: "Nova Desk"
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        }
+      )
+    );
+    const bridgeConnectSpy = vi.spyOn(bridge, "tryLocalBridgeConnect");
+
+    const client = new NovaClient();
+    const result = await client.connect();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(bridgeConnectSpy).not.toHaveBeenCalled();
+    expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
+    expect(client.cachedNetwork?.name).toBe("testnet");
+  });
+
+  it("clears a revoked cached external session before restoring", async () => {
+    const signer = Account.generate();
+    bridge.storeExternalSession({
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "revoked-session",
+      bridgeUrl: "http://127.0.0.1:21984",
+      walletName: "Nova Desk"
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "session_not_found" }), {
+        status: 404,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      })
+    );
+    vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
+    vi.spyOn(bridge, "launchDesktopOrMobileConnect").mockReturnValue(
+      "inferenco://login?redirect=https%3A%2F%2Fexample.com"
+    );
+    vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue(null);
+
+    const client = new NovaClient();
+
+    await expect(client.connect()).rejects.toMatchObject({
+      code: NovaErrorCode.ConnectionTimeout
+    });
+    expect(window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
   });
 
   it("builds signMessageAndVerify from provider output", async () => {

@@ -217,25 +217,27 @@ function launchDesktopOrMobileConnect(options = {}, callbackUrl = currentUrlWith
   window.location.href = url;
   return url;
 }
+function parseExternalSession(candidate) {
+  if (!candidate || typeof candidate.address !== "string" || typeof candidate.publicKey !== "string" || typeof candidate.network !== "string" || typeof candidate.chainId !== "number" || typeof candidate.sessionId !== "string") {
+    return null;
+  }
+  return {
+    address: candidate.address,
+    publicKey: candidate.publicKey,
+    network: candidate.network,
+    chainId: candidate.chainId,
+    sessionId: candidate.sessionId,
+    bridgeUrl: typeof candidate.bridgeUrl === "string" ? candidate.bridgeUrl : void 0,
+    protocolPublicKey: typeof candidate.protocolPublicKey === "string" ? candidate.protocolPublicKey : void 0,
+    walletName: typeof candidate.walletName === "string" ? candidate.walletName : void 0
+  };
+}
 function readExternalSession() {
   if (!isBrowser()) return null;
   const raw = window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
-    if (typeof parsed.address !== "string" || typeof parsed.publicKey !== "string" || typeof parsed.network !== "string" || typeof parsed.chainId !== "number" || typeof parsed.sessionId !== "string") {
-      return null;
-    }
-    return {
-      address: parsed.address,
-      publicKey: parsed.publicKey,
-      network: parsed.network,
-      chainId: parsed.chainId,
-      sessionId: parsed.sessionId,
-      bridgeUrl: typeof parsed.bridgeUrl === "string" ? parsed.bridgeUrl : void 0,
-      protocolPublicKey: typeof parsed.protocolPublicKey === "string" ? parsed.protocolPublicKey : void 0,
-      walletName: typeof parsed.walletName === "string" ? parsed.walletName : void 0
-    };
+    return parseExternalSession(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -251,6 +253,20 @@ function clearExternalSession() {
   if (!isBrowser()) return;
   window.localStorage.removeItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
   window.localStorage.removeItem(NOVA_PROTOCOL_KEY_STORAGE_KEY);
+}
+function sessionBridgeBaseUrl(session, options = {}) {
+  const configuredUrl = session.bridgeUrl ?? bridgeBaseUrl(options);
+  try {
+    const url = new URL(configuredUrl);
+    if (url.pathname.startsWith("/session/")) {
+      url.pathname = "/";
+      url.search = "";
+      url.hash = "";
+    }
+    return url.toString();
+  } catch {
+    return bridgeBaseUrl(options);
+  }
 }
 function sessionToAccountInfo(session) {
   return normalizeProviderAccount({
@@ -339,6 +355,41 @@ async function waitForExternalSession(options = {}) {
     );
   }
   return null;
+}
+async function validateExternalSession(session, options = {}) {
+  if (!isBrowser()) return null;
+  try {
+    const sessionUrl = new URL(
+      `/session/${encodeURIComponent(session.sessionId)}`,
+      sessionBridgeBaseUrl(session, options)
+    ).toString();
+    const payload = await fetchJsonWithTimeout(
+      sessionUrl,
+      bridgeConnectTimeoutMs(options)
+    );
+    const validatedSession = parseExternalSession(payload) ?? session;
+    const refreshedSession = {
+      ...session,
+      ...validatedSession,
+      bridgeUrl: validatedSession.bridgeUrl ?? session.bridgeUrl,
+      protocolPublicKey: validatedSession.protocolPublicKey ?? session.protocolPublicKey,
+      walletName: validatedSession.walletName ?? session.walletName
+    };
+    storeExternalSession(refreshedSession);
+    return refreshedSession;
+  } catch (error) {
+    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+      clearExternalSession();
+    }
+    return null;
+  }
+}
+async function readValidatedExternalSession(options = {}) {
+  const session = readExternalSession();
+  if (!session) {
+    return null;
+  }
+  return validateExternalSession(session, options);
 }
 async function fetchJsonWithTimeout(url, timeoutMs, init) {
   const controller = new AbortController();
@@ -627,14 +678,14 @@ var NovaClient = class extends import_eventemitter3.default {
         }
         return { account, network: this.networkInfo };
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         return this.connectResultFromExternalSession(externalSession);
       }
       const bridgedAccount = await tryLocalBridgeConnect(this.options);
       if (bridgedAccount) {
         this.accountInfo = bridgedAccount;
-        const bridgedSession = readExternalSession();
+        const bridgedSession = await readValidatedExternalSession(this.options);
         this.networkInfo = bridgedSession ? normalizeNetwork({
           name: bridgedSession.network,
           chainId: bridgedSession.chainId
@@ -669,7 +720,7 @@ var NovaClient = class extends import_eventemitter3.default {
         this.accountInfo = account;
         return account;
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         const account = sessionToAccountInfo(externalSession);
         this.accountInfo = account;
@@ -700,7 +751,7 @@ var NovaClient = class extends import_eventemitter3.default {
         this.networkInfo = network;
         return network;
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         const network = normalizeNetwork({
           name: externalSession.network,
@@ -721,7 +772,7 @@ var NovaClient = class extends import_eventemitter3.default {
         const result = unwrap(await provider.signMessage(input));
         return normalizeSignMessageOutput(result);
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         return tryLocalBridgeSignMessage(input, externalSession, this.options);
       }
@@ -751,7 +802,7 @@ var NovaClient = class extends import_eventemitter3.default {
           await provider.signTransaction(transaction, options)
         );
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         if (!transaction || typeof transaction !== "object" || !("payload" in transaction) || "rawTransaction" in transaction || "data" in transaction) {
           throw new NovaAdapterError(
@@ -781,7 +832,7 @@ var NovaClient = class extends import_eventemitter3.default {
           )
         );
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         return tryLocalBridgeSignAndSubmit(
           transaction,

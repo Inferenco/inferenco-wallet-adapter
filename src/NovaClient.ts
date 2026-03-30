@@ -16,6 +16,7 @@ import {
   clearExternalSession,
   launchDesktopOrMobileConnect,
   readExternalSession,
+  readValidatedExternalSession,
   sessionToAccountInfo,
   storeCallbackSession,
   tryLocalBridgeConnect,
@@ -112,7 +113,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         return { account, network: this.networkInfo };
       }
 
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         return this.connectResultFromExternalSession(externalSession);
       }
@@ -120,7 +121,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
       const bridgedAccount = await tryLocalBridgeConnect(this.options);
       if (bridgedAccount) {
         this.accountInfo = bridgedAccount;
-        const bridgedSession = readExternalSession();
+        const bridgedSession = await readValidatedExternalSession(this.options);
         this.networkInfo = bridgedSession
           ? normalizeNetwork({
               name: bridgedSession.network as Network,
@@ -164,7 +165,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         return account;
       }
 
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         const account = sessionToAccountInfo(externalSession);
         this.accountInfo = account;
@@ -200,7 +201,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         return network;
       }
 
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         const network = normalizeNetwork({
           name: externalSession.network as Network,
@@ -224,7 +225,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         return normalizeSignMessageOutput(result);
       }
 
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         return tryLocalBridgeSignMessage(input, externalSession, this.options);
       }
@@ -267,7 +268,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         );
       }
 
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         if (
           !transaction ||
@@ -309,7 +310,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         );
       }
 
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         return tryLocalBridgeSignAndSubmit(
           transaction as CedraSignAndSubmitTransactionInput,
