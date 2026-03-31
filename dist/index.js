@@ -61,7 +61,7 @@ import {
   tryLocalBridgeSignTransaction,
   validateExternalSession,
   waitForExternalSession
-} from "./chunk-XVUNA2GW.js";
+} from "./chunk-VRRWO4KR.js";
 
 // src/types.ts
 var NovaWalletReadyState = /* @__PURE__ */ ((NovaWalletReadyState2) => {

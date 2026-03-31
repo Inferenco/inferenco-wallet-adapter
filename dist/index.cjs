@@ -413,6 +413,13 @@ function sessionEndpointUrl(session, options = {}) {
     sessionBridgeBaseUrl(session, options)
   ).toString();
 }
+function connectionEndpointUrl(session, options = {}) {
+  const url = new URL("/connection", sessionBridgeBaseUrl(session, options));
+  url.searchParams.set("origin", window.location.origin);
+  url.searchParams.set("address", session.address);
+  url.searchParams.set("network", session.network);
+  return url.toString();
+}
 function sessionBridgeBaseUrl(session, options = {}) {
   const configuredUrl = session.bridgeUrl ?? bridgeBaseUrl(options);
   try {
@@ -544,12 +551,27 @@ async function revokeExternalSession(session, options = {}) {
   if (!isBrowser2()) return;
   try {
     await fetchJsonWithTimeout(
-      sessionEndpointUrl(session, options),
+      connectionEndpointUrl(session, options),
       bridgeConnectTimeoutMs(options),
       { method: "DELETE" }
     );
   } catch (error) {
-    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+    if (error instanceof BridgeHttpError && (error.status === 400 || error.status === 404)) {
+      try {
+        await fetchJsonWithTimeout(
+          sessionEndpointUrl(session, options),
+          bridgeConnectTimeoutMs(options),
+          { method: "DELETE" }
+        );
+        return;
+      } catch (fallbackError) {
+        if (fallbackError instanceof BridgeHttpError && (fallbackError.status === 403 || fallbackError.status === 404)) {
+          return;
+        }
+        throw fallbackError;
+      }
+    }
+    if (error instanceof BridgeHttpError && error.status === 403) {
       return;
     }
     throw error;

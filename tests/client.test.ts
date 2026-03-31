@@ -218,11 +218,52 @@ describe("NovaClient", () => {
     await client.disconnect();
 
     expect(fetchSpy).toHaveBeenCalledWith(
-      "http://127.0.0.1:21984/session/session-123",
+      `http://127.0.0.1:21984/connection?origin=${encodeURIComponent(window.location.origin)}&address=${encodeURIComponent(signer.accountAddress.toString())}&network=testnet`,
       expect.objectContaining({
         method: "DELETE"
       })
     );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
+  });
+
+  it("falls back to session revoke when the connection endpoint is unavailable", async () => {
+    const signer = Account.generate();
+    bridge.storeExternalSession({
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "session-fallback",
+      bridgeUrl: "http://127.0.0.1:21984/session/session-fallback",
+      walletName: "Nova Desk"
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "not_found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: "revoked",
+            sessionId: "session-fallback"
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          }
+        )
+      );
+
+    const client = new NovaClient();
+
+    await client.disconnect();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
   });
 
