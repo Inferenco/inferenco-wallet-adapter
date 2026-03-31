@@ -49,6 +49,7 @@ import {
   readValidatedExternalSession,
   registerNovaWallet,
   remapNovaError,
+  revokeExternalSession,
   sessionToAccountInfo,
   storeCallbackSession,
   storeExternalSession,
@@ -60,7 +61,7 @@ import {
   tryLocalBridgeSignTransaction,
   validateExternalSession,
   waitForExternalSession
-} from "./chunk-TWQ2VWZJ.js";
+} from "./chunk-XVUNA2GW.js";
 
 // src/types.ts
 var NovaWalletReadyState = /* @__PURE__ */ ((NovaWalletReadyState2) => {
@@ -228,6 +229,7 @@ export {
   readValidatedExternalSession,
   registerNovaWallet,
   remapNovaError,
+  revokeExternalSession,
   sessionToAccountInfo,
   storeCallbackSession,
   storeExternalSession,

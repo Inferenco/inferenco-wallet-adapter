@@ -179,6 +179,16 @@ export function clearExternalSession(): void {
   window.localStorage.removeItem(NOVA_PROTOCOL_KEY_STORAGE_KEY);
 }
 
+function sessionEndpointUrl(
+  session: Pick<NovaExternalSession, "sessionId" | "bridgeUrl">,
+  options: NovaWalletOptions = {}
+): string {
+  return new URL(
+    `/session/${encodeURIComponent(session.sessionId)}`,
+    sessionBridgeBaseUrl(session, options)
+  ).toString();
+}
+
 function sessionBridgeBaseUrl(
   session: Pick<NovaExternalSession, "bridgeUrl">,
   options: NovaWalletOptions = {}
@@ -314,10 +324,7 @@ export async function validateExternalSession(
   if (!isBrowser()) return null;
 
   try {
-    const sessionUrl = new URL(
-      `/session/${encodeURIComponent(session.sessionId)}`,
-      sessionBridgeBaseUrl(session, options)
-    ).toString();
+    const sessionUrl = sessionEndpointUrl(session, options);
     const payload = await fetchJsonWithTimeout<Partial<NovaExternalSession>>(
       sessionUrl,
       bridgeConnectTimeoutMs(options)
@@ -340,6 +347,27 @@ export async function validateExternalSession(
     }
 
     return null;
+  }
+}
+
+export async function revokeExternalSession(
+  session: NovaExternalSession,
+  options: NovaWalletOptions = {}
+): Promise<void> {
+  if (!isBrowser()) return;
+
+  try {
+    await fetchJsonWithTimeout(
+      sessionEndpointUrl(session, options),
+      bridgeConnectTimeoutMs(options),
+      { method: "DELETE" }
+    );
+  } catch (error) {
+    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+      return;
+    }
+
+    throw error;
   }
 }
 

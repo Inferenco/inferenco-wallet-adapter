@@ -186,4 +186,71 @@ describe("NovaClient", () => {
       code: NovaErrorCode.ConnectionTimeout
     });
   });
+
+  it("revokes the Nova Desk bridge session before clearing the external session", async () => {
+    const signer = Account.generate();
+    bridge.storeExternalSession({
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "session-123",
+      bridgeUrl: "http://127.0.0.1:21984/session/session-123",
+      walletName: "Nova Desk"
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "revoked",
+          sessionId: "session-123"
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        }
+      )
+    );
+
+    const client = new NovaClient();
+
+    await client.disconnect();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "http://127.0.0.1:21984/session/session-123",
+      expect.objectContaining({
+        method: "DELETE"
+      })
+    );
+    expect(window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
+  });
+
+  it("keeps the cached external session when Nova Desk disconnect revocation fails", async () => {
+    const signer = Account.generate();
+    bridge.storeExternalSession({
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "session-500",
+      bridgeUrl: "http://127.0.0.1:21984/session/session-500",
+      walletName: "Nova Desk"
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "bridge_unavailable" }), {
+        status: 503,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      })
+    );
+
+    const client = new NovaClient();
+
+    await expect(client.disconnect()).rejects.toMatchObject({
+      code: NovaErrorCode.InternalError
+    });
+    expect(window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY)).not.toBeNull();
+  });
 });
