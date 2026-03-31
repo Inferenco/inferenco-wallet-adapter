@@ -17,6 +17,7 @@ import {
   launchDesktopOrMobileConnect,
   readExternalSession,
   readValidatedExternalSession,
+  revokeExternalSession,
   sessionToAccountInfo,
   storeCallbackSession,
   tryLocalBridgeConnect,
@@ -181,7 +182,11 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
   async disconnect(): Promise<void> {
     try {
       const provider = this.refreshProvider();
+      const externalSession = readExternalSession();
       await provider?.disconnect?.();
+      if (externalSession) {
+        await revokeExternalSession(externalSession, this.options);
+      }
       clearExternalSession();
       this.accountInfo = null;
       this.networkInfo = null;

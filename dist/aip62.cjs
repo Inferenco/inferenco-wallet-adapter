@@ -265,6 +265,12 @@ function clearExternalSession() {
   window.localStorage.removeItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
   window.localStorage.removeItem(NOVA_PROTOCOL_KEY_STORAGE_KEY);
 }
+function sessionEndpointUrl(session, options = {}) {
+  return new URL(
+    `/session/${encodeURIComponent(session.sessionId)}`,
+    sessionBridgeBaseUrl(session, options)
+  ).toString();
+}
 function sessionBridgeBaseUrl(session, options = {}) {
   const configuredUrl = session.bridgeUrl ?? bridgeBaseUrl(options);
   try {
@@ -370,10 +376,7 @@ async function waitForExternalSession(options = {}) {
 async function validateExternalSession(session, options = {}) {
   if (!isBrowser()) return null;
   try {
-    const sessionUrl = new URL(
-      `/session/${encodeURIComponent(session.sessionId)}`,
-      sessionBridgeBaseUrl(session, options)
-    ).toString();
+    const sessionUrl = sessionEndpointUrl(session, options);
     const payload = await fetchJsonWithTimeout(
       sessionUrl,
       bridgeConnectTimeoutMs(options)
@@ -393,6 +396,21 @@ async function validateExternalSession(session, options = {}) {
       clearExternalSession();
     }
     return null;
+  }
+}
+async function revokeExternalSession(session, options = {}) {
+  if (!isBrowser()) return;
+  try {
+    await fetchJsonWithTimeout(
+      sessionEndpointUrl(session, options),
+      bridgeConnectTimeoutMs(options),
+      { method: "DELETE" }
+    );
+  } catch (error) {
+    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+      return;
+    }
+    throw error;
   }
 }
 async function readValidatedExternalSession(options = {}) {
@@ -745,7 +763,11 @@ var NovaClient = class extends import_eventemitter3.default {
   async disconnect() {
     try {
       const provider = this.refreshProvider();
+      const externalSession = readExternalSession();
       await provider?.disconnect?.();
+      if (externalSession) {
+        await revokeExternalSession(externalSession, this.options);
+      }
       clearExternalSession();
       this.accountInfo = null;
       this.networkInfo = null;
