@@ -8,7 +8,7 @@ This package is intended to live outside Cedra core, similar to Petra's standalo
 - `createNovaAIP62Wallet()` for explicit wallet-standard bridging
 - `registerNovaWallet()` for Cedra AIP-62 registration
 - desktop `Nova Desk` connect/sign/sign-submit support through the local bridge
-- mobile `Nova Wallet` deeplink support
+- mobile external-browser support through `nova-service` + `inferenco://` handoff
 
 ## Install
 
@@ -46,7 +46,7 @@ Or via side-effect import:
 import "@inferenco/nova-wallet-adapter/auto-register";
 ```
 
-On desktop, the registered wallet name is `Nova Desk`. On mobile, it remains `Nova Wallet`.
+The public wallet name exposed by the adapter is `Nova Connect`.
 
 ## Provider Detection
 
@@ -69,19 +69,28 @@ The adapter stores the approved desktop session in browser storage and reuses it
 
 ## Deeplink Fallback
 
-If no injected provider or local Nova Desk bridge is available, the adapter falls back to desktop/mobile handoff URLs:
+If no injected provider or local Nova Desk bridge is available, the adapter falls back to desktop/mobile handoff URLs.
+
+Desktop still uses `inferenco://login?redirect=...`.
+
+Mobile external-browser support requires a relay:
 
 ```ts
 import { NovaWallet } from "@inferenco/nova-wallet-adapter";
 
 const wallet = new NovaWallet({
-  deeplinkBaseUrl: "inferenco://connect?callback=",
+  relayBaseUrl: "https://relay.example",
+  websocketBaseUrl: "wss://relay.example/v1/ws",
+  deeplinkScheme: "inferenco",
 });
-
-const url = wallet.deeplinkProvider("https://example.com/callback");
 ```
 
-Desktop handoff uses `inferenco://login?redirect=...`. Mobile handoff uses `inferenco://connect?callback=...`.
+In that mode the adapter:
+
+- creates a relay pairing/session with `nova-service`
+- opens `inferenco://connect?...` or `inferenco://approve?...`
+- waits for websocket or callback resume markers
+- fetches and decrypts the approved result from the relay
 
 ## Feature Surface
 

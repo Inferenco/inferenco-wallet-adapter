@@ -16,6 +16,7 @@ import type {
 } from "@cedra-labs/wallet-standard";
 import type {
   NovaBridgeConnectPoll,
+  NovaCallbackMarker,
   NovaBridgeMessagePoll,
   NovaBridgeSignTransactionPoll,
   NovaBridgeStartResponse,
@@ -28,9 +29,11 @@ import {
   CALLBACK_BRIDGE_URL_PARAM,
   CALLBACK_CHAIN_ID_PARAM,
   CALLBACK_NETWORK_PARAM,
+  CALLBACK_REQUEST_ID_PARAM,
   CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
   CALLBACK_PUBLIC_KEY_PARAM,
   CALLBACK_SESSION_ID_PARAM,
+  CALLBACK_STATUS_PARAM,
   CALLBACK_WALLET_NAME_PARAM,
   DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS,
   DEFAULT_BRIDGE_POLL_INTERVAL_MS,
@@ -38,6 +41,7 @@ import {
   DEFAULT_DESKTOP_BRIDGE_URL,
   DEFAULT_DESKTOP_LOGIN_URL,
   DEFAULT_DEEPLINK_BASE_URL,
+  NOVA_CALLBACK_MARKER_STORAGE_KEY,
   NOVA_EXTERNAL_SESSION_STORAGE_KEY,
   NOVA_PROTOCOL_KEY_STORAGE_KEY
 } from "./constants";
@@ -88,7 +92,9 @@ export function currentUrlWithoutCallbackKey(): string {
     CALLBACK_SESSION_ID_PARAM,
     CALLBACK_BRIDGE_URL_PARAM,
     CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
-    CALLBACK_WALLET_NAME_PARAM
+    CALLBACK_WALLET_NAME_PARAM,
+    CALLBACK_REQUEST_ID_PARAM,
+    CALLBACK_STATUS_PARAM
   ]) {
     url.searchParams.delete(key);
   }
@@ -137,14 +143,21 @@ function parseExternalSession(
   }
 
   return {
+    transport: candidate.transport === "mobile-relay" ? "mobile-relay" : "desktop-bridge",
     address: candidate.address,
     publicKey: candidate.publicKey,
     network: candidate.network,
     chainId: candidate.chainId,
     sessionId: candidate.sessionId,
     bridgeUrl: typeof candidate.bridgeUrl === "string" ? candidate.bridgeUrl : undefined,
+    relayBaseUrl: typeof candidate.relayBaseUrl === "string" ? candidate.relayBaseUrl : undefined,
     protocolPublicKey:
       typeof candidate.protocolPublicKey === "string" ? candidate.protocolPublicKey : undefined,
+    dappSessionToken:
+      typeof candidate.dappSessionToken === "string" ? candidate.dappSessionToken : undefined,
+    sharedSecret: typeof candidate.sharedSecret === "string" ? candidate.sharedSecret : undefined,
+    walletPublicKey:
+      typeof candidate.walletPublicKey === "string" ? candidate.walletPublicKey : undefined,
     walletName: typeof candidate.walletName === "string" ? candidate.walletName : undefined
   };
 }
@@ -250,6 +263,7 @@ function sessionFromBridgePoll(payload: NovaBridgeConnectPoll): NovaExternalSess
   }
 
   return {
+    transport: "desktop-bridge",
     address,
     publicKey,
     network,
@@ -271,11 +285,14 @@ export function storeCallbackSession(): void {
   const bridgeUrl = url.searchParams.get(CALLBACK_BRIDGE_URL_PARAM);
   const protocolPublicKey = url.searchParams.get(CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM);
   const walletName = url.searchParams.get(CALLBACK_WALLET_NAME_PARAM);
+  const requestId = url.searchParams.get(CALLBACK_REQUEST_ID_PARAM);
+  const status = url.searchParams.get(CALLBACK_STATUS_PARAM);
 
   if (address && publicKey && network && chainId && sessionId) {
     const parsedChainId = Number.parseInt(chainId, 10);
     if (!Number.isNaN(parsedChainId)) {
       storeExternalSession({
+        transport: "desktop-bridge",
         address,
         publicKey,
         network,
@@ -290,6 +307,13 @@ export function storeCallbackSession(): void {
     window.localStorage.setItem(NOVA_PROTOCOL_KEY_STORAGE_KEY, publicKey);
   }
 
+  if (requestId && status) {
+    window.sessionStorage.setItem(
+      NOVA_CALLBACK_MARKER_STORAGE_KEY,
+      JSON.stringify({ requestId, status } satisfies NovaCallbackMarker)
+    );
+  }
+
   for (const key of [
     CALLBACK_ADDRESS_PARAM,
     CALLBACK_PUBLIC_KEY_PARAM,
@@ -298,12 +322,39 @@ export function storeCallbackSession(): void {
     CALLBACK_SESSION_ID_PARAM,
     CALLBACK_BRIDGE_URL_PARAM,
     CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
-    CALLBACK_WALLET_NAME_PARAM
+    CALLBACK_WALLET_NAME_PARAM,
+    CALLBACK_REQUEST_ID_PARAM,
+    CALLBACK_STATUS_PARAM
   ]) {
     url.searchParams.delete(key);
   }
 
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+export function readCallbackMarker(): NovaCallbackMarker | null {
+  if (!isBrowser()) return null;
+  const raw = window.sessionStorage.getItem(NOVA_CALLBACK_MARKER_STORAGE_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<NovaCallbackMarker>;
+    if (typeof parsed.requestId === "string" && typeof parsed.status === "string") {
+      return {
+        requestId: parsed.requestId,
+        status: parsed.status
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+export function clearCallbackMarker(): void {
+  if (!isBrowser()) return;
+  window.sessionStorage.removeItem(NOVA_CALLBACK_MARKER_STORAGE_KEY);
 }
 
 export async function waitForExternalSession(
@@ -333,6 +384,9 @@ export async function validateExternalSession(
   options: NovaWalletOptions = {}
 ): Promise<NovaExternalSession | null> {
   if (!isBrowser()) return null;
+  if (session.transport === "mobile-relay") {
+    return session;
+  }
 
   try {
     const sessionUrl = sessionEndpointUrl(session, options);
@@ -366,6 +420,21 @@ export async function revokeExternalSession(
   options: NovaWalletOptions = {}
 ): Promise<void> {
   if (!isBrowser()) return;
+  if (session.transport === "mobile-relay") {
+    const relayBaseUrl = session.relayBaseUrl ?? options.relayBaseUrl;
+    if (!relayBaseUrl || !session.dappSessionToken) return;
+    await fetchJsonWithTimeout(
+      new URL(`/v1/sessions/${encodeURIComponent(session.sessionId)}`, relayBaseUrl).toString(),
+      bridgeConnectTimeoutMs(options),
+      {
+        method: "DELETE",
+        headers: {
+          "x-nova-session-token": session.dappSessionToken
+        }
+      }
+    );
+    return;
+  }
 
   try {
     await fetchJsonWithTimeout(

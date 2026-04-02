@@ -1,15 +1,20 @@
-import { N as NovaWalletOptions, a as NovaProvider, b as NovaExternalSession, c as NovaProviderAccount, d as NovaSignMessageResponse, e as NovaTransactionPayload, f as NovaSignTransactionResult, g as NovaNetworkInfo, h as NovaWalletAdapterLike, i as NovaWalletName, j as NovaWalletReadyState, k as NovaAccountKeys } from './aip62-CcfV3rMt.cjs';
-export { l as NormalizedConnectedAccount, m as NovaBridgeConnectPoll, n as NovaBridgeMessagePoll, o as NovaBridgeSignTransactionPoll, p as NovaBridgeStartResponse, q as NovaBridgeTransactionPoll, r as NovaProviderResponse, s as NovaWalletLikeResult, t as NovaWindow, S as SignMessagePayload, u as createNovaAIP62Wallet, v as registerNovaWallet } from './aip62-CcfV3rMt.cjs';
+import { N as NovaWalletOptions, a as NovaProvider, b as NovaCallbackMarker, c as NovaExternalSession, d as NovaProviderAccount, e as NovaSignMessageResponse, f as NovaTransactionPayload, g as NovaSignTransactionResult, h as NovaNetworkInfo, i as NovaWalletAdapterLike, j as NovaWalletName, k as NovaWalletReadyState, l as NovaAccountKeys } from './aip62-CXY1CRWW.cjs';
+export { m as NormalizedConnectedAccount, n as NovaBridgeConnectPoll, o as NovaBridgeMessagePoll, p as NovaBridgeSignTransactionPoll, q as NovaBridgeStartResponse, r as NovaBridgeTransactionPoll, s as NovaMobilePairingCreateResponse, t as NovaMobilePairingStatus, u as NovaMobileRequestCreateResponse, v as NovaMobileRequestStatus, w as NovaProviderResponse, x as NovaWalletLikeResult, y as NovaWindow, S as SignMessagePayload, z as createNovaAIP62Wallet, A as registerNovaWallet } from './aip62-CXY1CRWW.cjs';
 import { AccountInfo, CedraSignAndSubmitTransactionInput, CedraSignAndSubmitTransactionOutput, CedraSignMessageInput, CedraSignMessageOutput, CedraSignTransactionInputV1_1, CedraSignTransactionOutputV1_1, NetworkInfo } from '@cedra-labs/wallet-standard';
 import { Cedra, AnyRawTransaction, InputGenerateTransactionPayloadData, InputGenerateTransactionOptions, AccountAuthenticator, PendingTransactionResponse } from '@cedra-labs/ts-sdk';
 import EventEmitter from 'eventemitter3';
 
+declare const NOVA_CONNECT_NAME = "Nova Connect";
 declare const NOVA_WALLET_NAME = "Nova Wallet";
 declare const NOVA_DESK_NAME = "Nova Desk";
 declare const DEFAULT_WEBSITE_URL = "https://inferenco.com";
 declare const DEFAULT_DEEPLINK_BASE_URL = "inferenco://connect?callback=";
 declare const DEFAULT_DESKTOP_LOGIN_URL = "inferenco://login";
 declare const DEFAULT_DESKTOP_BRIDGE_URL = "http://127.0.0.1:21984";
+declare const DEFAULT_DEEPLINK_SCHEME = "inferenco";
+declare const DEFAULT_MOBILE_POLL_INTERVAL_MS = 1000;
+declare const DEFAULT_MOBILE_REQUEST_TIMEOUT_MS = 180000;
+declare const DEFAULT_MOBILE_SOCKET_TIMEOUT_MS = 15000;
 declare const DEFAULT_DETECT_ALIASES = true;
 declare const DEFAULT_REGISTER_FORCE = false;
 declare const DEFAULT_DESKTOP_REGISTRATION = true;
@@ -18,6 +23,7 @@ declare const DEFAULT_BRIDGE_POLL_INTERVAL_MS = 250;
 declare const DEFAULT_BRIDGE_POLL_TIMEOUT_MS = 120000;
 declare const NOVA_PROTOCOL_KEY_STORAGE_KEY = "inferenco:nova-protocol-key";
 declare const NOVA_EXTERNAL_SESSION_STORAGE_KEY = "inferenco:nova-session";
+declare const NOVA_CALLBACK_MARKER_STORAGE_KEY = "inferenco:nova-callback-marker";
 declare const CALLBACK_ADDRESS_PARAM = "address";
 declare const CALLBACK_PUBLIC_KEY_PARAM = "publicKey";
 declare const CALLBACK_NETWORK_PARAM = "network";
@@ -26,6 +32,8 @@ declare const CALLBACK_SESSION_ID_PARAM = "sessionId";
 declare const CALLBACK_BRIDGE_URL_PARAM = "bridgeUrl";
 declare const CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM = "protocolPublicKey";
 declare const CALLBACK_WALLET_NAME_PARAM = "walletName";
+declare const CALLBACK_REQUEST_ID_PARAM = "novaRequestId";
+declare const CALLBACK_STATUS_PARAM = "novaStatus";
 declare const NOVA_WALLET_ICON: `data:image/svg+xml;base64,${string}`;
 
 declare enum NovaErrorCode {
@@ -66,6 +74,8 @@ declare function storeExternalSession(session: NovaExternalSession): void;
 declare function clearExternalSession(): void;
 declare function sessionToAccountInfo(session: NovaExternalSession): AccountInfo;
 declare function storeCallbackSession(): void;
+declare function readCallbackMarker(): NovaCallbackMarker | null;
+declare function clearCallbackMarker(): void;
 declare function waitForExternalSession(options?: NovaWalletOptions): Promise<NovaExternalSession | null>;
 declare function validateExternalSession(session: NovaExternalSession, options?: NovaWalletOptions): Promise<NovaExternalSession | null>;
 declare function revokeExternalSession(session: NovaExternalSession, options?: NovaWalletOptions): Promise<void>;
@@ -132,7 +142,7 @@ type NovaWalletEvents = {
 };
 declare class NovaWallet extends EventEmitter<NovaWalletEvents> implements NovaWalletAdapterLike {
     private readonly options;
-    readonly name: NovaWalletName<"Nova Wallet">;
+    readonly name: NovaWalletName<"Nova Connect">;
     readonly url: string;
     readonly icon: `data:image/svg+xml;base64,${string}`;
     private readonly client;
@@ -160,4 +170,4 @@ declare class NovaWallet extends EventEmitter<NovaWalletEvents> implements NovaW
     deeplinkProvider(url?: string): string;
 }
 
-export { BridgeHttpError, CALLBACK_ADDRESS_PARAM, CALLBACK_BRIDGE_URL_PARAM, CALLBACK_CHAIN_ID_PARAM, CALLBACK_NETWORK_PARAM, CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM, CALLBACK_PUBLIC_KEY_PARAM, CALLBACK_SESSION_ID_PARAM, CALLBACK_WALLET_NAME_PARAM, DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS, DEFAULT_BRIDGE_POLL_INTERVAL_MS, DEFAULT_BRIDGE_POLL_TIMEOUT_MS, DEFAULT_DEEPLINK_BASE_URL, DEFAULT_DESKTOP_BRIDGE_URL, DEFAULT_DESKTOP_LOGIN_URL, DEFAULT_DESKTOP_REGISTRATION, DEFAULT_DETECT_ALIASES, DEFAULT_REGISTER_FORCE, DEFAULT_WEBSITE_URL, NOVA_DESK_NAME, NOVA_EXTERNAL_SESSION_STORAGE_KEY, NOVA_PROTOCOL_KEY_STORAGE_KEY, NOVA_WALLET_ICON, NOVA_WALLET_NAME, NovaAccountKeys, NovaAdapterError, NovaClient, NovaErrorCode, NovaExternalSession, NovaNetworkInfo, NovaProvider, NovaProviderAccount, NovaSignMessageResponse, NovaSignTransactionResult, NovaTransactionPayload, NovaWallet, NovaWalletAdapterLike, NovaWalletName, NovaWalletOptions, NovaWalletReadyState, bridgeBaseUrl, buildCallbackUrl, buildDeeplinkUrl, buildDesktopOrMobileConnectUrl, clearExternalSession, createFullMessage, currentUrlWithoutCallbackKey, detectProvider, fetchJsonWithTimeout, getSdkNetwork, hasStoredExternalSession, isBrowser, isMobileBrowser, launchDesktopOrMobileConnect, normalizeNetwork, normalizeProviderAccount, normalizeSignMessageOutput, normalizeTransactionPayload, readExternalSession, readValidatedExternalSession, remapNovaError, revokeExternalSession, sessionToAccountInfo, storeCallbackSession, storeExternalSession, submitSignedTransaction, toUint8Array, tryLocalBridgeConnect, tryLocalBridgeSignAndSubmit, tryLocalBridgeSignMessage, tryLocalBridgeSignTransaction, validateExternalSession, waitForExternalSession };
+export { BridgeHttpError, CALLBACK_ADDRESS_PARAM, CALLBACK_BRIDGE_URL_PARAM, CALLBACK_CHAIN_ID_PARAM, CALLBACK_NETWORK_PARAM, CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM, CALLBACK_PUBLIC_KEY_PARAM, CALLBACK_REQUEST_ID_PARAM, CALLBACK_SESSION_ID_PARAM, CALLBACK_STATUS_PARAM, CALLBACK_WALLET_NAME_PARAM, DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS, DEFAULT_BRIDGE_POLL_INTERVAL_MS, DEFAULT_BRIDGE_POLL_TIMEOUT_MS, DEFAULT_DEEPLINK_BASE_URL, DEFAULT_DEEPLINK_SCHEME, DEFAULT_DESKTOP_BRIDGE_URL, DEFAULT_DESKTOP_LOGIN_URL, DEFAULT_DESKTOP_REGISTRATION, DEFAULT_DETECT_ALIASES, DEFAULT_MOBILE_POLL_INTERVAL_MS, DEFAULT_MOBILE_REQUEST_TIMEOUT_MS, DEFAULT_MOBILE_SOCKET_TIMEOUT_MS, DEFAULT_REGISTER_FORCE, DEFAULT_WEBSITE_URL, NOVA_CALLBACK_MARKER_STORAGE_KEY, NOVA_CONNECT_NAME, NOVA_DESK_NAME, NOVA_EXTERNAL_SESSION_STORAGE_KEY, NOVA_PROTOCOL_KEY_STORAGE_KEY, NOVA_WALLET_ICON, NOVA_WALLET_NAME, NovaAccountKeys, NovaAdapterError, NovaCallbackMarker, NovaClient, NovaErrorCode, NovaExternalSession, NovaNetworkInfo, NovaProvider, NovaProviderAccount, NovaSignMessageResponse, NovaSignTransactionResult, NovaTransactionPayload, NovaWallet, NovaWalletAdapterLike, NovaWalletName, NovaWalletOptions, NovaWalletReadyState, bridgeBaseUrl, buildCallbackUrl, buildDeeplinkUrl, buildDesktopOrMobileConnectUrl, clearCallbackMarker, clearExternalSession, createFullMessage, currentUrlWithoutCallbackKey, detectProvider, fetchJsonWithTimeout, getSdkNetwork, hasStoredExternalSession, isBrowser, isMobileBrowser, launchDesktopOrMobileConnect, normalizeNetwork, normalizeProviderAccount, normalizeSignMessageOutput, normalizeTransactionPayload, readCallbackMarker, readExternalSession, readValidatedExternalSession, remapNovaError, revokeExternalSession, sessionToAccountInfo, storeCallbackSession, storeExternalSession, submitSignedTransaction, toUint8Array, tryLocalBridgeConnect, tryLocalBridgeSignAndSubmit, tryLocalBridgeSignMessage, tryLocalBridgeSignTransaction, validateExternalSession, waitForExternalSession };

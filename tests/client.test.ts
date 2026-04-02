@@ -1,5 +1,6 @@
 import { Account } from "@cedra-labs/ts-sdk";
 import * as bridge from "../src/bridge";
+import * as mobileRelay from "../src/mobileRelay";
 import { NOVA_EXTERNAL_SESSION_STORAGE_KEY } from "../src/constants";
 import { NovaErrorCode } from "../src/errors";
 import { NovaClient } from "../src/NovaClient";
@@ -33,6 +34,7 @@ describe("NovaClient", () => {
   it("restores a cached external session only after bridge validation", async () => {
     const signer = Account.generate();
     bridge.storeExternalSession({
+      transport: "desktop-bridge",
       address: signer.accountAddress.toString(),
       publicKey: signer.publicKey.toString(),
       network: "testnet",
@@ -74,6 +76,7 @@ describe("NovaClient", () => {
   it("clears a revoked cached external session before restoring", async () => {
     const signer = Account.generate();
     bridge.storeExternalSession({
+      transport: "desktop-bridge",
       address: signer.accountAddress.toString(),
       publicKey: signer.publicKey.toString(),
       network: "testnet",
@@ -156,6 +159,7 @@ describe("NovaClient", () => {
       .spyOn(bridge, "launchDesktopOrMobileConnect")
       .mockReturnValue("inferenco://login?redirect=https%3A%2F%2Fexample.com");
     vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue({
+      transport: "desktop-bridge",
       address: signer.accountAddress.toString(),
       publicKey: signer.publicKey.toString(),
       network: "testnet",
@@ -187,9 +191,36 @@ describe("NovaClient", () => {
     });
   });
 
+  it("uses the mobile relay path on mobile browsers", async () => {
+    vi.spyOn(bridge, "isMobileBrowser").mockReturnValue(true);
+    vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
+    const signer = Account.generate();
+    const relaySpy = vi.spyOn(mobileRelay, "connectViaMobileRelay").mockResolvedValue({
+      transport: "mobile-relay",
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "relay-session",
+      relayBaseUrl: "https://relay.example",
+      dappSessionToken: "dapp-token",
+      sharedSecret: "shared-secret",
+      walletPublicKey: "wallet-public-key",
+      walletName: "Nova Wallet"
+    });
+
+    const client = new NovaClient({ relayBaseUrl: "https://relay.example" });
+    const result = await client.connect();
+
+    expect(relaySpy).toHaveBeenCalledTimes(1);
+    expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
+    expect(client.cachedNetwork?.name).toBe("testnet");
+  });
+
   it("revokes the Nova Desk bridge session before clearing the external session", async () => {
     const signer = Account.generate();
     bridge.storeExternalSession({
+      transport: "desktop-bridge",
       address: signer.accountAddress.toString(),
       publicKey: signer.publicKey.toString(),
       network: "testnet",
@@ -230,6 +261,7 @@ describe("NovaClient", () => {
   it("falls back to session revoke when the connection endpoint is unavailable", async () => {
     const signer = Account.generate();
     bridge.storeExternalSession({
+      transport: "desktop-bridge",
       address: signer.accountAddress.toString(),
       publicKey: signer.publicKey.toString(),
       network: "testnet",
@@ -270,6 +302,7 @@ describe("NovaClient", () => {
   it("keeps the cached external session when Nova Desk disconnect revocation fails", async () => {
     const signer = Account.generate();
     bridge.storeExternalSession({
+      transport: "desktop-bridge",
       address: signer.accountAddress.toString(),
       publicKey: signer.publicKey.toString(),
       network: "testnet",

@@ -11,6 +11,7 @@ import type {
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
+  NOVA_CONNECT_NAME,
   NOVA_DESK_NAME,
   DEFAULT_WEBSITE_URL,
   NOVA_WALLET_ICON,
@@ -40,7 +41,7 @@ export class NovaWallet
   extends EventEmitter<NovaWalletEvents>
   implements NovaWalletAdapterLike
 {
-  readonly name = (isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME) as NovaWalletName<"Nova Wallet">;
+  readonly name = NOVA_CONNECT_NAME as NovaWalletName<"Nova Connect">;
   readonly url: string;
   readonly icon = NOVA_WALLET_ICON;
 
@@ -57,7 +58,7 @@ export class NovaWallet
 
   get readyState(): NovaWalletReadyState {
     if (typeof window === "undefined") return NovaWalletReadyState.Unsupported;
-    return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser()
+    return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser() || !!this.options.relayBaseUrl
       ? NovaWalletReadyState.Installed
       : NovaWalletReadyState.NotDetected;
   }

@@ -65,6 +65,7 @@ export interface NovaSignMessageResponse {
 
 export interface NovaWalletOptions {
   deeplinkBaseUrl?: string;
+  deeplinkScheme?: string;
   websiteUrl?: string;
   forceRegistration?: boolean;
   desktopRegistration?: boolean;
@@ -72,19 +73,29 @@ export interface NovaWalletOptions {
   networkOverride?: Network;
   fullnodeUrl?: string;
   bridgeBaseUrl?: string;
+  relayBaseUrl?: string;
+  websocketBaseUrl?: string;
   bridgeConnectTimeoutMs?: number;
   bridgePollIntervalMs?: number;
   bridgePollTimeoutMs?: number;
+  mobilePollIntervalMs?: number;
+  mobileRequestTimeoutMs?: number;
+  mobileSocketTimeoutMs?: number;
 }
 
 export interface NovaExternalSession {
+  transport: "desktop-bridge" | "mobile-relay";
   address: string;
   publicKey: string;
   network: string;
   chainId: number;
   sessionId: string;
   bridgeUrl?: string;
+  relayBaseUrl?: string;
   protocolPublicKey?: string;
+  dappSessionToken?: string;
+  sharedSecret?: string;
+  walletPublicKey?: string;
   walletName?: string;
 }
 
@@ -144,6 +155,63 @@ export interface NovaBridgeTransactionPoll {
   requestId?: string;
   hash?: string;
   error?: string;
+}
+
+export interface NovaCallbackMarker {
+  requestId: string;
+  status: string;
+}
+
+export interface NovaMobilePairingCreateResponse {
+  pairingId: string;
+  dappPairingToken: string;
+  walletDeeplinkUrl: string;
+  websocketUrl?: string;
+  expiresAt: string;
+}
+
+export interface NovaMobilePairingStatus {
+  pairingId: string;
+  status: "pending" | "claimed" | "approved" | "rejected" | "expired" | "revoked";
+  callbackUrl: string;
+  encryptedResult?: string;
+  dappSessionToken?: string;
+  sessionId?: string;
+  walletPublicKey?: string;
+  accountAddress?: string;
+  publicKey?: string;
+  network?: string;
+  chainId?: number;
+  walletName?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface NovaMobileRequestCreateResponse {
+  requestId: string;
+  walletDeeplinkUrl: string;
+  expiresAt: string;
+}
+
+export interface NovaMobileRequestStatus {
+  requestId: string;
+  sessionId: string;
+  method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
+  status: "pending" | "approved" | "rejected" | "expired" | "cancelled";
+  callbackUrl: string;
+  encryptedRequest?: string;
+  encryptedResult?: string;
+  requestMetadata?: Record<string, unknown> | null;
+  resultMetadata?: Record<string, unknown> | null;
+  errorCode?: string;
+  errorMessage?: string;
+  origin?: string;
+  appName?: string;
+  accountAddress?: string;
+  network?: string;
+  chainId?: number;
+  walletName?: string;
+  expiresAt: string;
 }
 
 export type NovaTransactionPayload =

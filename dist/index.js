@@ -6,18 +6,26 @@ import {
   CALLBACK_NETWORK_PARAM,
   CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
   CALLBACK_PUBLIC_KEY_PARAM,
+  CALLBACK_REQUEST_ID_PARAM,
   CALLBACK_SESSION_ID_PARAM,
+  CALLBACK_STATUS_PARAM,
   CALLBACK_WALLET_NAME_PARAM,
   DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS,
   DEFAULT_BRIDGE_POLL_INTERVAL_MS,
   DEFAULT_BRIDGE_POLL_TIMEOUT_MS,
   DEFAULT_DEEPLINK_BASE_URL,
+  DEFAULT_DEEPLINK_SCHEME,
   DEFAULT_DESKTOP_BRIDGE_URL,
   DEFAULT_DESKTOP_LOGIN_URL,
   DEFAULT_DESKTOP_REGISTRATION,
   DEFAULT_DETECT_ALIASES,
+  DEFAULT_MOBILE_POLL_INTERVAL_MS,
+  DEFAULT_MOBILE_REQUEST_TIMEOUT_MS,
+  DEFAULT_MOBILE_SOCKET_TIMEOUT_MS,
   DEFAULT_REGISTER_FORCE,
   DEFAULT_WEBSITE_URL,
+  NOVA_CALLBACK_MARKER_STORAGE_KEY,
+  NOVA_CONNECT_NAME,
   NOVA_DESK_NAME,
   NOVA_EXTERNAL_SESSION_STORAGE_KEY,
   NOVA_PROTOCOL_KEY_STORAGE_KEY,
@@ -30,6 +38,7 @@ import {
   buildCallbackUrl,
   buildDeeplinkUrl,
   buildDesktopOrMobileConnectUrl,
+  clearCallbackMarker,
   clearExternalSession,
   createFullMessage,
   createNovaAIP62Wallet,
@@ -45,6 +54,7 @@ import {
   normalizeProviderAccount,
   normalizeSignMessageOutput,
   normalizeTransactionPayload,
+  readCallbackMarker,
   readExternalSession,
   readValidatedExternalSession,
   registerNovaWallet,
@@ -61,7 +71,7 @@ import {
   tryLocalBridgeSignTransaction,
   validateExternalSession,
   waitForExternalSession
-} from "./chunk-VRRWO4KR.js";
+} from "./chunk-7ADWDHQK.js";
 
 // src/types.ts
 var NovaWalletReadyState = /* @__PURE__ */ ((NovaWalletReadyState2) => {
@@ -81,7 +91,7 @@ var NovaWallet = class extends EventEmitter {
     this.url = options.websiteUrl ?? DEFAULT_WEBSITE_URL;
     this.client = new NovaClient(options);
   }
-  name = isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME;
+  name = NOVA_CONNECT_NAME;
   url;
   icon = NOVA_WALLET_ICON;
   client;
@@ -90,7 +100,7 @@ var NovaWallet = class extends EventEmitter {
   isConnecting = false;
   get readyState() {
     if (typeof window === "undefined") return "Unsupported" /* Unsupported */;
-    return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser() ? "Installed" /* Installed */ : "NotDetected" /* NotDetected */;
+    return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser() || !!this.options.relayBaseUrl ? "Installed" /* Installed */ : "NotDetected" /* NotDetected */;
   }
   get connecting() {
     return this.isConnecting;
@@ -184,18 +194,26 @@ export {
   CALLBACK_NETWORK_PARAM,
   CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
   CALLBACK_PUBLIC_KEY_PARAM,
+  CALLBACK_REQUEST_ID_PARAM,
   CALLBACK_SESSION_ID_PARAM,
+  CALLBACK_STATUS_PARAM,
   CALLBACK_WALLET_NAME_PARAM,
   DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS,
   DEFAULT_BRIDGE_POLL_INTERVAL_MS,
   DEFAULT_BRIDGE_POLL_TIMEOUT_MS,
   DEFAULT_DEEPLINK_BASE_URL,
+  DEFAULT_DEEPLINK_SCHEME,
   DEFAULT_DESKTOP_BRIDGE_URL,
   DEFAULT_DESKTOP_LOGIN_URL,
   DEFAULT_DESKTOP_REGISTRATION,
   DEFAULT_DETECT_ALIASES,
+  DEFAULT_MOBILE_POLL_INTERVAL_MS,
+  DEFAULT_MOBILE_REQUEST_TIMEOUT_MS,
+  DEFAULT_MOBILE_SOCKET_TIMEOUT_MS,
   DEFAULT_REGISTER_FORCE,
   DEFAULT_WEBSITE_URL,
+  NOVA_CALLBACK_MARKER_STORAGE_KEY,
+  NOVA_CONNECT_NAME,
   NOVA_DESK_NAME,
   NOVA_EXTERNAL_SESSION_STORAGE_KEY,
   NOVA_PROTOCOL_KEY_STORAGE_KEY,
@@ -210,6 +228,7 @@ export {
   buildCallbackUrl,
   buildDeeplinkUrl,
   buildDesktopOrMobileConnectUrl,
+  clearCallbackMarker,
   clearExternalSession,
   createFullMessage,
   createNovaAIP62Wallet,
@@ -225,6 +244,7 @@ export {
   normalizeProviderAccount,
   normalizeSignMessageOutput,
   normalizeTransactionPayload,
+  readCallbackMarker,
   readExternalSession,
   readValidatedExternalSession,
   registerNovaWallet,
