@@ -58,7 +58,7 @@ export class NovaWallet
 
   get readyState(): NovaWalletReadyState {
     if (typeof window === "undefined") return NovaWalletReadyState.Unsupported;
-    return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser() || !!this.options.relayBaseUrl
+    return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser()
       ? NovaWalletReadyState.Installed
       : NovaWalletReadyState.NotDetected;
   }

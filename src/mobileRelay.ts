@@ -17,8 +17,10 @@ import {
   CALLBACK_REQUEST_ID_PARAM,
   CALLBACK_STATUS_PARAM,
   DEFAULT_DEEPLINK_SCHEME,
+  DEFAULT_MOBILE_RELAY_BASE_URL,
   DEFAULT_MOBILE_POLL_INTERVAL_MS,
-  DEFAULT_MOBILE_REQUEST_TIMEOUT_MS
+  DEFAULT_MOBILE_REQUEST_TIMEOUT_MS,
+  DEFAULT_MOBILE_WEBSOCKET_URL
 } from "./constants";
 import { clearCallbackMarker, fetchJsonWithTimeout, readCallbackMarker, storeCallbackSession, storeExternalSession } from "./bridge";
 import { decryptJson, createKeyPair, deriveSharedSecret, encryptJson } from "./mobileCrypto";
@@ -41,20 +43,15 @@ function assertBrowser(): void {
 }
 
 function getRelayBaseUrl(options: NovaWalletOptions): string {
-  if (!options.relayBaseUrl) {
-    throw new NovaAdapterError(
-      NovaErrorCode.Unsupported,
-      "Nova Connect mobile relay requires relayBaseUrl to be configured"
-    );
-  }
-  return options.relayBaseUrl;
+  return options.relayBaseUrl ?? DEFAULT_MOBILE_RELAY_BASE_URL;
 }
 
 function getWebsocketUrl(options: NovaWalletOptions, fallback?: string): string | undefined {
   if (options.websocketBaseUrl) return options.websocketBaseUrl;
   if (fallback) return fallback;
-  if (!options.relayBaseUrl) return undefined;
-  const url = new URL(options.relayBaseUrl);
+  const relayBaseUrl = options.relayBaseUrl ?? DEFAULT_MOBILE_RELAY_BASE_URL;
+  if (!relayBaseUrl) return DEFAULT_MOBILE_WEBSOCKET_URL;
+  const url = new URL(relayBaseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "/v1/ws";
   return url.toString();

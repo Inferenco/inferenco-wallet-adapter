@@ -172,7 +172,7 @@ export function registerNovaWallet(options: NovaWalletOptions = {}): void {
   const forceRegistration = options.forceRegistration ?? DEFAULT_REGISTER_FORCE;
   const desktopRegistration = options.desktopRegistration ?? DEFAULT_DESKTOP_REGISTRATION;
   const shouldRegisterDesktop = desktopRegistration && typeof window !== "undefined" && !isMobileBrowser();
-  const shouldRegisterMobileRelay = typeof window !== "undefined" && isMobileBrowser() && !!options.relayBaseUrl;
+  const shouldRegisterMobileRelay = typeof window !== "undefined" && isMobileBrowser();
   if (!client.hasProvider() && !client.hasExternalSession() && !forceRegistration && !shouldRegisterDesktop && !shouldRegisterMobileRelay) return;
 
   registerWallet(createNovaAIP62Wallet(options));

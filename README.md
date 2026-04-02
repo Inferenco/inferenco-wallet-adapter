@@ -73,7 +73,15 @@ If no injected provider or local Nova Desk bridge is available, the adapter fall
 
 Desktop still uses `inferenco://login?redirect=...`.
 
-Mobile external-browser support requires a relay:
+Mobile external-browser support uses Inferenco's hosted `nova-service` relay by default:
+
+```ts
+import { NovaWallet } from "@inferenco/nova-wallet-adapter";
+
+const wallet = new NovaWallet();
+```
+
+You can still override the relay for local development or self-hosting:
 
 ```ts
 import { NovaWallet } from "@inferenco/nova-wallet-adapter";
@@ -91,6 +99,11 @@ In that mode the adapter:
 - opens `inferenco://connect?...` or `inferenco://approve?...`
 - waits for websocket or callback resume markers
 - fetches and decrypts the approved result from the relay
+
+Default hosted relay:
+
+- `https://nova-service-160604102004.europe-west1.run.app`
+- websocket: `wss://nova-service-160604102004.europe-west1.run.app/v1/ws`
 
 ## Feature Surface
 

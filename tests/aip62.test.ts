@@ -56,8 +56,8 @@ describe("registerNovaWallet", () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iphone");
     const before = getCedraWallets().cedraWallets.length;
     const { registerNovaWallet, createNovaAIP62Wallet } = await import("../src/aip62");
-    const wallet = createNovaAIP62Wallet({ relayBaseUrl: "https://relay.example" });
-    registerNovaWallet({ relayBaseUrl: "https://relay.example" });
+    const wallet = createNovaAIP62Wallet();
+    registerNovaWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(wallet.name).toBe("Nova Connect");
     expect(after).toBe(before + 1);

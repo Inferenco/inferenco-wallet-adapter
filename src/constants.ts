@@ -8,6 +8,8 @@ export const DEFAULT_DEEPLINK_BASE_URL = "inferenco://connect?callback=";
 export const DEFAULT_DESKTOP_LOGIN_URL = "inferenco://login";
 export const DEFAULT_DESKTOP_BRIDGE_URL = "http://127.0.0.1:21984";
 export const DEFAULT_DEEPLINK_SCHEME = "inferenco";
+export const DEFAULT_MOBILE_RELAY_BASE_URL = "https://nova-service-160604102004.europe-west1.run.app";
+export const DEFAULT_MOBILE_WEBSOCKET_URL = "wss://nova-service-160604102004.europe-west1.run.app/v1/ws";
 export const DEFAULT_MOBILE_POLL_INTERVAL_MS = 1000;
 export const DEFAULT_MOBILE_REQUEST_TIMEOUT_MS = 180000;
 export const DEFAULT_MOBILE_SOCKET_TIMEOUT_MS = 15000;
