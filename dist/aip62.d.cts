@@ -1,3 +1,3 @@
 import '@cedra-labs/wallet-standard';
-export { z as createNovaAIP62Wallet, A as registerNovaWallet } from './aip62-CXY1CRWW.cjs';
+export { A as createNovaAIP62Wallet, B as registerNovaWallet } from './aip62-D0JHC7he.cjs';
 import '@cedra-labs/ts-sdk';

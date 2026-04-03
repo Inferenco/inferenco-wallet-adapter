@@ -311,6 +311,11 @@ export interface NovaWalletLikeResult {
   publicKey: AnyPublicKey;
 }
 
+export interface NovaWalletCoreLike {
+  wallets: ReadonlyArray<{ name: string }>;
+  connect(walletName: string): Promise<void | string>;
+}
+
 export type NovaSignTransactionResult =
   | AccountAuthenticator
   | Uint8Array

@@ -16,18 +16,25 @@ import type { NovaTransactionPayload } from "./types";
 import {
   CALLBACK_REQUEST_ID_PARAM,
   CALLBACK_STATUS_PARAM,
-  DEFAULT_DEEPLINK_SCHEME,
   DEFAULT_MOBILE_RELAY_BASE_URL,
   DEFAULT_MOBILE_POLL_INTERVAL_MS,
   DEFAULT_MOBILE_REQUEST_TIMEOUT_MS,
   DEFAULT_MOBILE_WEBSOCKET_URL
 } from "./constants";
-import { clearCallbackMarker, fetchJsonWithTimeout, readCallbackMarker, storeCallbackSession, storeExternalSession } from "./bridge";
+import {
+  clearCallbackMarker,
+  clearPendingMobilePairing,
+  fetchJsonWithTimeout,
+  readCallbackMarker,
+  readPendingMobilePairing,
+  storeCallbackSession,
+  storeExternalSession,
+  storePendingMobilePairing
+} from "./bridge";
 import { decryptJson, createKeyPair, deriveSharedSecret, encryptJson } from "./mobileCrypto";
 import { watchRelaySocket } from "./mobileSocket";
 import { NovaAdapterError, NovaErrorCode } from "./errors";
 import type {
-  NovaCallbackMarker,
   NovaExternalSession,
   NovaMobilePairingCreateResponse,
   NovaMobilePairingStatus,
@@ -148,6 +155,84 @@ async function waitForPairingOutcome(
   throw new NovaAdapterError(NovaErrorCode.ConnectionTimeout, "Timed out waiting for Nova Wallet approval");
 }
 
+function sessionFromApprovedPairing(
+  pairing: NovaMobilePairingStatus,
+  relayBaseUrl: string,
+  privateKey: string
+): NovaExternalSession {
+  if (
+    pairing.status !== "approved" ||
+    !pairing.encryptedResult ||
+    !pairing.dappSessionToken ||
+    !pairing.walletPublicKey ||
+    !pairing.sessionId
+  ) {
+    throwForStatus(pairing.status, pairing.errorMessage);
+  }
+
+  const sharedSecret = deriveSharedSecret(privateKey, pairing.walletPublicKey);
+  const result = decryptJson<{
+    address: string;
+    publicKey: string;
+    network: string;
+    chainId: number;
+    walletName?: string;
+  }>(pairing.encryptedResult, sharedSecret);
+
+  return {
+    transport: "mobile-relay",
+    address: result.address,
+    publicKey: result.publicKey,
+    network: result.network,
+    chainId: result.chainId,
+    sessionId: pairing.sessionId,
+    relayBaseUrl,
+    dappSessionToken: pairing.dappSessionToken,
+    sharedSecret,
+    walletPublicKey: pairing.walletPublicKey,
+    walletName: result.walletName ?? pairing.walletName
+  };
+}
+
+export async function resumeMobileRelaySessionFromCallback(
+  options: NovaWalletOptions = {}
+): Promise<NovaExternalSession | null> {
+  assertBrowser();
+  const marker = readCallbackMarker();
+  const pendingPairing = readPendingMobilePairing();
+
+  if (!marker || !pendingPairing || marker.requestId !== pendingPairing.pairingId) {
+    return null;
+  }
+
+  const pairing = await fetchJsonWithTimeout<NovaMobilePairingStatus>(
+    `${buildRelayUrl(pendingPairing.relayBaseUrl, `/v1/pairings/${pendingPairing.pairingId}`)}?dappPairingToken=${encodeURIComponent(pendingPairing.dappPairingToken)}`,
+    mobileRequestTimeout(options)
+  );
+
+  if (pairing.status === "approved") {
+    try {
+      const session = sessionFromApprovedPairing(pairing, pendingPairing.relayBaseUrl, pendingPairing.privateKey);
+      storeExternalSession(session);
+      clearPendingMobilePairing();
+      clearCallbackMarker();
+      return session;
+    } catch (error) {
+      clearPendingMobilePairing();
+      clearCallbackMarker();
+      throw error;
+    }
+  }
+
+  if (isFinalStatus(pairing.status)) {
+    clearPendingMobilePairing();
+    clearCallbackMarker();
+    return null;
+  }
+
+  return null;
+}
+
 async function waitForRequestOutcome(
   requestId: string,
   session: NovaExternalSession,
@@ -231,6 +316,14 @@ export async function connectViaMobileRelay(options: NovaWalletOptions = {}): Pr
     }
   );
 
+  storePendingMobilePairing({
+    pairingId: response.pairingId,
+    dappPairingToken: response.dappPairingToken,
+    privateKey: keyPair.privateKey,
+    publicKey: keyPair.publicKey,
+    relayBaseUrl,
+    expiresAt: response.expiresAt
+  });
   launch(response.walletDeeplinkUrl);
   const pairing = await waitForPairingOutcome(
     response.pairingId,
@@ -239,34 +332,17 @@ export async function connectViaMobileRelay(options: NovaWalletOptions = {}): Pr
     getWebsocketUrl(options, response.websocketUrl)
   );
 
-  if (pairing.status !== "approved" || !pairing.encryptedResult || !pairing.dappSessionToken || !pairing.walletPublicKey || !pairing.sessionId) {
-    throwForStatus(pairing.status, pairing.errorMessage);
+  try {
+    const session = sessionFromApprovedPairing(pairing, relayBaseUrl, keyPair.privateKey);
+    storeExternalSession(session);
+    clearPendingMobilePairing();
+    return session;
+  } catch (error) {
+    if (isFinalStatus(pairing.status)) {
+      clearPendingMobilePairing();
+    }
+    throw error;
   }
-
-  const sharedSecret = deriveSharedSecret(keyPair.privateKey, pairing.walletPublicKey);
-  const result = decryptJson<{
-    address: string;
-    publicKey: string;
-    network: string;
-    chainId: number;
-    walletName?: string;
-  }>(pairing.encryptedResult, sharedSecret);
-
-  const session: NovaExternalSession = {
-    transport: "mobile-relay",
-    address: result.address,
-    publicKey: result.publicKey,
-    network: result.network,
-    chainId: result.chainId,
-    sessionId: pairing.sessionId,
-    relayBaseUrl,
-    dappSessionToken: pairing.dappSessionToken,
-    sharedSecret,
-    walletPublicKey: pairing.walletPublicKey,
-    walletName: result.walletName ?? pairing.walletName
-  };
-  storeExternalSession(session);
-  return session;
 }
 
 async function startRequest(

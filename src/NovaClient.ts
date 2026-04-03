@@ -13,6 +13,7 @@ import type {
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
+  clearPendingMobilePairing,
   clearExternalSession,
   isMobileBrowser,
   launchDesktopOrMobileConnect,
@@ -32,6 +33,7 @@ import { NovaAdapterError, NovaErrorCode, remapNovaError } from "./errors";
 import { buildDeeplinkUrl } from "./deeplink";
 import {
   connectViaMobileRelay,
+  resumeMobileRelaySessionFromCallback,
   signAndSubmitViaMobileRelay,
   signMessageViaMobileRelay,
   signTransactionViaMobileRelay
@@ -121,6 +123,11 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         return { account, network: this.networkInfo };
       }
 
+      const resumedMobileSession = await resumeMobileRelaySessionFromCallback(this.options);
+      if (resumedMobileSession) {
+        return this.connectResultFromExternalSession(resumedMobileSession);
+      }
+
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         return this.connectResultFromExternalSession(externalSession);
@@ -192,18 +199,20 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
   }
 
   async disconnect(): Promise<void> {
+    const provider = this.refreshProvider();
+    const externalSession = readExternalSession();
     try {
-      const provider = this.refreshProvider();
-      const externalSession = readExternalSession();
       await provider?.disconnect?.();
       if (externalSession) {
         await revokeExternalSession(externalSession, this.options);
       }
-      clearExternalSession();
-      this.accountInfo = null;
-      this.networkInfo = null;
     } catch (error) {
       remapNovaError(error);
+    } finally {
+      clearExternalSession();
+      clearPendingMobilePairing();
+      this.accountInfo = null;
+      this.networkInfo = null;
     }
   }
 

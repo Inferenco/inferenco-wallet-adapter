@@ -252,6 +252,12 @@ interface NovaWalletLikeResult {
     network: NetworkInfo | null;
     publicKey: AnyPublicKey;
 }
+interface NovaWalletCoreLike {
+    wallets: ReadonlyArray<{
+        name: string;
+    }>;
+    connect(walletName: string): Promise<void | string>;
+}
 type NovaSignTransactionResult = AccountAuthenticator | Uint8Array | {
     authenticator: AccountAuthenticator;
     rawTransaction?: Uint8Array;
@@ -260,4 +266,4 @@ type NovaSignTransactionResult = AccountAuthenticator | Uint8Array | {
 declare function createNovaAIP62Wallet(options?: NovaWalletOptions): CedraWallet;
 declare function registerNovaWallet(options?: NovaWalletOptions): void;
 
-export { registerNovaWallet as A, type NovaWalletOptions as N, type SignMessagePayload as S, type NovaProvider as a, type NovaCallbackMarker as b, type NovaExternalSession as c, type NovaProviderAccount as d, type NovaSignMessageResponse as e, type NovaTransactionPayload as f, type NovaSignTransactionResult as g, type NovaNetworkInfo as h, type NovaWalletAdapterLike as i, type NovaWalletName as j, NovaWalletReadyState as k, type NovaAccountKeys as l, type NormalizedConnectedAccount as m, type NovaBridgeConnectPoll as n, type NovaBridgeMessagePoll as o, type NovaBridgeSignTransactionPoll as p, type NovaBridgeStartResponse as q, type NovaBridgeTransactionPoll as r, type NovaMobilePairingCreateResponse as s, type NovaMobilePairingStatus as t, type NovaMobileRequestCreateResponse as u, type NovaMobileRequestStatus as v, type NovaProviderResponse as w, type NovaWalletLikeResult as x, type NovaWindow as y, createNovaAIP62Wallet as z };
+export { createNovaAIP62Wallet as A, registerNovaWallet as B, type NovaWalletOptions as N, type SignMessagePayload as S, type NovaProvider as a, type NovaCallbackMarker as b, type NovaExternalSession as c, type NovaWalletCoreLike as d, type NovaProviderAccount as e, type NovaSignMessageResponse as f, type NovaTransactionPayload as g, type NovaSignTransactionResult as h, type NovaNetworkInfo as i, type NovaWalletAdapterLike as j, type NovaWalletName as k, NovaWalletReadyState as l, type NovaAccountKeys as m, type NormalizedConnectedAccount as n, type NovaBridgeConnectPoll as o, type NovaBridgeMessagePoll as p, type NovaBridgeSignTransactionPoll as q, type NovaBridgeStartResponse as r, type NovaBridgeTransactionPoll as s, type NovaMobilePairingCreateResponse as t, type NovaMobilePairingStatus as u, type NovaMobileRequestCreateResponse as v, type NovaMobileRequestStatus as w, type NovaProviderResponse as x, type NovaWalletLikeResult as y, type NovaWindow as z };

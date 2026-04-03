@@ -22,6 +22,7 @@ import type {
   NovaBridgeStartResponse,
   NovaBridgeTransactionPoll,
   NovaExternalSession,
+  NovaWalletCoreLike,
   NovaWalletOptions
 } from "./types";
 import {
@@ -43,9 +44,22 @@ import {
   DEFAULT_DEEPLINK_BASE_URL,
   NOVA_CALLBACK_MARKER_STORAGE_KEY,
   NOVA_EXTERNAL_SESSION_STORAGE_KEY,
+  NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY,
+  NOVA_CONNECT_NAME,
   NOVA_PROTOCOL_KEY_STORAGE_KEY
 } from "./constants";
 import { normalizeProviderAccount } from "./conversion";
+
+type NovaPendingMobilePairing = {
+  pairingId: string;
+  dappPairingToken: string;
+  privateKey: string;
+  publicKey: string;
+  relayBaseUrl: string;
+  expiresAt: string;
+};
+
+const LEGACY_NOVA_DESK_LABEL = "Nova Desk";
 
 export class BridgeHttpError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -190,6 +204,63 @@ export function clearExternalSession(): void {
   if (!isBrowser()) return;
   window.localStorage.removeItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
   window.localStorage.removeItem(NOVA_PROTOCOL_KEY_STORAGE_KEY);
+}
+
+function parsePendingMobilePairing(
+  candidate: Partial<NovaPendingMobilePairing> | null | undefined
+): NovaPendingMobilePairing | null {
+  if (
+    !candidate ||
+    typeof candidate.pairingId !== "string" ||
+    typeof candidate.dappPairingToken !== "string" ||
+    typeof candidate.privateKey !== "string" ||
+    typeof candidate.publicKey !== "string" ||
+    typeof candidate.relayBaseUrl !== "string" ||
+    typeof candidate.expiresAt !== "string"
+  ) {
+    return null;
+  }
+
+  const expiresAt = Date.parse(candidate.expiresAt);
+  if (Number.isNaN(expiresAt) || expiresAt <= Date.now()) {
+    return null;
+  }
+
+  return {
+    pairingId: candidate.pairingId,
+    dappPairingToken: candidate.dappPairingToken,
+    privateKey: candidate.privateKey,
+    publicKey: candidate.publicKey,
+    relayBaseUrl: candidate.relayBaseUrl,
+    expiresAt: candidate.expiresAt
+  };
+}
+
+export function readPendingMobilePairing(): NovaPendingMobilePairing | null {
+  if (!isBrowser()) return null;
+  const raw = window.localStorage.getItem(NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY);
+  if (!raw) return null;
+
+  try {
+    const pairing = parsePendingMobilePairing(JSON.parse(raw) as Partial<NovaPendingMobilePairing>);
+    if (!pairing) {
+      clearPendingMobilePairing();
+    }
+    return pairing;
+  } catch {
+    clearPendingMobilePairing();
+    return null;
+  }
+}
+
+export function storePendingMobilePairing(pairing: NovaPendingMobilePairing): void {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY, JSON.stringify(pairing));
+}
+
+export function clearPendingMobilePairing(): void {
+  if (!isBrowser()) return;
+  window.localStorage.removeItem(NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY);
 }
 
 function sessionEndpointUrl(
@@ -357,6 +428,12 @@ export function clearCallbackMarker(): void {
   window.sessionStorage.removeItem(NOVA_CALLBACK_MARKER_STORAGE_KEY);
 }
 
+function hasPendingMobilePairingCallbackResume(): boolean {
+  const marker = readCallbackMarker();
+  const pendingPairing = readPendingMobilePairing();
+  return !!marker && !!pendingPairing && marker.requestId === pendingPairing.pairingId;
+}
+
 export async function waitForExternalSession(
   options: NovaWalletOptions = {}
 ): Promise<NovaExternalSession | null> {
@@ -480,6 +557,31 @@ export async function readValidatedExternalSession(
   }
 
   return validateExternalSession(session, options);
+}
+
+export async function tryResumeNovaWalletConnection(
+  walletCore: NovaWalletCoreLike,
+  options: NovaWalletOptions = {}
+): Promise<boolean> {
+  if (!isBrowser()) return false;
+
+  const candidateWalletName = [NOVA_CONNECT_NAME, LEGACY_NOVA_DESK_LABEL].find((walletName) =>
+    walletCore.wallets.some((wallet) => wallet.name === walletName)
+  );
+  if (!candidateWalletName) {
+    return false;
+  }
+
+  const hasPendingResume = hasPendingMobilePairingCallbackResume();
+  if (!hasPendingResume) {
+    const session = await readValidatedExternalSession(options);
+    if (!session) {
+      return false;
+    }
+  }
+
+  await walletCore.connect(candidateWalletName);
+  return true;
 }
 
 export async function fetchJsonWithTimeout<T>(

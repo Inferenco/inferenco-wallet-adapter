@@ -48,6 +48,8 @@ import "@inferenco/nova-wallet-adapter/auto-register";
 
 The public wallet name exposed by the adapter is `Nova Connect`.
 
+`NOVA_DESK_NAME` remains exported only as a deprecated compatibility alias. New dapps should use `NOVA_CONNECT_NAME`.
+
 ## Provider Detection
 
 Provider detection prefers:
@@ -99,11 +101,31 @@ In that mode the adapter:
 - opens `inferenco://connect?...` or `inferenco://approve?...`
 - waits for websocket or callback resume markers
 - fetches and decrypts the approved result from the relay
+- persists pending mobile connect state so browser reloads on return can still resume the approved session
 
 Default hosted relay:
 
 - `https://nova-service-160604102004.europe-west1.run.app`
 - websocket: `wss://nova-service-160604102004.europe-west1.run.app/v1/ws`
+
+## WalletCore Resume Helper
+
+If your dapp uses Cedra `WalletCore`, call the adapter's resume helper during provider bootstrap instead of reading Nova session storage or probing localhost yourself:
+
+```ts
+import {
+  NOVA_CONNECT_NAME,
+  tryResumeNovaWalletConnection,
+} from "@inferenco/nova-wallet-adapter";
+
+await tryResumeNovaWalletConnection(walletCore);
+```
+
+This helper:
+
+- resumes pending mobile callback state after a browser reload
+- reconnects through `Nova Connect` when a stored external session already exists
+- avoids app-specific `Nova Desk` bridge logic in the dapp
 
 ## Feature Surface
 
