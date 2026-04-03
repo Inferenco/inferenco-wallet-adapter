@@ -16,12 +16,22 @@ export interface NovaEncryptedEnvelope {
   ciphertext: string;
 }
 
+function fromBase64Url(value: string): string {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = base64.length % 4;
+  return padding === 0 ? base64 : `${base64}${"=".repeat(4 - padding)}`;
+}
+
 function toBytes(value: string): Uint8Array {
-  return Buffer.from(value, "base64url");
+  return Uint8Array.from(Buffer.from(fromBase64Url(value), "base64"));
 }
 
 function toBase64Url(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64url");
+  return Buffer.from(bytes)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
 export function createKeyPair(): NovaKeyPair {
