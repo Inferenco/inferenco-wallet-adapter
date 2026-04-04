@@ -8,12 +8,19 @@ import { SigningScheme } from "@cedra-labs/ts-sdk";
 
 // src/constants.ts
 import { Buffer } from "buffer";
+var NOVA_CONNECT_NAME = "Nova Connect";
 var NOVA_WALLET_NAME = "Nova Wallet";
-var NOVA_DESK_NAME = "Nova Desk";
+var NOVA_DESK_NAME = NOVA_CONNECT_NAME;
 var DEFAULT_WEBSITE_URL = "https://inferenco.com";
 var DEFAULT_DEEPLINK_BASE_URL = "inferenco://connect?callback=";
 var DEFAULT_DESKTOP_LOGIN_URL = "inferenco://login";
 var DEFAULT_DESKTOP_BRIDGE_URL = "http://127.0.0.1:21984";
+var DEFAULT_DEEPLINK_SCHEME = "inferenco";
+var DEFAULT_MOBILE_RELAY_BASE_URL = "https://nova-service-160604102004.europe-west1.run.app";
+var DEFAULT_MOBILE_WEBSOCKET_URL = "wss://nova-service-160604102004.europe-west1.run.app/v1/ws";
+var DEFAULT_MOBILE_POLL_INTERVAL_MS = 1e3;
+var DEFAULT_MOBILE_REQUEST_TIMEOUT_MS = 18e4;
+var DEFAULT_MOBILE_SOCKET_TIMEOUT_MS = 15e3;
 var DEFAULT_DETECT_ALIASES = true;
 var DEFAULT_REGISTER_FORCE = false;
 var DEFAULT_DESKTOP_REGISTRATION = true;
@@ -22,6 +29,8 @@ var DEFAULT_BRIDGE_POLL_INTERVAL_MS = 250;
 var DEFAULT_BRIDGE_POLL_TIMEOUT_MS = 12e4;
 var NOVA_PROTOCOL_KEY_STORAGE_KEY = "inferenco:nova-protocol-key";
 var NOVA_EXTERNAL_SESSION_STORAGE_KEY = "inferenco:nova-session";
+var NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY = "inferenco:nova-pending-mobile-pairing";
+var NOVA_CALLBACK_MARKER_STORAGE_KEY = "inferenco:nova-callback-marker";
 var CALLBACK_ADDRESS_PARAM = "address";
 var CALLBACK_PUBLIC_KEY_PARAM = "publicKey";
 var CALLBACK_NETWORK_PARAM = "network";
@@ -30,6 +39,8 @@ var CALLBACK_SESSION_ID_PARAM = "sessionId";
 var CALLBACK_BRIDGE_URL_PARAM = "bridgeUrl";
 var CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM = "protocolPublicKey";
 var CALLBACK_WALLET_NAME_PARAM = "walletName";
+var CALLBACK_REQUEST_ID_PARAM = "novaRequestId";
+var CALLBACK_STATUS_PARAM = "novaStatus";
 var svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#0a3d91"/><path d="M32 12 40 28 56 32 40 36 32 52 24 36 8 32 24 28Z" fill="#66d9ff"/></svg>`;
 var NOVA_WALLET_ICON = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 
@@ -58,6 +69,7 @@ var NovaErrorCode = /* @__PURE__ */ ((NovaErrorCode2) => {
   NovaErrorCode2["Unauthorized"] = "UNAUTHORIZED";
   NovaErrorCode2["Unsupported"] = "UNSUPPORTED";
   NovaErrorCode2["NotInstalled"] = "NOT_INSTALLED";
+  NovaErrorCode2["ConnectionTimeout"] = "CONNECTION_TIMEOUT";
   NovaErrorCode2["InvalidParams"] = "INVALID_PARAMS";
   NovaErrorCode2["InvalidNetwork"] = "INVALID_NETWORK";
   NovaErrorCode2["InternalError"] = "INTERNAL_ERROR";
@@ -91,6 +103,9 @@ function remapNovaError(error) {
   }
   if (status === "InvalidParams" || status === 400 || /invalid/i.test(message)) {
     throw new NovaAdapterError("INVALID_PARAMS" /* InvalidParams */, message, error);
+  }
+  if (status === "Timeout" || /timed out waiting for nova desk/i.test(message)) {
+    throw new NovaAdapterError("CONNECTION_TIMEOUT" /* ConnectionTimeout */, message, error);
   }
   if (/not installed|no provider|missing provider/i.test(message)) {
     throw new NovaAdapterError("NOT_INSTALLED" /* NotInstalled */, message, error);
@@ -186,6 +201,7 @@ function createFullMessage(input, address, chainId) {
 }
 
 // src/bridge.ts
+var LEGACY_NOVA_DESK_LABEL = "Nova Desk";
 var BridgeHttpError = class extends Error {
   constructor(status, message) {
     super(message);
@@ -225,7 +241,9 @@ function currentUrlWithoutCallbackKey() {
     CALLBACK_SESSION_ID_PARAM,
     CALLBACK_BRIDGE_URL_PARAM,
     CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
-    CALLBACK_WALLET_NAME_PARAM
+    CALLBACK_WALLET_NAME_PARAM,
+    CALLBACK_REQUEST_ID_PARAM,
+    CALLBACK_STATUS_PARAM
   ]) {
     url.searchParams.delete(key);
   }
@@ -242,25 +260,38 @@ function buildDesktopOrMobileConnectUrl(options = {}, callbackUrl = currentUrlWi
   });
   return `${DEFAULT_DESKTOP_LOGIN_URL}?${params.toString()}`;
 }
+function launchDesktopOrMobileConnect(options = {}, callbackUrl = currentUrlWithoutCallbackKey()) {
+  const url = buildDesktopOrMobileConnectUrl(options, callbackUrl);
+  if (!isBrowser()) return url;
+  window.location.href = url;
+  return url;
+}
+function parseExternalSession(candidate) {
+  if (!candidate || typeof candidate.address !== "string" || typeof candidate.publicKey !== "string" || typeof candidate.network !== "string" || typeof candidate.chainId !== "number" || typeof candidate.sessionId !== "string") {
+    return null;
+  }
+  return {
+    transport: candidate.transport === "mobile-relay" ? "mobile-relay" : "desktop-bridge",
+    address: candidate.address,
+    publicKey: candidate.publicKey,
+    network: candidate.network,
+    chainId: candidate.chainId,
+    sessionId: candidate.sessionId,
+    bridgeUrl: typeof candidate.bridgeUrl === "string" ? candidate.bridgeUrl : void 0,
+    relayBaseUrl: typeof candidate.relayBaseUrl === "string" ? candidate.relayBaseUrl : void 0,
+    protocolPublicKey: typeof candidate.protocolPublicKey === "string" ? candidate.protocolPublicKey : void 0,
+    dappSessionToken: typeof candidate.dappSessionToken === "string" ? candidate.dappSessionToken : void 0,
+    sharedSecret: typeof candidate.sharedSecret === "string" ? candidate.sharedSecret : void 0,
+    walletPublicKey: typeof candidate.walletPublicKey === "string" ? candidate.walletPublicKey : void 0,
+    walletName: typeof candidate.walletName === "string" ? candidate.walletName : void 0
+  };
+}
 function readExternalSession() {
   if (!isBrowser()) return null;
   const raw = window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
-    if (typeof parsed.address !== "string" || typeof parsed.publicKey !== "string" || typeof parsed.network !== "string" || typeof parsed.chainId !== "number" || typeof parsed.sessionId !== "string") {
-      return null;
-    }
-    return {
-      address: parsed.address,
-      publicKey: parsed.publicKey,
-      network: parsed.network,
-      chainId: parsed.chainId,
-      sessionId: parsed.sessionId,
-      bridgeUrl: typeof parsed.bridgeUrl === "string" ? parsed.bridgeUrl : void 0,
-      protocolPublicKey: typeof parsed.protocolPublicKey === "string" ? parsed.protocolPublicKey : void 0,
-      walletName: typeof parsed.walletName === "string" ? parsed.walletName : void 0
-    };
+    return parseExternalSession(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -279,6 +310,73 @@ function clearExternalSession() {
   if (!isBrowser()) return;
   window.localStorage.removeItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
   window.localStorage.removeItem(NOVA_PROTOCOL_KEY_STORAGE_KEY);
+}
+function parsePendingMobilePairing(candidate) {
+  if (!candidate || typeof candidate.pairingId !== "string" || typeof candidate.dappPairingToken !== "string" || typeof candidate.privateKey !== "string" || typeof candidate.publicKey !== "string" || typeof candidate.relayBaseUrl !== "string" || typeof candidate.expiresAt !== "string") {
+    return null;
+  }
+  const expiresAt = Date.parse(candidate.expiresAt);
+  if (Number.isNaN(expiresAt) || expiresAt <= Date.now()) {
+    return null;
+  }
+  return {
+    pairingId: candidate.pairingId,
+    dappPairingToken: candidate.dappPairingToken,
+    privateKey: candidate.privateKey,
+    publicKey: candidate.publicKey,
+    relayBaseUrl: candidate.relayBaseUrl,
+    expiresAt: candidate.expiresAt
+  };
+}
+function readPendingMobilePairing() {
+  if (!isBrowser()) return null;
+  const raw = window.localStorage.getItem(NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const pairing = parsePendingMobilePairing(JSON.parse(raw));
+    if (!pairing) {
+      clearPendingMobilePairing();
+    }
+    return pairing;
+  } catch {
+    clearPendingMobilePairing();
+    return null;
+  }
+}
+function storePendingMobilePairing(pairing) {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY, JSON.stringify(pairing));
+}
+function clearPendingMobilePairing() {
+  if (!isBrowser()) return;
+  window.localStorage.removeItem(NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY);
+}
+function sessionEndpointUrl(session, options = {}) {
+  return new URL(
+    `/session/${encodeURIComponent(session.sessionId)}`,
+    sessionBridgeBaseUrl(session, options)
+  ).toString();
+}
+function connectionEndpointUrl(session, options = {}) {
+  const url = new URL("/connection", sessionBridgeBaseUrl(session, options));
+  url.searchParams.set("origin", window.location.origin);
+  url.searchParams.set("address", session.address);
+  url.searchParams.set("network", session.network);
+  return url.toString();
+}
+function sessionBridgeBaseUrl(session, options = {}) {
+  const configuredUrl = session.bridgeUrl ?? bridgeBaseUrl(options);
+  try {
+    const url = new URL(configuredUrl);
+    if (url.pathname.startsWith("/session/")) {
+      url.pathname = "/";
+      url.search = "";
+      url.hash = "";
+    }
+    return url.toString();
+  } catch {
+    return bridgeBaseUrl(options);
+  }
 }
 function sessionToAccountInfo(session) {
   return normalizeProviderAccount({
@@ -302,6 +400,7 @@ function sessionFromBridgePoll(payload) {
     throw new Error("Nova Desk bridge returned an incomplete session payload");
   }
   return {
+    transport: "desktop-bridge",
     address,
     publicKey,
     network,
@@ -322,10 +421,13 @@ function storeCallbackSession() {
   const bridgeUrl = url.searchParams.get(CALLBACK_BRIDGE_URL_PARAM);
   const protocolPublicKey = url.searchParams.get(CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM);
   const walletName = url.searchParams.get(CALLBACK_WALLET_NAME_PARAM);
+  const requestId = url.searchParams.get(CALLBACK_REQUEST_ID_PARAM);
+  const status = url.searchParams.get(CALLBACK_STATUS_PARAM);
   if (address && publicKey && network && chainId && sessionId) {
     const parsedChainId = Number.parseInt(chainId, 10);
     if (!Number.isNaN(parsedChainId)) {
       storeExternalSession({
+        transport: "desktop-bridge",
         address,
         publicKey,
         network,
@@ -339,6 +441,12 @@ function storeCallbackSession() {
   } else if (publicKey) {
     window.localStorage.setItem(NOVA_PROTOCOL_KEY_STORAGE_KEY, publicKey);
   }
+  if (requestId && status) {
+    window.sessionStorage.setItem(
+      NOVA_CALLBACK_MARKER_STORAGE_KEY,
+      JSON.stringify({ requestId, status })
+    );
+  }
   for (const key of [
     CALLBACK_ADDRESS_PARAM,
     CALLBACK_PUBLIC_KEY_PARAM,
@@ -347,11 +455,152 @@ function storeCallbackSession() {
     CALLBACK_SESSION_ID_PARAM,
     CALLBACK_BRIDGE_URL_PARAM,
     CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
-    CALLBACK_WALLET_NAME_PARAM
+    CALLBACK_WALLET_NAME_PARAM,
+    CALLBACK_REQUEST_ID_PARAM,
+    CALLBACK_STATUS_PARAM
   ]) {
     url.searchParams.delete(key);
   }
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+function readCallbackMarker() {
+  if (!isBrowser()) return null;
+  const raw = window.sessionStorage.getItem(NOVA_CALLBACK_MARKER_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.requestId === "string" && typeof parsed.status === "string") {
+      return {
+        requestId: parsed.requestId,
+        status: parsed.status
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+function clearCallbackMarker() {
+  if (!isBrowser()) return;
+  window.sessionStorage.removeItem(NOVA_CALLBACK_MARKER_STORAGE_KEY);
+}
+function hasPendingMobilePairingCallbackResume() {
+  const marker = readCallbackMarker();
+  const pendingPairing = readPendingMobilePairing();
+  return !!marker && !!pendingPairing && marker.requestId === pendingPairing.pairingId;
+}
+async function waitForExternalSession(options = {}) {
+  if (!isBrowser()) return null;
+  const deadline = Date.now() + bridgePollTimeoutMs(options);
+  while (Date.now() < deadline) {
+    storeCallbackSession();
+    const session = readExternalSession();
+    if (session) {
+      return session;
+    }
+    await new Promise(
+      (resolve) => window.setTimeout(resolve, bridgePollIntervalMs(options))
+    );
+  }
+  return null;
+}
+async function validateExternalSession(session, options = {}) {
+  if (!isBrowser()) return null;
+  if (session.transport === "mobile-relay") {
+    return session;
+  }
+  try {
+    const sessionUrl = sessionEndpointUrl(session, options);
+    const payload = await fetchJsonWithTimeout(
+      sessionUrl,
+      bridgeConnectTimeoutMs(options)
+    );
+    const validatedSession = parseExternalSession(payload) ?? session;
+    const refreshedSession = {
+      ...session,
+      ...validatedSession,
+      bridgeUrl: validatedSession.bridgeUrl ?? session.bridgeUrl,
+      protocolPublicKey: validatedSession.protocolPublicKey ?? session.protocolPublicKey,
+      walletName: validatedSession.walletName ?? session.walletName
+    };
+    storeExternalSession(refreshedSession);
+    return refreshedSession;
+  } catch (error) {
+    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+      clearExternalSession();
+    }
+    return null;
+  }
+}
+async function revokeExternalSession(session, options = {}) {
+  if (!isBrowser()) return;
+  if (session.transport === "mobile-relay") {
+    const relayBaseUrl = session.relayBaseUrl ?? options.relayBaseUrl;
+    if (!relayBaseUrl || !session.dappSessionToken) return;
+    await fetchJsonWithTimeout(
+      new URL(`/v1/sessions/${encodeURIComponent(session.sessionId)}`, relayBaseUrl).toString(),
+      bridgeConnectTimeoutMs(options),
+      {
+        method: "DELETE",
+        headers: {
+          "x-nova-session-token": session.dappSessionToken
+        }
+      }
+    );
+    return;
+  }
+  try {
+    await fetchJsonWithTimeout(
+      connectionEndpointUrl(session, options),
+      bridgeConnectTimeoutMs(options),
+      { method: "DELETE" }
+    );
+  } catch (error) {
+    if (error instanceof BridgeHttpError && (error.status === 400 || error.status === 404)) {
+      try {
+        await fetchJsonWithTimeout(
+          sessionEndpointUrl(session, options),
+          bridgeConnectTimeoutMs(options),
+          { method: "DELETE" }
+        );
+        return;
+      } catch (fallbackError) {
+        if (fallbackError instanceof BridgeHttpError && (fallbackError.status === 403 || fallbackError.status === 404)) {
+          return;
+        }
+        throw fallbackError;
+      }
+    }
+    if (error instanceof BridgeHttpError && error.status === 403) {
+      return;
+    }
+    throw error;
+  }
+}
+async function readValidatedExternalSession(options = {}) {
+  const session = readExternalSession();
+  if (!session) {
+    return null;
+  }
+  return validateExternalSession(session, options);
+}
+async function tryResumeNovaWalletConnection(walletCore, options = {}) {
+  if (!isBrowser()) return false;
+  const candidateWalletName = [NOVA_CONNECT_NAME, LEGACY_NOVA_DESK_LABEL].find(
+    (walletName) => walletCore.wallets.some((wallet) => wallet.name === walletName)
+  );
+  if (!candidateWalletName) {
+    return false;
+  }
+  const hasPendingResume = hasPendingMobilePairingCallbackResume();
+  if (!hasPendingResume) {
+    const session = await readValidatedExternalSession(options);
+    if (!session) {
+      return false;
+    }
+  }
+  await walletCore.connect(candidateWalletName);
+  return true;
 }
 async function fetchJsonWithTimeout(url, timeoutMs, init) {
   const controller = new AbortController();
@@ -565,6 +814,420 @@ function buildDeeplinkUrl(options = {}, callbackUrl = buildCallbackUrl()) {
 // src/NovaClient.ts
 import EventEmitter from "eventemitter3";
 
+// src/mobileRelay.ts
+import {
+  AccountAuthenticator as AccountAuthenticator2,
+  Deserializer as Deserializer2,
+  RawTransaction as RawTransaction2,
+  SimpleTransaction as SimpleTransaction2
+} from "@cedra-labs/ts-sdk";
+
+// src/mobileCrypto.ts
+import { randomBytes } from "@noble/hashes/utils";
+import { x25519 } from "@noble/curves/ed25519.js";
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
+import { Buffer as Buffer2 } from "buffer";
+function fromBase64Url(value) {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = base64.length % 4;
+  return padding === 0 ? base64 : `${base64}${"=".repeat(4 - padding)}`;
+}
+function toBytes(value) {
+  return Uint8Array.from(Buffer2.from(fromBase64Url(value), "base64"));
+}
+function toBase64Url(bytes) {
+  return Buffer2.from(bytes).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+function createKeyPair() {
+  const privateKey = randomBytes(32);
+  const publicKey = x25519.getPublicKey(privateKey);
+  return {
+    privateKey: toBase64Url(privateKey),
+    publicKey: toBase64Url(publicKey)
+  };
+}
+function deriveSharedSecret(privateKey, publicKey) {
+  const shared = x25519.getSharedSecret(toBytes(privateKey), toBytes(publicKey));
+  const key = hkdf(sha256, shared, void 0, "nova-connect-relay", 32);
+  return toBase64Url(key);
+}
+function encryptJson(value, sharedSecret) {
+  const key = toBytes(sharedSecret);
+  const nonce = randomBytes(24);
+  const cipher = xchacha20poly1305(key, nonce);
+  const plaintext = new TextEncoder().encode(JSON.stringify(value));
+  const ciphertext = cipher.encrypt(plaintext);
+  return JSON.stringify({
+    v: 1,
+    nonce: toBase64Url(nonce),
+    ciphertext: toBase64Url(ciphertext)
+  });
+}
+function decryptJson(value, sharedSecret) {
+  const envelope = JSON.parse(value);
+  const cipher = xchacha20poly1305(toBytes(sharedSecret), toBytes(envelope.nonce));
+  const plaintext = cipher.decrypt(toBytes(envelope.ciphertext));
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+// src/mobileSocket.ts
+function watchRelaySocket({
+  websocketUrl,
+  role,
+  token,
+  target,
+  options,
+  onEvent
+}) {
+  if (typeof WebSocket === "undefined") {
+    return { close() {
+    } };
+  }
+  const socket = new WebSocket(websocketUrl);
+  const timeoutMs = options?.mobileSocketTimeoutMs ?? DEFAULT_MOBILE_SOCKET_TIMEOUT_MS;
+  const timeoutId = window.setTimeout(() => {
+    if (socket.readyState === WebSocket.CONNECTING) {
+      socket.close();
+    }
+  }, timeoutMs);
+  socket.addEventListener("open", () => {
+    window.clearTimeout(timeoutId);
+    socket.send(
+      JSON.stringify({
+        type: "hello",
+        role,
+        token,
+        target
+      })
+    );
+  });
+  socket.addEventListener("message", (event) => {
+    try {
+      const payload = JSON.parse(String(event.data));
+      onEvent?.(payload);
+    } catch {
+    }
+  });
+  return {
+    close() {
+      window.clearTimeout(timeoutId);
+      socket.close();
+    }
+  };
+}
+
+// src/mobileRelay.ts
+function assertBrowser() {
+  if (typeof window === "undefined") {
+    throw new NovaAdapterError("UNSUPPORTED" /* Unsupported */, "Nova Connect mobile relay requires a browser");
+  }
+}
+function getRelayBaseUrl(options) {
+  return options.relayBaseUrl ?? DEFAULT_MOBILE_RELAY_BASE_URL;
+}
+function getWebsocketUrl(options, fallback) {
+  if (options.websocketBaseUrl) return options.websocketBaseUrl;
+  if (fallback) return fallback;
+  const relayBaseUrl = options.relayBaseUrl ?? DEFAULT_MOBILE_RELAY_BASE_URL;
+  if (!relayBaseUrl) return DEFAULT_MOBILE_WEBSOCKET_URL;
+  const url = new URL(relayBaseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/v1/ws";
+  return url.toString();
+}
+function callbackUrlWithoutMarkers() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete(CALLBACK_REQUEST_ID_PARAM);
+  url.searchParams.delete(CALLBACK_STATUS_PARAM);
+  return url.toString();
+}
+function appName() {
+  return typeof document !== "undefined" && document.title ? document.title : "Nova Connect";
+}
+function mobilePollInterval(options) {
+  return options.mobilePollIntervalMs ?? DEFAULT_MOBILE_POLL_INTERVAL_MS;
+}
+function mobileRequestTimeout(options) {
+  return options.mobileRequestTimeoutMs ?? DEFAULT_MOBILE_REQUEST_TIMEOUT_MS;
+}
+function buildRelayUrl(baseUrl, path) {
+  return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+}
+function launch(url) {
+  window.location.href = url;
+}
+function isFinalStatus(status) {
+  return status === "approved" || status === "rejected" || status === "expired" || status === "cancelled" || status === "revoked";
+}
+function throwForStatus(status, errorMessage) {
+  if (status === "rejected") {
+    throw new NovaAdapterError("USER_REJECTED" /* UserRejected */, errorMessage ?? "User rejected the request");
+  }
+  if (status === "expired" || status === "cancelled" || status === "revoked") {
+    throw new NovaAdapterError("CONNECTION_TIMEOUT" /* ConnectionTimeout */, errorMessage ?? "Nova Connect request expired");
+  }
+  throw new NovaAdapterError("INTERNAL_ERROR" /* InternalError */, errorMessage ?? "Nova Connect request failed");
+}
+async function waitForPairingOutcome(pairingId, dappPairingToken, options, websocketUrl) {
+  const relayBaseUrl = getRelayBaseUrl(options);
+  const deadline = Date.now() + mobileRequestTimeout(options);
+  let socketSignal = false;
+  const socket = websocketUrl ? watchRelaySocket({
+    websocketUrl,
+    role: "dapp",
+    token: dappPairingToken,
+    target: { kind: "pairing", id: pairingId },
+    options,
+    onEvent(event) {
+      if (event.type === "pairing.approved" || event.type === "pairing.rejected") {
+        socketSignal = true;
+      }
+    }
+  }) : null;
+  try {
+    while (Date.now() < deadline) {
+      storeCallbackSession();
+      const marker = readCallbackMarker();
+      if (socketSignal || marker?.requestId === pairingId || !websocketUrl) {
+        const status = await fetchJsonWithTimeout(
+          `${buildRelayUrl(relayBaseUrl, `/v1/pairings/${pairingId}`)}?dappPairingToken=${encodeURIComponent(dappPairingToken)}`,
+          mobileRequestTimeout(options)
+        );
+        if (isFinalStatus(status.status)) {
+          clearCallbackMarker();
+          return status;
+        }
+        socketSignal = false;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, mobilePollInterval(options)));
+    }
+  } finally {
+    socket?.close();
+  }
+  throw new NovaAdapterError("CONNECTION_TIMEOUT" /* ConnectionTimeout */, "Timed out waiting for Nova Wallet approval");
+}
+function sessionFromApprovedPairing(pairing, relayBaseUrl, privateKey) {
+  if (pairing.status !== "approved" || !pairing.encryptedResult || !pairing.dappSessionToken || !pairing.walletPublicKey || !pairing.sessionId) {
+    throwForStatus(pairing.status, pairing.errorMessage);
+  }
+  const sharedSecret = deriveSharedSecret(privateKey, pairing.walletPublicKey);
+  const result = decryptJson(pairing.encryptedResult, sharedSecret);
+  return {
+    transport: "mobile-relay",
+    address: result.address,
+    publicKey: result.publicKey,
+    network: result.network,
+    chainId: result.chainId,
+    sessionId: pairing.sessionId,
+    relayBaseUrl,
+    dappSessionToken: pairing.dappSessionToken,
+    sharedSecret,
+    walletPublicKey: pairing.walletPublicKey,
+    walletName: result.walletName ?? pairing.walletName
+  };
+}
+async function resumeMobileRelaySessionFromCallback(options = {}) {
+  assertBrowser();
+  const marker = readCallbackMarker();
+  const pendingPairing = readPendingMobilePairing();
+  if (!marker || !pendingPairing || marker.requestId !== pendingPairing.pairingId) {
+    return null;
+  }
+  const pairing = await fetchJsonWithTimeout(
+    `${buildRelayUrl(pendingPairing.relayBaseUrl, `/v1/pairings/${pendingPairing.pairingId}`)}?dappPairingToken=${encodeURIComponent(pendingPairing.dappPairingToken)}`,
+    mobileRequestTimeout(options)
+  );
+  if (pairing.status === "approved") {
+    try {
+      const session = sessionFromApprovedPairing(pairing, pendingPairing.relayBaseUrl, pendingPairing.privateKey);
+      storeExternalSession(session);
+      clearPendingMobilePairing();
+      clearCallbackMarker();
+      return session;
+    } catch (error) {
+      clearPendingMobilePairing();
+      clearCallbackMarker();
+      throw error;
+    }
+  }
+  if (isFinalStatus(pairing.status)) {
+    clearPendingMobilePairing();
+    clearCallbackMarker();
+    return null;
+  }
+  return null;
+}
+async function waitForRequestOutcome(requestId, session, options, websocketUrl) {
+  const relayBaseUrl = getRelayBaseUrl(options);
+  const deadline = Date.now() + mobileRequestTimeout(options);
+  let socketSignal = false;
+  const socket = websocketUrl && session.dappSessionToken ? watchRelaySocket({
+    websocketUrl,
+    role: "dapp",
+    token: session.dappSessionToken,
+    target: { kind: "session", id: session.sessionId },
+    options,
+    onEvent(event) {
+      if ((event.type === "request.approved" || event.type === "request.rejected") && event.requestId === requestId) {
+        socketSignal = true;
+      }
+      if (event.type === "session.revoked" || event.type === "session.expired") {
+        socketSignal = true;
+      }
+    }
+  }) : null;
+  try {
+    while (Date.now() < deadline) {
+      storeCallbackSession();
+      const marker = readCallbackMarker();
+      if (socketSignal || marker?.requestId === requestId || !websocketUrl) {
+        const status = await fetchJsonWithTimeout(
+          buildRelayUrl(relayBaseUrl, `/v1/requests/${requestId}`),
+          mobileRequestTimeout(options),
+          {
+            headers: {
+              "x-nova-session-token": session.dappSessionToken ?? ""
+            }
+          }
+        );
+        if (isFinalStatus(status.status)) {
+          clearCallbackMarker();
+          return status;
+        }
+        socketSignal = false;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, mobilePollInterval(options)));
+    }
+  } finally {
+    socket?.close();
+  }
+  throw new NovaAdapterError("CONNECTION_TIMEOUT" /* ConnectionTimeout */, "Timed out waiting for Nova Wallet approval");
+}
+async function connectViaMobileRelay(options = {}) {
+  assertBrowser();
+  const relayBaseUrl = getRelayBaseUrl(options);
+  const keyPair = createKeyPair();
+  const response = await fetchJsonWithTimeout(
+    buildRelayUrl(relayBaseUrl, "/v1/pairings"),
+    mobileRequestTimeout(options),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        origin: window.location.origin,
+        appName: appName(),
+        callbackUrl: callbackUrlWithoutMarkers(),
+        dappPublicKey: keyPair.publicKey
+      })
+    }
+  );
+  storePendingMobilePairing({
+    pairingId: response.pairingId,
+    dappPairingToken: response.dappPairingToken,
+    privateKey: keyPair.privateKey,
+    publicKey: keyPair.publicKey,
+    relayBaseUrl,
+    expiresAt: response.expiresAt
+  });
+  launch(response.walletDeeplinkUrl);
+  const pairing = await waitForPairingOutcome(
+    response.pairingId,
+    response.dappPairingToken,
+    options,
+    getWebsocketUrl(options, response.websocketUrl)
+  );
+  try {
+    const session = sessionFromApprovedPairing(pairing, relayBaseUrl, keyPair.privateKey);
+    storeExternalSession(session);
+    clearPendingMobilePairing();
+    return session;
+  } catch (error) {
+    if (isFinalStatus(pairing.status)) {
+      clearPendingMobilePairing();
+    }
+    throw error;
+  }
+}
+async function startRequest(method, payload, session, options) {
+  if (!session.dappSessionToken || !session.sharedSecret) {
+    throw new NovaAdapterError("UNAUTHORIZED" /* Unauthorized */, "Missing Nova Connect mobile relay session state");
+  }
+  const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
+  const response = await fetchJsonWithTimeout(
+    buildRelayUrl(relayBaseUrl, "/v1/requests"),
+    mobileRequestTimeout(options),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        dappSessionToken: session.dappSessionToken,
+        method,
+        callbackUrl: callbackUrlWithoutMarkers(),
+        encryptedRequest: encryptJson(payload, session.sharedSecret),
+        requestMetadata: {
+          origin: window.location.origin,
+          appName: appName()
+        }
+      })
+    }
+  );
+  launch(response.walletDeeplinkUrl);
+  return waitForRequestOutcome(
+    response.requestId,
+    session,
+    options,
+    getWebsocketUrl(options)
+  );
+}
+async function signMessageViaMobileRelay(input, session, options = {}) {
+  const status = await startRequest("signMessage", input, session, options);
+  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
+    throwForStatus(status.status, status.errorMessage);
+  }
+  return decryptJson(status.encryptedResult, session.sharedSecret);
+}
+async function signTransactionViaMobileRelay(input, session, options = {}) {
+  const status = await startRequest("signTransaction", input, session, options);
+  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
+    throwForStatus(status.status, status.errorMessage);
+  }
+  const result = decryptJson(status.encryptedResult, session.sharedSecret);
+  return {
+    authenticator: AccountAuthenticator2.deserialize(Deserializer2.fromHex(result.authenticatorHex)),
+    rawTransaction: new SimpleTransaction2(
+      RawTransaction2.deserialize(Deserializer2.fromHex(result.rawTransactionBcsHex))
+    )
+  };
+}
+async function signAndSubmitViaMobileRelay(input, session, options = {}) {
+  const status = await startRequest("signAndSubmitTransaction", input, session, options);
+  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
+    throwForStatus(status.status, status.errorMessage);
+  }
+  return decryptJson(status.encryptedResult, session.sharedSecret);
+}
+async function revokeMobileRelaySession(session, options = {}) {
+  const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
+  if (!session.dappSessionToken) return;
+  await fetchJsonWithTimeout(
+    buildRelayUrl(relayBaseUrl, `/v1/sessions/${session.sessionId}`),
+    mobileRequestTimeout(options),
+    {
+      method: "DELETE",
+      headers: {
+        "x-nova-session-token": session.dappSessionToken
+      }
+    }
+  );
+}
+
 // src/provider.ts
 function isBrowser2() {
   return typeof window !== "undefined";
@@ -619,6 +1282,16 @@ var NovaClient = class extends EventEmitter {
   get cachedNetwork() {
     return this.networkInfo;
   }
+  connectResultFromExternalSession(externalSession) {
+    const account = sessionToAccountInfo(externalSession);
+    const network = normalizeNetwork({
+      name: externalSession.network,
+      chainId: externalSession.chainId
+    });
+    this.accountInfo = account;
+    this.networkInfo = network;
+    return { account, network };
+  }
   async connect() {
     try {
       const provider = this.refreshProvider();
@@ -630,19 +1303,22 @@ var NovaClient = class extends EventEmitter {
         }
         return { account, network: this.networkInfo };
       }
-      const externalSession = readExternalSession();
+      const resumedMobileSession = await resumeMobileRelaySessionFromCallback(this.options);
+      if (resumedMobileSession) {
+        return this.connectResultFromExternalSession(resumedMobileSession);
+      }
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
-        this.accountInfo = sessionToAccountInfo(externalSession);
-        this.networkInfo = normalizeNetwork({
-          name: externalSession.network,
-          chainId: externalSession.chainId
-        });
-        return { account: this.accountInfo, network: this.networkInfo };
+        return this.connectResultFromExternalSession(externalSession);
+      }
+      if (typeof window !== "undefined" && isMobileBrowser()) {
+        const mobileSession = await connectViaMobileRelay(this.options);
+        return this.connectResultFromExternalSession(mobileSession);
       }
       const bridgedAccount = await tryLocalBridgeConnect(this.options);
       if (bridgedAccount) {
         this.accountInfo = bridgedAccount;
-        const bridgedSession = readExternalSession();
+        const bridgedSession = await readValidatedExternalSession(this.options);
         this.networkInfo = bridgedSession ? normalizeNetwork({
           name: bridgedSession.network,
           chainId: bridgedSession.chainId
@@ -650,7 +1326,15 @@ var NovaClient = class extends EventEmitter {
         return { account: bridgedAccount, network: this.networkInfo };
       }
       if (typeof window !== "undefined") {
-        window.location.href = buildDesktopOrMobileConnectUrl(this.options);
+        launchDesktopOrMobileConnect(this.options);
+        const handoffSession = await waitForExternalSession(this.options);
+        if (handoffSession) {
+          return this.connectResultFromExternalSession(handoffSession);
+        }
+        throw new NovaAdapterError(
+          "CONNECTION_TIMEOUT" /* ConnectionTimeout */,
+          "Timed out waiting for Nova Desk to complete the external connection handoff."
+        );
       }
       throw new NovaAdapterError(
         "NOT_INSTALLED" /* NotInstalled */,
@@ -669,7 +1353,7 @@ var NovaClient = class extends EventEmitter {
         this.accountInfo = account;
         return account;
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         const account = sessionToAccountInfo(externalSession);
         this.accountInfo = account;
@@ -681,14 +1365,20 @@ var NovaClient = class extends EventEmitter {
     }
   }
   async disconnect() {
+    const provider = this.refreshProvider();
+    const externalSession = readExternalSession();
     try {
-      const provider = this.refreshProvider();
       await provider?.disconnect?.();
-      clearExternalSession();
-      this.accountInfo = null;
-      this.networkInfo = null;
+      if (externalSession) {
+        await revokeExternalSession(externalSession, this.options);
+      }
     } catch (error) {
       remapNovaError(error);
+    } finally {
+      clearExternalSession();
+      clearPendingMobilePairing();
+      this.accountInfo = null;
+      this.networkInfo = null;
     }
   }
   async getNetwork() {
@@ -700,7 +1390,7 @@ var NovaClient = class extends EventEmitter {
         this.networkInfo = network;
         return network;
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         const network = normalizeNetwork({
           name: externalSession.network,
@@ -721,9 +1411,9 @@ var NovaClient = class extends EventEmitter {
         const result = unwrap(await provider.signMessage(input));
         return normalizeSignMessageOutput(result);
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
-        return tryLocalBridgeSignMessage(input, externalSession, this.options);
+        return externalSession.transport === "mobile-relay" ? signMessageViaMobileRelay(input, externalSession, this.options) : tryLocalBridgeSignMessage(input, externalSession, this.options);
       }
       throw new NovaAdapterError("UNSUPPORTED" /* Unsupported */, "Nova provider signMessage() unavailable");
     } catch (error) {
@@ -747,11 +1437,26 @@ var NovaClient = class extends EventEmitter {
     try {
       const provider = this.refreshProvider();
       if (provider?.signTransaction) {
-        return unwrap(await provider.signTransaction(transaction, options));
+        return unwrap(
+          await provider.signTransaction(transaction, options)
+        );
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
-        if (!transaction || typeof transaction !== "object" || !("payload" in transaction)) {
+        if (externalSession.transport === "mobile-relay") {
+          if (!transaction || typeof transaction !== "object" || !("payload" in transaction) || "rawTransaction" in transaction || "data" in transaction) {
+            throw new NovaAdapterError(
+              "UNSUPPORTED" /* Unsupported */,
+              "Nova Connect mobile signTransaction requires a wallet-standard v1.1 payload"
+            );
+          }
+          return signTransactionViaMobileRelay(
+            transaction,
+            externalSession,
+            this.options
+          );
+        }
+        if (!transaction || typeof transaction !== "object" || !("payload" in transaction) || "rawTransaction" in transaction || "data" in transaction) {
           throw new NovaAdapterError(
             "UNSUPPORTED" /* Unsupported */,
             "Nova Desk browser signTransaction requires a wallet-standard v1.1 payload"
@@ -772,37 +1477,29 @@ var NovaClient = class extends EventEmitter {
     try {
       const provider = this.refreshProvider();
       if (provider?.signAndSubmitTransaction) {
-        return unwrap(await provider.signAndSubmitTransaction(transaction, options));
+        return unwrap(
+          await provider.signAndSubmitTransaction(
+            transaction,
+            options
+          )
+        );
       }
-      const externalSession = readExternalSession();
+      const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
-        return tryLocalBridgeSignAndSubmit(
+        return externalSession.transport === "mobile-relay" ? signAndSubmitViaMobileRelay(
+          transaction,
+          externalSession,
+          this.options
+        ) : tryLocalBridgeSignAndSubmit(
           transaction,
           externalSession,
           this.options
         );
       }
-      const normalized = normalizeTransactionPayload(transaction);
-      if (!normalized.rawTransaction) {
-        throw new NovaAdapterError(
-          "UNSUPPORTED" /* Unsupported */,
-          "Nova provider cannot fall back submit without a raw transaction"
-        );
-      }
-      const signed = await this.signTransaction(normalized.rawTransaction, options);
-      if (!signed || typeof signed !== "object" || !("authenticator" in signed)) {
-        throw new NovaAdapterError(
-          "UNSUPPORTED" /* Unsupported */,
-          "Nova provider signTransaction() fallback did not return an authenticator"
-        );
-      }
-      const submitted = await submitSignedTransaction({
-        network: await this.getNetwork().catch(() => null),
-        fullnodeUrl: this.options.fullnodeUrl,
-        transaction: normalized.rawTransaction,
-        authenticator: signed.authenticator
-      });
-      return { hash: submitted.hash };
+      throw new NovaAdapterError(
+        "UNSUPPORTED" /* Unsupported */,
+        "Nova provider signAndSubmitTransaction() unavailable"
+      );
     } catch (error) {
       remapNovaError(error);
     }
@@ -816,14 +1513,6 @@ var NovaClient = class extends EventEmitter {
       }
       remapNovaError(error);
     }
-  }
-  async submitTransaction(input) {
-    return submitSignedTransaction({
-      network: await this.getNetwork().catch(() => null),
-      fullnodeUrl: this.options.fullnodeUrl,
-      transaction: input.transaction,
-      authenticator: input.authenticator
-    });
   }
   async subscribe() {
     const provider = this.refreshProvider();
@@ -960,7 +1649,7 @@ function createNovaAIP62Wallet(options = {}) {
   };
   return {
     version: "1.0.0",
-    name: isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME,
+    name: NOVA_CONNECT_NAME,
     icon: NOVA_WALLET_ICON,
     url: options.websiteUrl ?? DEFAULT_WEBSITE_URL,
     chains: CEDRA_CHAINS,
@@ -979,18 +1668,26 @@ function registerNovaWallet(options = {}) {
   const forceRegistration = options.forceRegistration ?? DEFAULT_REGISTER_FORCE;
   const desktopRegistration = options.desktopRegistration ?? DEFAULT_DESKTOP_REGISTRATION;
   const shouldRegisterDesktop = desktopRegistration && typeof window !== "undefined" && !isMobileBrowser();
-  if (!client.hasProvider() && !client.hasExternalSession() && !forceRegistration && !shouldRegisterDesktop) return;
+  const shouldRegisterMobileRelay = typeof window !== "undefined" && isMobileBrowser();
+  if (!client.hasProvider() && !client.hasExternalSession() && !forceRegistration && !shouldRegisterDesktop && !shouldRegisterMobileRelay) return;
   registerWallet(createNovaAIP62Wallet(options));
   registered = true;
 }
 
 export {
+  NOVA_CONNECT_NAME,
   NOVA_WALLET_NAME,
   NOVA_DESK_NAME,
   DEFAULT_WEBSITE_URL,
   DEFAULT_DEEPLINK_BASE_URL,
   DEFAULT_DESKTOP_LOGIN_URL,
   DEFAULT_DESKTOP_BRIDGE_URL,
+  DEFAULT_DEEPLINK_SCHEME,
+  DEFAULT_MOBILE_RELAY_BASE_URL,
+  DEFAULT_MOBILE_WEBSOCKET_URL,
+  DEFAULT_MOBILE_POLL_INTERVAL_MS,
+  DEFAULT_MOBILE_REQUEST_TIMEOUT_MS,
+  DEFAULT_MOBILE_SOCKET_TIMEOUT_MS,
   DEFAULT_DETECT_ALIASES,
   DEFAULT_REGISTER_FORCE,
   DEFAULT_DESKTOP_REGISTRATION,
@@ -999,6 +1696,8 @@ export {
   DEFAULT_BRIDGE_POLL_TIMEOUT_MS,
   NOVA_PROTOCOL_KEY_STORAGE_KEY,
   NOVA_EXTERNAL_SESSION_STORAGE_KEY,
+  NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY,
+  NOVA_CALLBACK_MARKER_STORAGE_KEY,
   CALLBACK_ADDRESS_PARAM,
   CALLBACK_PUBLIC_KEY_PARAM,
   CALLBACK_NETWORK_PARAM,
@@ -1007,6 +1706,8 @@ export {
   CALLBACK_BRIDGE_URL_PARAM,
   CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
   CALLBACK_WALLET_NAME_PARAM,
+  CALLBACK_REQUEST_ID_PARAM,
+  CALLBACK_STATUS_PARAM,
   NOVA_WALLET_ICON,
   NovaErrorCode,
   NovaAdapterError,
@@ -1024,12 +1725,23 @@ export {
   bridgeBaseUrl,
   currentUrlWithoutCallbackKey,
   buildDesktopOrMobileConnectUrl,
+  launchDesktopOrMobileConnect,
   readExternalSession,
   hasStoredExternalSession,
   storeExternalSession,
   clearExternalSession,
+  readPendingMobilePairing,
+  storePendingMobilePairing,
+  clearPendingMobilePairing,
   sessionToAccountInfo,
   storeCallbackSession,
+  readCallbackMarker,
+  clearCallbackMarker,
+  waitForExternalSession,
+  validateExternalSession,
+  revokeExternalSession,
+  readValidatedExternalSession,
+  tryResumeNovaWalletConnection,
   fetchJsonWithTimeout,
   tryLocalBridgeConnect,
   tryLocalBridgeSignMessage,
@@ -1037,6 +1749,17 @@ export {
   tryLocalBridgeSignAndSubmit,
   buildCallbackUrl,
   buildDeeplinkUrl,
+  createKeyPair,
+  deriveSharedSecret,
+  encryptJson,
+  decryptJson,
+  watchRelaySocket,
+  resumeMobileRelaySessionFromCallback,
+  connectViaMobileRelay,
+  signMessageViaMobileRelay,
+  signTransactionViaMobileRelay,
+  signAndSubmitViaMobileRelay,
+  revokeMobileRelaySession,
   isBrowser2 as isBrowser,
   detectProvider,
   NovaClient,

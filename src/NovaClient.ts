@@ -13,7 +13,9 @@ import type {
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
+  clearPendingMobilePairing,
   clearExternalSession,
+  isMobileBrowser,
   launchDesktopOrMobileConnect,
   readExternalSession,
   readValidatedExternalSession,
@@ -29,6 +31,13 @@ import {
 import { createFullMessage, normalizeNetwork, normalizeProviderAccount, normalizeSignMessageOutput } from "./conversion";
 import { NovaAdapterError, NovaErrorCode, remapNovaError } from "./errors";
 import { buildDeeplinkUrl } from "./deeplink";
+import {
+  connectViaMobileRelay,
+  resumeMobileRelaySessionFromCallback,
+  signAndSubmitViaMobileRelay,
+  signMessageViaMobileRelay,
+  signTransactionViaMobileRelay
+} from "./mobileRelay";
 import { detectProvider } from "./provider";
 import type {
   NovaSignMessageResponse,
@@ -114,9 +123,19 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         return { account, network: this.networkInfo };
       }
 
+      const resumedMobileSession = await resumeMobileRelaySessionFromCallback(this.options);
+      if (resumedMobileSession) {
+        return this.connectResultFromExternalSession(resumedMobileSession);
+      }
+
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         return this.connectResultFromExternalSession(externalSession);
+      }
+
+      if (typeof window !== "undefined" && isMobileBrowser()) {
+        const mobileSession = await connectViaMobileRelay(this.options);
+        return this.connectResultFromExternalSession(mobileSession);
       }
 
       const bridgedAccount = await tryLocalBridgeConnect(this.options);
@@ -180,18 +199,20 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
   }
 
   async disconnect(): Promise<void> {
+    const provider = this.refreshProvider();
+    const externalSession = readExternalSession();
     try {
-      const provider = this.refreshProvider();
-      const externalSession = readExternalSession();
       await provider?.disconnect?.();
       if (externalSession) {
         await revokeExternalSession(externalSession, this.options);
       }
-      clearExternalSession();
-      this.accountInfo = null;
-      this.networkInfo = null;
     } catch (error) {
       remapNovaError(error);
+    } finally {
+      clearExternalSession();
+      clearPendingMobilePairing();
+      this.accountInfo = null;
+      this.networkInfo = null;
     }
   }
 
@@ -232,7 +253,9 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
 
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
-        return tryLocalBridgeSignMessage(input, externalSession, this.options);
+        return externalSession.transport === "mobile-relay"
+          ? signMessageViaMobileRelay(input, externalSession, this.options)
+          : tryLocalBridgeSignMessage(input, externalSession, this.options);
       }
 
       throw new NovaAdapterError(NovaErrorCode.Unsupported, "Nova provider signMessage() unavailable");
@@ -275,6 +298,25 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
 
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
+        if (externalSession.transport === "mobile-relay") {
+          if (
+            !transaction ||
+            typeof transaction !== "object" ||
+            !("payload" in transaction) ||
+            "rawTransaction" in transaction ||
+            "data" in transaction
+          ) {
+            throw new NovaAdapterError(
+              NovaErrorCode.Unsupported,
+              "Nova Connect mobile signTransaction requires a wallet-standard v1.1 payload"
+            );
+          }
+          return signTransactionViaMobileRelay(
+            transaction as CedraSignTransactionInputV1_1,
+            externalSession,
+            this.options
+          );
+        }
         if (
           !transaction ||
           typeof transaction !== "object" ||
@@ -317,11 +359,17 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
 
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
-        return tryLocalBridgeSignAndSubmit(
-          transaction as CedraSignAndSubmitTransactionInput,
-          externalSession,
-          this.options
-        );
+        return externalSession.transport === "mobile-relay"
+          ? signAndSubmitViaMobileRelay(
+              transaction as CedraSignAndSubmitTransactionInput,
+              externalSession,
+              this.options
+            )
+          : tryLocalBridgeSignAndSubmit(
+              transaction as CedraSignAndSubmitTransactionInput,
+              externalSession,
+              this.options
+            );
       }
 
       throw new NovaAdapterError(

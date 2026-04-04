@@ -37,6 +37,9 @@
   "dependencies": {
     "@cedra-labs/ts-sdk": "^2.2.8",
     "@cedra-labs/wallet-standard": "^0.5.1",
+    "@noble/ciphers": "^2.1.1",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^1.8.0",
     "eventemitter3": "^5.0.1"
   },
   "devDependencies": {

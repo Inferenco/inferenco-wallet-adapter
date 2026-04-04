@@ -40,6 +40,7 @@ interface NovaSignMessageResponse {
 }
 interface NovaWalletOptions {
     deeplinkBaseUrl?: string;
+    deeplinkScheme?: string;
     websiteUrl?: string;
     forceRegistration?: boolean;
     desktopRegistration?: boolean;
@@ -47,18 +48,28 @@ interface NovaWalletOptions {
     networkOverride?: Network;
     fullnodeUrl?: string;
     bridgeBaseUrl?: string;
+    relayBaseUrl?: string;
+    websocketBaseUrl?: string;
     bridgeConnectTimeoutMs?: number;
     bridgePollIntervalMs?: number;
     bridgePollTimeoutMs?: number;
+    mobilePollIntervalMs?: number;
+    mobileRequestTimeoutMs?: number;
+    mobileSocketTimeoutMs?: number;
 }
 interface NovaExternalSession {
+    transport: "desktop-bridge" | "mobile-relay";
     address: string;
     publicKey: string;
     network: string;
     chainId: number;
     sessionId: string;
     bridgeUrl?: string;
+    relayBaseUrl?: string;
     protocolPublicKey?: string;
+    dappSessionToken?: string;
+    sharedSecret?: string;
+    walletPublicKey?: string;
     walletName?: string;
 }
 interface NovaBridgeStartResponse {
@@ -113,6 +124,58 @@ interface NovaBridgeTransactionPoll {
     requestId?: string;
     hash?: string;
     error?: string;
+}
+interface NovaCallbackMarker {
+    requestId: string;
+    status: string;
+}
+interface NovaMobilePairingCreateResponse {
+    pairingId: string;
+    dappPairingToken: string;
+    walletDeeplinkUrl: string;
+    websocketUrl?: string;
+    expiresAt: string;
+}
+interface NovaMobilePairingStatus {
+    pairingId: string;
+    status: "pending" | "claimed" | "approved" | "rejected" | "expired" | "revoked";
+    callbackUrl: string;
+    encryptedResult?: string;
+    dappSessionToken?: string;
+    sessionId?: string;
+    walletPublicKey?: string;
+    accountAddress?: string;
+    publicKey?: string;
+    network?: string;
+    chainId?: number;
+    walletName?: string;
+    errorCode?: string;
+    errorMessage?: string;
+}
+interface NovaMobileRequestCreateResponse {
+    requestId: string;
+    walletDeeplinkUrl: string;
+    expiresAt: string;
+}
+interface NovaMobileRequestStatus {
+    requestId: string;
+    sessionId: string;
+    method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
+    status: "pending" | "approved" | "rejected" | "expired" | "cancelled";
+    callbackUrl: string;
+    encryptedRequest?: string;
+    encryptedResult?: string;
+    requestMetadata?: Record<string, unknown> | null;
+    resultMetadata?: Record<string, unknown> | null;
+    errorCode?: string;
+    errorMessage?: string;
+    origin?: string;
+    appName?: string;
+    accountAddress?: string;
+    network?: string;
+    chainId?: number;
+    walletName?: string;
+    expiresAt: string;
 }
 type NovaTransactionPayload = InputGenerateTransactionPayloadData | {
     sender?: AccountAddressInput;
@@ -189,6 +252,12 @@ interface NovaWalletLikeResult {
     network: NetworkInfo | null;
     publicKey: AnyPublicKey;
 }
+interface NovaWalletCoreLike {
+    wallets: ReadonlyArray<{
+        name: string;
+    }>;
+    connect(walletName: string): Promise<void | string>;
+}
 type NovaSignTransactionResult = AccountAuthenticator | Uint8Array | {
     authenticator: AccountAuthenticator;
     rawTransaction?: Uint8Array;
@@ -197,4 +266,4 @@ type NovaSignTransactionResult = AccountAuthenticator | Uint8Array | {
 declare function createNovaAIP62Wallet(options?: NovaWalletOptions): CedraWallet;
 declare function registerNovaWallet(options?: NovaWalletOptions): void;
 
-export { type NovaWalletOptions as N, type SignMessagePayload as S, type NovaProvider as a, type NovaExternalSession as b, type NovaProviderAccount as c, type NovaSignMessageResponse as d, type NovaTransactionPayload as e, type NovaSignTransactionResult as f, type NovaNetworkInfo as g, type NovaWalletAdapterLike as h, type NovaWalletName as i, NovaWalletReadyState as j, type NovaAccountKeys as k, type NormalizedConnectedAccount as l, type NovaBridgeConnectPoll as m, type NovaBridgeMessagePoll as n, type NovaBridgeSignTransactionPoll as o, type NovaBridgeStartResponse as p, type NovaBridgeTransactionPoll as q, type NovaProviderResponse as r, type NovaWalletLikeResult as s, type NovaWindow as t, createNovaAIP62Wallet as u, registerNovaWallet as v };
+export { createNovaAIP62Wallet as A, registerNovaWallet as B, type NovaWalletOptions as N, type SignMessagePayload as S, type NovaProvider as a, type NovaCallbackMarker as b, type NovaExternalSession as c, type NovaWalletCoreLike as d, type NovaProviderAccount as e, type NovaSignMessageResponse as f, type NovaTransactionPayload as g, type NovaSignTransactionResult as h, type NovaNetworkInfo as i, type NovaWalletAdapterLike as j, type NovaWalletName as k, NovaWalletReadyState as l, type NovaAccountKeys as m, type NormalizedConnectedAccount as n, type NovaBridgeConnectPoll as o, type NovaBridgeMessagePoll as p, type NovaBridgeSignTransactionPoll as q, type NovaBridgeStartResponse as r, type NovaBridgeTransactionPoll as s, type NovaMobilePairingCreateResponse as t, type NovaMobilePairingStatus as u, type NovaMobileRequestCreateResponse as v, type NovaMobileRequestStatus as w, type NovaProviderResponse as x, type NovaWalletLikeResult as y, type NovaWindow as z };
