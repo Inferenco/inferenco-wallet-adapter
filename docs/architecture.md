@@ -1,10 +1,15 @@
 # Architecture
 
-This document describes the internal architecture of `@inferenco/nova-wallet-adapter`, including transport mechanisms, connection flows, and the relationship between components.
+This document describes the internal architecture of `@inferenco/nova-wallet-adapter`, including how it connects dApps to Nova Desk and Nova Wallet.
 
 ## Overview
 
-The adapter provides a unified interface for connecting Cedra dApps to Nova Wallet across different environments. Two public surfaces &mdash; `NovaWallet` (legacy adapter) and the AIP-62 bridge &mdash; share a single `NovaClient` that handles all connection logic.
+The adapter connects Cedra dApps to two Nova products:
+
+- **Nova Desk** &mdash; Desktop application, connected via a local HTTP bridge
+- **Nova Wallet** &mdash; Mobile wallet app, connected via nova-service (a hosted relay) and `inferenco://` deeplinks
+
+Two dApp integration surfaces &mdash; `NovaWallet` (plugin adapter) and the AIP-62 bridge &mdash; share a single `NovaClient` that handles all connection logic. The dApp integration mode is independent of which Nova product the user connects to.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -13,7 +18,7 @@ The adapter provides a unified interface for connecting Cedra dApps to Nova Wall
 │                                                              │
 │  ┌─────────────────┐            ┌──────────────────────┐     │
 │  │   NovaWallet    │            │   AIP-62 Bridge      │     │
-│  │   (legacy)      │            │   registerNovaWallet  │     │
+│  │   (plugin)      │            │   registerNovaWallet  │     │
 │  └────────┬────────┘            └──────────┬───────────┘     │
 │           │                                │                 │
 │           └──────────┬─────────────────────┘                 │
@@ -28,8 +33,11 @@ The adapter provides a unified interface for connecting Cedra dApps to Nova Wall
      ┌───────────────┼───────────────┐
      ▼               ▼               ▼
 ┌──────────┐  ┌─────────────┐  ┌────────────┐
-│ Injected │  │   Desktop   │  │   Mobile   │
-│ Provider │  │   Bridge    │  │   Relay    │
+│ Injected │  │  Nova Desk  │  │Nova Wallet │
+│ Provider │  │  (desktop)  │  │ (mobile)   │
+│          │  │             │  │            │
+│ window.  │  │ localhost   │  │nova-service│
+│ inferenco│  │ :21984      │  │ + deeplink │
 └──────────┘  └─────────────┘  └────────────┘
 ```
 
@@ -41,11 +49,11 @@ src/
 ├── aip62.ts              # AIP-62 wallet-standard bridge + registration
 ├── auto-register.ts      # Side-effect auto-registration entry point
 ├── NovaClient.ts         # Core client — connection, signing, session orchestration
-├── NovaWallet.ts         # Legacy Petra-style adapter class
+├── NovaWallet.ts         # Plugin-style adapter class
 ├── provider.ts           # Injected provider detection (window.inferenco, etc.)
-├── bridge.ts             # Desktop bridge HTTP transport + session management
-├── mobileRelay.ts        # Mobile relay REST transport (nova-service)
-├── mobileSocket.ts       # Mobile relay WebSocket transport
+├── bridge.ts             # Nova Desk HTTP bridge + session management
+├── mobileRelay.ts        # Nova Wallet relay REST transport (nova-service)
+├── mobileSocket.ts       # Nova Wallet relay WebSocket transport
 ├── mobileCrypto.ts       # X25519 key exchange + XChaCha20-Poly1305 encryption
 ├── conversion.ts         # Data normalization helpers (accounts, networks, txns)
 ├── deeplink.ts           # Deeplink URL generation
@@ -54,35 +62,11 @@ src/
 └── errors.ts             # NovaAdapterError + error code remapping
 ```
 
-## Transport Mechanisms
+## Connecting to Nova Desk
 
-### 1. Injected Provider
+**When:** Desktop browser, Nova Desk application running locally.
 
-**When used:** Provider detected on `window.inferenco`, `window.nova`, or branded aliases.
-
-**How it works:** Direct JavaScript function calls to the provider object injected by Nova Wallet's browser extension or embedded wallet.
-
-```
-dApp  ──▶  window.inferenco.connect()  ──▶  Nova Extension
-dApp  ◀──  { address, publicKey }       ◀──  Nova Extension
-```
-
-**Advantages:**
-- Zero latency, no network requests
-- No session management needed
-- Supports real-time event subscriptions (`onAccountChange`, `onNetworkChange`)
-
-**Detection priority:**
-1. `window.inferenco` (primary)
-2. `window.nova` (secondary)
-3. `window.cedra` if `isNovaWallet === true`
-4. `window.aptos` if `isNovaWallet === true`
-
-### 2. Desktop Bridge
-
-**When used:** Desktop browser without injected provider, Nova Desk running locally.
-
-**How it works:** HTTP requests to a local server at `http://127.0.0.1:21984` run by the Nova Desk desktop application.
+Nova Desk exposes a local HTTP bridge at `http://127.0.0.1:21984`. The adapter communicates with it directly &mdash; no external services involved.
 
 ```
 dApp  ──GET /connect──────────────▶  Nova Desk (localhost:21984)
@@ -118,41 +102,63 @@ dApp  ◀── { status: "approved",     Nova Desk
 
 **Session persistence:** Approved sessions are stored in `localStorage` as `NovaExternalSession` with `transport: "desktop-bridge"`. On subsequent visits, the adapter validates the stored session against the bridge before reuse.
 
-### 3. Mobile Relay
+**Desktop deeplink:** If Nova Desk is not running (the bridge probe fails), the adapter launches `inferenco://login?redirect=...` to open Nova Desk and waits for a callback via localStorage markers.
 
-**When used:** Mobile browser or external browser without injected provider.
+## Connecting to Nova Wallet
 
-**How it works:** End-to-end encrypted communication through a hosted relay server (nova-service). The relay never sees plaintext data.
+**When:** Mobile browser (or external browser without an injected provider or local Nova Desk).
+
+Nova Wallet connections go through **nova-service**, a hosted relay that brokers end-to-end encrypted communication between the dApp and the Nova Wallet mobile app. The relay never sees plaintext data.
 
 ```
-dApp                        nova-service                    Nova Wallet App
- │                              │                                │
- │──POST /v1/pairings─────────▶│                                │
- │◀── { pairingId,             │                                │
- │      walletDeeplinkUrl }    │                                │
- │                              │                                │
- │──open deeplink──────────────────────────────────────────────▶│
- │                              │                                │
- │                              │◀─── wallet claims pairing ────│
- │                              │                                │
- │                              │◀─── wallet approves ──────────│
- │                              │     (encrypted result)         │
- │                              │                                │
- │◀── poll/websocket ──────────│                                │
- │    (encrypted result)        │                                │
- │                              │                                │
- │── decrypt with               │                                │
- │   shared secret              │                                │
+dApp (mobile browser)           nova-service (relay)         Nova Wallet App
+ │                                   │                            │
+ │──POST /v1/pairings──────────────▶│                            │
+ │◀── { pairingId,                  │                            │
+ │      walletDeeplinkUrl }         │                            │
+ │                                   │                            │
+ │──open inferenco:// deeplink─────────────────────────────────▶│
+ │                                   │                            │
+ │                                   │◀── wallet claims pairing──│
+ │                                   │                            │
+ │                                   │◀── wallet approves ───────│
+ │                                   │    (encrypted result)      │
+ │                                   │                            │
+ │◀── poll/websocket ───────────────│                            │
+ │    (encrypted result)             │                            │
+ │                                   │                            │
+ │── decrypt with shared secret      │                            │
 ```
 
 **Crypto flow:**
 1. dApp generates X25519 keypair
-2. dApp sends public key with pairing request
+2. dApp sends public key with pairing request to nova-service
 3. Wallet generates its own keypair, derives shared secret via ECDH
 4. Both sides derive encryption key using HKDF-SHA256
 5. All payloads encrypted with XChaCha20-Poly1305
 
+**Deeplinks** are integral to this flow &mdash; they hand off from the browser to the Nova Wallet app for the user to approve, then Nova Wallet sends the encrypted result back through the relay.
+
 See [Mobile Relay Protocol](mobile-relay.md) for the full cryptographic specification.
+
+## Injected Provider
+
+**When:** A Nova browser extension or embedded wallet is installed, exposing a provider on the window object.
+
+The adapter calls the provider directly &mdash; no bridge, relay, or deeplink needed.
+
+```
+dApp  ──▶  window.inferenco.connect()  ──▶  Nova Extension
+dApp  ◀──  { address, publicKey }       ◀──  Nova Extension
+```
+
+**Detection priority:**
+1. `window.inferenco` (primary)
+2. `window.nova` (secondary)
+3. `window.cedra` if `isNovaWallet === true`
+4. `window.aptos` if `isNovaWallet === true`
+
+Supports real-time event subscriptions (`onAccountChange`, `onNetworkChange`) that are not available through the bridge or relay.
 
 ## Connection Flow
 
@@ -163,30 +169,32 @@ connect()
 │
 ├─▶ 1. Check injected provider
 │      window.inferenco / window.nova / branded aliases
-│      └─ If found → provider.connect() → return
+│      └─ If found → provider.connect() → done
 │
 ├─▶ 2. Check for mobile callback resume
-│      Returning from deeplink with callback params?
-│      └─ If yes → parse params, store session → return
+│      Returning from Nova Wallet deeplink with callback params?
+│      └─ If yes → parse params, store session → done
 │
-├─▶ 3. Check for stored external session
-│      Read from localStorage, validate against bridge/relay
-│      └─ If valid → reuse session → return
+├─▶ 3. Check for stored session
+│      Read from localStorage, validate against Nova Desk bridge or relay
+│      └─ If valid → reuse session → done
 │      └─ If invalid → clear session, continue
 │
 ├─▶ 4. Detect environment
 │      └─ Mobile browser?
-│         ├─ Yes → connectViaMobileRelay()
-│         │        Create pairing, launch deeplink,
+│         ├─ Yes → Connect via Nova Wallet
+│         │        Create pairing on nova-service,
+│         │        launch inferenco:// deeplink,
 │         │        poll/websocket for approval
-│         │        └─ return
+│         │        └─ done
 │         │
-│         └─ No (desktop) → tryLocalBridgeConnect()
-│                           GET /connect, poll for approval
-│                           └─ If success → return
-│                           └─ If fail → continue
+│         └─ No (desktop) → Connect via Nova Desk
+│                           GET localhost:21984/connect,
+│                           poll for approval
+│                           └─ If Nova Desk running → done
+│                           └─ If not → deeplink handoff
 │
-└─▶ 5. Deeplink fallback
+└─▶ 5. Desktop deeplink handoff
        Launch inferenco://login?redirect=...
        Wait for callback via localStorage markers
        └─ Timeout after ~120s if no response
@@ -194,20 +202,20 @@ connect()
 
 ## Signing Flow
 
-Once connected, signing operations follow a similar pattern across transports:
+Once connected, signing operations follow the same transport that was used to connect:
 
 **Injected provider:** Direct call → immediate result.
 
-**Desktop bridge:**
+**Nova Desk:**
 1. `POST /sign-message` (or `/sign-transaction`, `/transaction`) with payload
 2. Receive `requestId`
-3. Poll `/request/{requestId}` until approved
+3. Poll `/request/{requestId}` until user approves in Nova Desk
 4. Extract result from poll response
 
-**Mobile relay:**
+**Nova Wallet:**
 1. Encrypt request payload with shared secret
-2. `POST /v1/requests` with encrypted payload
-3. Launch deeplink for user to approve in wallet app
+2. `POST /v1/requests` with encrypted payload to nova-service
+3. Launch deeplink for user to approve in Nova Wallet
 4. Poll or listen via WebSocket for encrypted result
 5. Decrypt result with shared secret
 
@@ -245,18 +253,22 @@ Once connected, signing operations follow a similar pattern across transports:
               └─ invalid → clear → fresh connect()
 ```
 
+**Nova Desk sessions** are validated by calling the bridge's `/session/{id}` endpoint on reconnect.
+
+**Nova Wallet sessions** trust the stored encrypted credentials (shared secret, session token).
+
 ## Storage Keys
 
 | Key | Storage | Purpose |
 |-----|---------|---------|
-| `inferenco:nova-session` | `localStorage` | Active session (desktop-bridge or mobile-relay) |
-| `inferenco:nova-pending-mobile-pairing` | `localStorage` | Unfinished mobile pairing (survives reload) |
+| `inferenco:nova-session` | `localStorage` | Active session (Nova Desk or Nova Wallet) |
+| `inferenco:nova-pending-mobile-pairing` | `localStorage` | Unfinished Nova Wallet pairing (survives reload) |
 | `inferenco:nova-callback-marker` | `sessionStorage` | Callback markers for pending deeplink flows |
 | `inferenco:nova-protocol-key` | `localStorage` | Wallet's public key received via callback |
 
 ## Error Flow
 
-All errors from any transport are remapped through `remapNovaError()` into `NovaAdapterError` instances with typed `NovaErrorCode` values. This provides a consistent error interface regardless of whether the error originated from an injected provider, bridge HTTP response, relay API, or WebSocket.
+All errors from any transport are remapped through `remapNovaError()` into `NovaAdapterError` instances with typed `NovaErrorCode` values. This provides a consistent error interface regardless of whether the error originated from an injected provider, Nova Desk bridge, or Nova Wallet relay.
 
 ```
 Provider error / HTTP status / WebSocket error
@@ -272,16 +284,16 @@ Provider error / HTTP status / WebSocket error
          └── everything else        → NovaErrorCode.InternalError
 ```
 
-## Independence of Transports
+## Nova Desk vs Nova Wallet
 
-The desktop bridge and mobile relay are completely independent:
+The two products are completely independent:
 
-| Scenario | Desktop Bridge | Mobile Relay | Result |
+| Scenario | Nova Desk | Nova Wallet | What happens |
 |----------|:-:|:-:|--------|
-| Desktop + Nova Desk running | works | N/A | Local bridge connection |
-| Desktop + Nova Desk not running | fails | N/A | Falls back to deeplink |
-| Mobile + nova-service up | N/A | works | Encrypted relay connection |
-| Mobile + nova-service down | N/A | fails | Connection error |
-| Extension installed (any) | N/A | N/A | Direct provider, no bridge/relay needed |
+| Desktop + Nova Desk running | connected | &mdash; | Local bridge to Nova Desk |
+| Desktop + Nova Desk not running | &mdash; | &mdash; | Deeplink launches Nova Desk |
+| Mobile + nova-service up | &mdash; | connected | Encrypted relay to Nova Wallet |
+| Mobile + nova-service down | &mdash; | &mdash; | Connection error |
+| Extension installed (any platform) | &mdash; | &mdash; | Direct provider, no bridge or relay |
 
-Neither transport depends on the other. A dApp can function with only the desktop bridge, only the mobile relay, or only the injected provider.
+Nova Desk does not require nova-service. Nova Wallet does not require Nova Desk. A dApp using this adapter supports both automatically.

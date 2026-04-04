@@ -41,7 +41,7 @@ Complete type and method documentation for `@inferenco/nova-wallet-adapter`.
 
 ### `NovaWallet`
 
-Legacy Petra-style adapter class. Extends `EventEmitter<{ accountChange, networkChange }>`.
+Plugin-style adapter class. Extends `EventEmitter<{ accountChange, networkChange }>`.
 
 ```typescript
 import { NovaWallet } from "@inferenco/nova-wallet-adapter";
@@ -72,7 +72,7 @@ const wallet = new NovaWallet(options?: NovaWalletOptions);
 
 ##### `connect(): Promise<AccountInfo>`
 
-Initiates a connection to Nova Wallet. Tries injected provider first, then desktop bridge, then mobile relay, then deeplink fallback.
+Initiates a connection to Nova Wallet. Tries injected provider first, then desktop bridge or mobile relay, using deeplinks for app handoff as needed.
 
 **Returns:** `AccountInfo` with `address` and `publicKey`.
 
@@ -161,7 +161,7 @@ Subscribes to network change events.
 
 ##### `deeplinkProvider(url?: string): string`
 
-Generates a deeplink URL for launching Nova Wallet.
+Generates a deeplink URL for launching Nova Desk or Nova Wallet.
 
 **Parameters:**
 
@@ -208,7 +208,7 @@ Fetch current network from provider or stored session.
 
 ##### `signMessage(input: CedraSignMessageInput): Promise<CedraSignMessageOutput>`
 
-Sign a message through the best available transport.
+Sign a message via the active transport (provider, Nova Desk bridge, or Nova Wallet relay).
 
 ##### `signMessageAndVerify(input: CedraSignMessageInput): Promise<boolean>`
 
@@ -471,7 +471,7 @@ interface NovaNetworkInfo {
 
 ### `SignMessagePayload`
 
-Legacy message signing payload format.
+Message signing payload format.
 
 ```typescript
 interface SignMessagePayload {
@@ -485,7 +485,7 @@ interface SignMessagePayload {
 
 ### `NovaSignMessageResponse`
 
-Legacy message signing response format.
+Message signing response format.
 
 ```typescript
 interface NovaSignMessageResponse {

@@ -146,9 +146,9 @@ new NovaWallet({
 
 ---
 
-## Desktop Bridge
+## Nova Desk (Desktop Bridge)
 
-These options configure the local HTTP bridge to Nova Desk.
+These options configure the local HTTP bridge to the Nova Desk desktop application.
 
 ### `bridgeBaseUrl`
 
@@ -202,9 +202,9 @@ new NovaWallet({
 
 ---
 
-## Mobile Relay
+## Nova Wallet (Mobile Relay)
 
-These options configure the hosted relay service (nova-service) for mobile browsers.
+These options configure the nova-service relay used for connecting to the Nova Wallet mobile app.
 
 ### `relayBaseUrl`
 
@@ -213,7 +213,7 @@ These options configure the hosted relay service (nova-service) for mobile brows
 | **Type** | `string` |
 | **Default** | `"https://nova-service-160604102004.europe-west1.run.app"` |
 
-Base URL for the mobile relay REST API. Override for self-hosted relay deployments or local development.
+Base URL for the nova-service relay REST API. Override for self-hosted relay deployments or local development.
 
 ```typescript
 new NovaWallet({
@@ -243,7 +243,7 @@ new NovaWallet({
 | **Type** | `number` |
 | **Default** | `1000` (1 second) |
 
-Interval in milliseconds between poll requests to the relay while waiting for wallet approval. Used as a fallback when WebSocket notifications are unavailable or time out.
+Interval in milliseconds between poll requests to nova-service while waiting for the user to approve in Nova Wallet. Used when WebSocket notifications are unavailable or time out.
 
 ### `mobileRequestTimeoutMs`
 
@@ -252,7 +252,7 @@ Interval in milliseconds between poll requests to the relay while waiting for wa
 | **Type** | `number` |
 | **Default** | `180000` (3 minutes) |
 
-Maximum time in milliseconds to wait for the user to approve or reject a request in the mobile wallet app. Longer than the desktop timeout to account for app switching delays.
+Maximum time in milliseconds to wait for the user to approve or reject a request in Nova Wallet. Longer than the Nova Desk timeout to account for app switching delays on mobile.
 
 ### `mobileSocketTimeoutMs`
 
@@ -261,7 +261,7 @@ Maximum time in milliseconds to wait for the user to approve or reject a request
 | **Type** | `number` |
 | **Default** | `15000` (15 seconds) |
 
-Time in milliseconds to wait for a WebSocket response before falling back to HTTP polling. If the WebSocket connection fails or no message arrives within this window, the adapter switches to polling at `mobilePollIntervalMs` intervals.
+Time in milliseconds to wait for a WebSocket response from nova-service before switching to HTTP polling. If the WebSocket connection fails or no message arrives within this window, the adapter polls at `mobilePollIntervalMs` intervals instead.
 
 ---
 

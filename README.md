@@ -12,19 +12,28 @@
 </p>
 
 <p align="center">
-  Standalone wallet adapter for connecting Cedra dApps to <a href="https://inferenco.com">Nova Wallet</a>.<br/>
-  Supports desktop bridge, mobile relay, injected provider, deeplinks, and AIP-62 wallet-standard.
+  Wallet adapter for connecting Cedra dApps to <a href="https://inferenco.com">Nova Desk</a> and <a href="https://inferenco.com">Nova Wallet</a>.<br/>
+  Supports the AIP-62 wallet-standard and plugin-style integration.
 </p>
 
 ---
 
+## Overview
+
+This adapter allows Cedra dApps to connect to two Nova products:
+
+- **Nova Desk** &mdash; Desktop application. The adapter connects directly to Nova Desk's local HTTP bridge at `localhost:21984`. No external services required.
+- **Nova Wallet** &mdash; Mobile wallet app. The adapter connects through [nova-service](docs/mobile-relay.md), a hosted relay that brokers end-to-end encrypted communication between the dApp and the wallet via deeplinks.
+
+Both connections are handled transparently &mdash; the adapter detects the environment and uses the right transport automatically.
+
 ## Features
 
-- **Dual integration** &mdash; Legacy plugin adapter (`NovaWallet`) and AIP-62 wallet-standard (`registerNovaWallet`)
-- **Desktop bridge** &mdash; Direct local HTTP connection to Nova Desk / Nova Connect
-- **Mobile relay** &mdash; End-to-end encrypted relay via nova-service (X25519 + XChaCha20-Poly1305)
+- **Nova Desk integration** &mdash; Direct local HTTP bridge to the Nova Desk desktop application
+- **Nova Wallet integration** &mdash; End-to-end encrypted relay via nova-service (X25519 + XChaCha20-Poly1305)
+- **Dual dApp integration** &mdash; Plugin adapter (`NovaWallet`) and AIP-62 wallet-standard (`registerNovaWallet`)
 - **Injected provider** &mdash; Auto-detects `window.inferenco`, `window.nova`, and branded aliases
-- **Deeplink fallback** &mdash; `inferenco://` URI scheme for app handoff
+- **Deeplinks** &mdash; `inferenco://` URI scheme for wallet handoff on desktop and mobile
 - **Session persistence** &mdash; Reconnect without re-approval across page reloads
 - **Zero config** &mdash; Works out of the box with sensible defaults, fully configurable when needed
 
@@ -63,9 +72,9 @@ registerNovaWallet({
 });
 ```
 
-### Legacy Plugin Adapter
+### Plugin Adapter
 
-For dApps using Petra-style plugin adapters:
+For dApps using plugin-style adapters:
 
 ```typescript
 import { NovaWallet } from "@inferenco/nova-wallet-adapter";
@@ -130,40 +139,46 @@ This resumes pending mobile callback state after browser reloads and reconnects 
 
 ## Architecture
 
-Nova Wallet Adapter supports three transport mechanisms, selected automatically based on the runtime environment:
+The adapter provides two dApp integration surfaces backed by a shared `NovaClient`, which connects to Nova Desk or Nova Wallet depending on the environment:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                     Your dApp                           │
 │                                                         │
-│   NovaWallet (legacy)  ─┐                               │
+│   NovaWallet (plugin)  ─┐                               │
 │                         ├──▶  NovaClient (core logic)   │
 │   AIP-62 Bridge ────────┘         │                     │
 └───────────────────────────────────┼─────────────────────┘
                                     │
-                    ┌───────────────┼───────────────┐
-                    ▼               ▼               ▼
-           ┌──────────────┐ ┌─────────────┐ ┌────────────┐
-           │   Injected   │ │   Desktop   │ │   Mobile   │
-           │   Provider   │ │   Bridge    │ │   Relay    │
-           │              │ │             │ │            │
-           │ window.nova  │ │  localhost  │ │  nova-svc  │
-           │ window.      │ │  :21984     │ │  (hosted)  │
-           │  inferenco   │ │             │ │            │
-           └──────────────┘ └─────────────┘ └────────────┘
-                 direct         HTTP          E2E encrypted
-                                              WebSocket+REST
+              ┌─────────────────────┼─────────────────────┐
+              ▼                     ▼                     ▼
+     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+     │   Injected   │     │  Nova Desk   │     │ Nova Wallet  │
+     │   Provider   │     │  (desktop)   │     │  (mobile)    │
+     │              │     │              │     │              │
+     │ window.nova  │     │  localhost   │     │ nova-service │
+     │ window.      │     │  :21984      │     │  + deeplink  │
+     │  inferenco   │     │  HTTP bridge │     │  E2E encrypt │
+     └──────────────┘     └──────────────┘     └──────────────┘
 ```
 
-### Connection Priority
+### How Connections Work
 
-1. **Injected provider** &mdash; `window.inferenco` / `window.nova` (instant, no bridge needed)
-2. **Stored session resume** &mdash; validates and reuses prior sessions
-3. **Desktop bridge** &mdash; connects to locally-running Nova Desk via HTTP (`http://127.0.0.1:21984`)
-4. **Mobile relay** &mdash; end-to-end encrypted relay for mobile browsers via nova-service
-5. **Deeplink fallback** &mdash; launches Nova Wallet app via `inferenco://` URI scheme
+**Desktop &mdash; Nova Desk:** The adapter connects to Nova Desk's local HTTP bridge at `http://127.0.0.1:21984`. Requests are initiated, then polled until the user approves in the Nova Desk UI. Sessions persist across page reloads.
 
-> Nova Desk and nova-service are independent. The desktop bridge works without nova-service, and vice versa.
+**Mobile &mdash; Nova Wallet:** The adapter creates an encrypted pairing through nova-service, then launches an `inferenco://` deeplink to hand off to Nova Wallet. The user approves in the app, and the result is returned through the relay. All communication is end-to-end encrypted.
+
+**Injected provider:** When a Nova extension is installed, the adapter calls it directly &mdash; no bridge or relay needed.
+
+### Connection Order
+
+1. **Injected provider** &mdash; `window.inferenco` / `window.nova` (instant, direct)
+2. **Stored session** &mdash; validates and reuses a prior Nova Desk or Nova Wallet session
+3. **Nova Desk bridge** &mdash; local HTTP connection on desktop browsers
+4. **Nova Wallet relay** &mdash; encrypted relay + deeplink on mobile browsers
+5. **Desktop deeplink** &mdash; `inferenco://login` handoff when Nova Desk is not running
+
+> Nova Desk and nova-service are independent. Nova Desk works without nova-service, and Nova Wallet works without Nova Desk.
 
 For more detail, see [Architecture docs](docs/architecture.md).
 
@@ -171,11 +186,11 @@ For more detail, see [Architecture docs](docs/architecture.md).
 
 ### `NovaWallet`
 
-The legacy adapter class, compatible with Petra-style plugin consumers.
+The plugin adapter class, compatible with plugin-style wallet consumers.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `connect()` | `Promise<AccountInfo>` | Connect to Nova Wallet |
+| `connect()` | `Promise<AccountInfo>` | Connect to Nova Desk or Nova Wallet |
 | `account()` | `Promise<AccountInfo>` | Get current account info |
 | `disconnect()` | `Promise<void>` | Disconnect and clear session |
 | `signMessage(input)` | `Promise<CedraSignMessageOutput>` | Sign an arbitrary message |
@@ -214,16 +229,16 @@ The core client powering both adapter surfaces. Use directly for advanced contro
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `connect()` | `Promise<{ account, network }>` | Full connection flow with transport negotiation |
+| `connect()` | `Promise<{ account, network }>` | Connect to Nova Desk or Nova Wallet |
 | `disconnect()` | `Promise<void>` | Disconnect and revoke session |
 | `getAccount()` | `Promise<AccountInfo>` | Fetch account from provider or session |
 | `getNetwork()` | `Promise<NetworkInfo>` | Fetch current network |
-| `signMessage(input)` | `Promise<CedraSignMessageOutput>` | Sign message via best available transport |
+| `signMessage(input)` | `Promise<CedraSignMessageOutput>` | Sign message via active transport |
 | `signMessageAndVerify(input)` | `Promise<boolean>` | Sign and verify locally |
 | `signTransaction(tx, opts?)` | `Promise<NovaSignTransactionResult>` | Sign transaction |
 | `signAndSubmitTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>` | Sign and submit |
 | `hasProvider()` | `boolean` | Check for injected provider |
-| `hasExternalSession()` | `boolean` | Check for stored bridge/relay session |
+| `hasExternalSession()` | `boolean` | Check for stored Nova Desk or Nova Wallet session |
 
 For the complete type reference, see [API Reference docs](docs/api-reference.md).
 
@@ -247,13 +262,13 @@ const wallet = new NovaWallet({
   networkOverride: undefined,   // Force specific network
   fullnodeUrl: undefined,       // Custom fullnode for SDK operations
 
-  // Desktop bridge
+  // Nova Desk (desktop bridge)
   bridgeBaseUrl: "http://127.0.0.1:21984",
   bridgeConnectTimeoutMs: 1200,
   bridgePollIntervalMs: 250,
   bridgePollTimeoutMs: 120000,
 
-  // Mobile relay
+  // Nova Wallet (mobile relay via nova-service)
   relayBaseUrl: "https://nova-service-....run.app",
   websocketBaseUrl: "wss://nova-service-....run.app/v1/ws",
   mobilePollIntervalMs: 1000,
@@ -303,7 +318,7 @@ try {
 
 ## Provider Detection
 
-The adapter detects Nova Wallet providers in this priority order:
+The adapter detects Nova providers in this priority order:
 
 1. `window.inferenco` &mdash; primary namespace
 2. `window.nova` &mdash; secondary namespace
@@ -316,13 +331,13 @@ Unbranded providers on `window.cedra` / `window.aptos` are never wrapped. Alias 
 
 Sessions are persisted in `localStorage` under the key `inferenco:nova-session` and automatically validated on reconnect:
 
-- **Desktop bridge sessions** are validated against the bridge's `/session/{id}` endpoint
-- **Mobile relay sessions** trust the stored encrypted credentials
+- **Nova Desk sessions** are validated against the bridge's `/session/{id}` endpoint
+- **Nova Wallet sessions** trust the stored encrypted credentials
 - Invalid or expired sessions are automatically cleared, triggering a fresh connection flow
 
-## Mobile Relay Security
+## Nova Wallet Relay Security
 
-Mobile relay communication is end-to-end encrypted:
+Communication between the dApp and Nova Wallet through nova-service is end-to-end encrypted:
 
 | Layer | Algorithm | Purpose |
 |-------|-----------|---------|
@@ -345,7 +360,7 @@ The package ships three entry points:
 
 Both ESM and CommonJS builds are included with full TypeScript declarations.
 
-## Desktop Bridge API
+## Nova Desk Bridge API
 
 When Nova Desk is running locally, the adapter communicates via HTTP:
 
@@ -360,7 +375,7 @@ When Nova Desk is running locally, the adapter communicates via HTTP:
 | `/connection` | `DELETE` | Revoke connection |
 | `/session/{sessionId}` | `DELETE` | Revoke session |
 
-All operations use a poll-based flow: initiate a request, receive a `requestId`, then poll until the user approves or rejects in the wallet.
+All operations use a poll-based flow: initiate a request, receive a `requestId`, then poll until the user approves or rejects in Nova Desk.
 
 ## Development
 
@@ -388,7 +403,7 @@ npm run typecheck
 | [Architecture](docs/architecture.md) | Transport mechanisms, connection flows, and system design |
 | [API Reference](docs/api-reference.md) | Complete type and method documentation |
 | [Configuration](docs/configuration.md) | All options with defaults and examples |
-| [Mobile Relay Protocol](docs/mobile-relay.md) | End-to-end encrypted mobile communication |
+| [Mobile Relay Protocol](docs/mobile-relay.md) | Nova Wallet end-to-end encrypted communication |
 | [Changelog](CHANGELOG.md) | Version history and release notes |
 
 ## Dependencies
@@ -397,9 +412,9 @@ npm run typecheck
 |---------|---------|
 | `@cedra-labs/ts-sdk` | Transaction building, network utilities, SDK operations |
 | `@cedra-labs/wallet-standard` | AIP-62 wallet-standard types and registration |
-| `@noble/curves` | X25519 ECDH key exchange (mobile relay) |
-| `@noble/hashes` | SHA256, HKDF key derivation (mobile relay) |
-| `@noble/ciphers` | XChaCha20-Poly1305 authenticated encryption (mobile relay) |
+| `@noble/curves` | X25519 ECDH key exchange (Nova Wallet relay) |
+| `@noble/hashes` | SHA256, HKDF key derivation (Nova Wallet relay) |
+| `@noble/ciphers` | XChaCha20-Poly1305 authenticated encryption (Nova Wallet relay) |
 | `eventemitter3` | Event emission for account/network change subscriptions |
 
 ## License
