@@ -56,6 +56,7 @@ import {
   fetchJsonWithTimeout,
   getSdkNetwork,
   hasStoredExternalSession,
+  installExternalSessionResumeListeners,
   isBrowser,
   isMobileBrowser,
   launchDesktopOrMobileConnect,
@@ -89,7 +90,7 @@ import {
   validateExternalSession,
   waitForExternalSession,
   watchRelaySocket
-} from "./chunk-Q6SGK6CO.js";
+} from "./chunk-7JNAU5ZF.js";
 
 // src/types.ts
 var NovaWalletReadyState = /* @__PURE__ */ ((NovaWalletReadyState2) => {
@@ -264,6 +265,7 @@ export {
   fetchJsonWithTimeout,
   getSdkNetwork,
   hasStoredExternalSession,
+  installExternalSessionResumeListeners,
   isBrowser,
   isMobileBrowser,
   launchDesktopOrMobileConnect,

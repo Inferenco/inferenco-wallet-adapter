@@ -15,6 +15,7 @@ import type {
 import {
   clearPendingMobilePairing,
   clearExternalSession,
+  installExternalSessionResumeListeners,
   isMobileBrowser,
   launchDesktopOrMobileConnect,
   readExternalSession,
@@ -69,6 +70,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
 
   constructor(private readonly options: NovaWalletOptions = {}) {
     super();
+    installExternalSessionResumeListeners();
     storeCallbackSession();
     this.provider = detectProvider(options);
   }

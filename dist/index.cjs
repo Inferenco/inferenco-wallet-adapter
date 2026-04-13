@@ -89,6 +89,7 @@ __export(index_exports, {
   fetchJsonWithTimeout: () => fetchJsonWithTimeout,
   getSdkNetwork: () => getSdkNetwork,
   hasStoredExternalSession: () => hasStoredExternalSession,
+  installExternalSessionResumeListeners: () => installExternalSessionResumeListeners,
   isBrowser: () => isBrowser,
   isMobileBrowser: () => isMobileBrowser,
   launchDesktopOrMobileConnect: () => launchDesktopOrMobileConnect,
@@ -345,6 +346,11 @@ function createFullMessage(input, address, chainId) {
 
 // src/bridge.ts
 var LEGACY_NOVA_DESK_LABEL = "Nova Desk";
+var NOVA_SESSION_READY_MESSAGE_TYPE = "inferenco:nova-session-ready";
+var NOVA_CALLBACK_OVERLAY_ID = "inferenco-nova-callback-overlay";
+var sessionResumeListenersInstalled = false;
+var sessionReadyChannel;
+var pendingExternalSessionWaiters = /* @__PURE__ */ new Set();
 var BridgeHttpError = class extends Error {
   constructor(status, message) {
     super(message);
@@ -448,6 +454,7 @@ function storeExternalSession(session) {
   if (session.protocolPublicKey) {
     window.localStorage.setItem(NOVA_PROTOCOL_KEY_STORAGE_KEY, session.protocolPublicKey);
   }
+  resolvePendingExternalSessionWaiters(session);
 }
 function clearExternalSession() {
   if (!isBrowser2()) return;
@@ -553,8 +560,127 @@ function sessionFromBridgePoll(payload) {
     walletName
   };
 }
+function dispatchSessionReadyEvent(session) {
+  window.dispatchEvent(
+    new CustomEvent(NOVA_SESSION_READY_MESSAGE_TYPE, {
+      detail: session
+    })
+  );
+}
+function resolvePendingExternalSessionWaiters(session) {
+  if (!isBrowser2()) return;
+  dispatchSessionReadyEvent(session);
+  for (const resolve of pendingExternalSessionWaiters) {
+    resolve(session);
+  }
+  pendingExternalSessionWaiters.clear();
+}
+function getSessionReadyChannel() {
+  if (!isBrowser2() || typeof BroadcastChannel === "undefined") {
+    return null;
+  }
+  if (sessionReadyChannel !== void 0) {
+    return sessionReadyChannel;
+  }
+  sessionReadyChannel = new BroadcastChannel(NOVA_SESSION_READY_MESSAGE_TYPE);
+  return sessionReadyChannel;
+}
+function parseSessionReadyPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const candidate = payload;
+  if (candidate.type !== NOVA_SESSION_READY_MESSAGE_TYPE) {
+    return null;
+  }
+  return parseExternalSession(candidate.session);
+}
+function syncReadySession(session) {
+  if (!session) {
+    return;
+  }
+  resolvePendingExternalSessionWaiters(session);
+}
+function installExternalSessionResumeListeners() {
+  if (!isBrowser2() || sessionResumeListenersInstalled) {
+    return;
+  }
+  window.addEventListener("storage", (event) => {
+    if (event.key !== NOVA_EXTERNAL_SESSION_STORAGE_KEY || typeof event.newValue !== "string") {
+      return;
+    }
+    try {
+      const session = parseExternalSession(JSON.parse(event.newValue));
+      syncReadySession(session);
+    } catch {
+    }
+  });
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin) {
+      return;
+    }
+    syncReadySession(parseSessionReadyPayload(event.data));
+  });
+  getSessionReadyChannel()?.addEventListener("message", (event) => {
+    syncReadySession(parseSessionReadyPayload(event.data));
+  });
+  sessionResumeListenersInstalled = true;
+}
+function broadcastReadySession(session) {
+  if (!isBrowser2()) {
+    return;
+  }
+  const payload = {
+    type: NOVA_SESSION_READY_MESSAGE_TYPE,
+    session
+  };
+  getSessionReadyChannel()?.postMessage(payload);
+  if (window.opener && window.opener !== window) {
+    try {
+      window.opener.postMessage(payload, window.location.origin);
+    } catch {
+    }
+  }
+}
+function renderCallbackCompletionFallback() {
+  if (!isBrowser2() || !document.body || document.getElementById(NOVA_CALLBACK_OVERLAY_ID)) {
+    return;
+  }
+  const overlay = document.createElement("div");
+  overlay.id = NOVA_CALLBACK_OVERLAY_ID;
+  overlay.setAttribute(
+    "style",
+    [
+      "position:fixed",
+      "inset:0",
+      "z-index:2147483647",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "padding:24px",
+      "background:rgba(7,12,24,0.96)",
+      "color:#f5f7ff",
+      "font:600 16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+      "text-align:center"
+    ].join(";")
+  );
+  overlay.textContent = "Nova Connect is complete. Return to the original tab.";
+  document.body.appendChild(overlay);
+}
+function tryCloseCallbackWindow() {
+  if (!isBrowser2() || !window.opener || window.opener === window) {
+    return;
+  }
+  window.setTimeout(() => {
+    window.close();
+    window.setTimeout(() => {
+      renderCallbackCompletionFallback();
+    }, 150);
+  }, 0);
+}
 function storeCallbackSession() {
   if (!isBrowser2()) return;
+  installExternalSessionResumeListeners();
   const url = new URL(window.location.href);
   const address = url.searchParams.get(CALLBACK_ADDRESS_PARAM);
   const publicKey = url.searchParams.get(CALLBACK_PUBLIC_KEY_PARAM);
@@ -566,10 +692,11 @@ function storeCallbackSession() {
   const walletName = url.searchParams.get(CALLBACK_WALLET_NAME_PARAM);
   const requestId = url.searchParams.get(CALLBACK_REQUEST_ID_PARAM);
   const status = url.searchParams.get(CALLBACK_STATUS_PARAM);
+  let callbackSession = null;
   if (address && publicKey && network && chainId && sessionId) {
     const parsedChainId = Number.parseInt(chainId, 10);
     if (!Number.isNaN(parsedChainId)) {
-      storeExternalSession({
+      callbackSession = {
         transport: "desktop-bridge",
         address,
         publicKey,
@@ -579,7 +706,8 @@ function storeCallbackSession() {
         bridgeUrl: bridgeUrl ?? void 0,
         protocolPublicKey: protocolPublicKey ?? void 0,
         walletName: walletName ?? void 0
-      });
+      };
+      storeExternalSession(callbackSession);
     }
   } else if (publicKey) {
     window.localStorage.setItem(NOVA_PROTOCOL_KEY_STORAGE_KEY, publicKey);
@@ -605,6 +733,10 @@ function storeCallbackSession() {
     url.searchParams.delete(key);
   }
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  if (callbackSession) {
+    broadcastReadySession(callbackSession);
+    tryCloseCallbackWindow();
+  }
 }
 function readCallbackMarker() {
   if (!isBrowser2()) return null;
@@ -634,18 +766,51 @@ function hasPendingMobilePairingCallbackResume() {
 }
 async function waitForExternalSession(options = {}) {
   if (!isBrowser2()) return null;
-  const deadline = Date.now() + bridgePollTimeoutMs(options);
-  while (Date.now() < deadline) {
-    storeCallbackSession();
-    const session = readExternalSession();
-    if (session) {
-      return session;
-    }
-    await new Promise(
-      (resolve) => window.setTimeout(resolve, bridgePollIntervalMs(options))
-    );
+  installExternalSessionResumeListeners();
+  storeCallbackSession();
+  const immediateSession = readExternalSession();
+  if (immediateSession) {
+    return immediateSession;
   }
-  return null;
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (session) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      pendingExternalSessionWaiters.delete(handleReady);
+      window.removeEventListener(
+        NOVA_SESSION_READY_MESSAGE_TYPE,
+        handleEvent
+      );
+      window.clearInterval(pollId);
+      window.clearTimeout(timeoutId);
+      resolve(session);
+    };
+    const handleReady = (session) => {
+      finish(session);
+    };
+    const handleEvent = (event) => {
+      const session = event.detail;
+      finish(session ?? readExternalSession());
+    };
+    pendingExternalSessionWaiters.add(handleReady);
+    window.addEventListener(
+      NOVA_SESSION_READY_MESSAGE_TYPE,
+      handleEvent
+    );
+    const pollId = window.setInterval(() => {
+      storeCallbackSession();
+      const session = readExternalSession();
+      if (session) {
+        finish(session);
+      }
+    }, bridgePollIntervalMs(options));
+    const timeoutId = window.setTimeout(() => {
+      finish(readExternalSession());
+    }, bridgePollTimeoutMs(options));
+  });
 }
 async function validateExternalSession(session, options = {}) {
   if (!isBrowser2()) return null;
@@ -729,6 +894,7 @@ async function readValidatedExternalSession(options = {}) {
 }
 async function tryResumeNovaWalletConnection(walletCore, options = {}) {
   if (!isBrowser2()) return false;
+  installExternalSessionResumeListeners();
   const candidateWalletName = [NOVA_CONNECT_NAME, LEGACY_NOVA_DESK_LABEL].find(
     (walletName) => walletCore.wallets.some((wallet) => wallet.name === walletName)
   );
@@ -1369,6 +1535,7 @@ var NovaClient = class extends import_eventemitter3.default {
   constructor(options = {}) {
     super();
     this.options = options;
+    installExternalSessionResumeListeners();
     storeCallbackSession();
     this.provider = detectProvider(options);
   }
@@ -1950,6 +2117,7 @@ function registerNovaWallet(options = {}) {
   fetchJsonWithTimeout,
   getSdkNetwork,
   hasStoredExternalSession,
+  installExternalSessionResumeListeners,
   isBrowser,
   isMobileBrowser,
   launchDesktopOrMobileConnect,
