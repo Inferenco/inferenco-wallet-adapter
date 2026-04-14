@@ -156,6 +156,22 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
       if (typeof window !== "undefined") {
         launchDesktopOrMobileConnect(this.options);
 
+        const retriedAccount = await tryLocalBridgeConnect({
+          ...this.options,
+          bridgeConnectTimeoutMs: 8000
+        });
+        if (retriedAccount) {
+          this.accountInfo = retriedAccount;
+          const retriedSession = await readValidatedExternalSession(this.options);
+          this.networkInfo = retriedSession
+            ? normalizeNetwork({
+                name: retriedSession.network as Network,
+                chainId: retriedSession.chainId
+              })
+            : null;
+          return { account: retriedAccount, network: this.networkInfo };
+        }
+
         const handoffSession = await waitForExternalSession(this.options);
         if (handoffSession) {
           return this.connectResultFromExternalSession(handoffSession);

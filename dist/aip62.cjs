@@ -1443,6 +1443,19 @@ var NovaClient = class extends import_eventemitter3.default {
       }
       if (typeof window !== "undefined") {
         launchDesktopOrMobileConnect(this.options);
+        const retriedAccount = await tryLocalBridgeConnect({
+          ...this.options,
+          bridgeConnectTimeoutMs: 8e3
+        });
+        if (retriedAccount) {
+          this.accountInfo = retriedAccount;
+          const retriedSession = await readValidatedExternalSession(this.options);
+          this.networkInfo = retriedSession ? normalizeNetwork({
+            name: retriedSession.network,
+            chainId: retriedSession.chainId
+          }) : null;
+          return { account: retriedAccount, network: this.networkInfo };
+        }
         const handoffSession = await waitForExternalSession(this.options);
         if (handoffSession) {
           return this.connectResultFromExternalSession(handoffSession);
