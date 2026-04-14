@@ -750,20 +750,44 @@ async function tryLocalBridgeConnect(options = {}) {
   const connectUrl = new URL("/connect", bridgeBaseUrl(options));
   connectUrl.searchParams.set("origin", window.location.origin);
   connectUrl.searchParams.set("app", typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk");
+  const connectUrlString = connectUrl.toString();
+  const timeoutMs = bridgeConnectTimeoutMs(options);
+  console.info("[Nova Adapter] Trying local bridge connect", {
+    url: connectUrlString,
+    origin: window.location.origin,
+    timeoutMs
+  });
   let start;
   try {
-    start = await fetchJsonWithTimeout(connectUrl.toString(), bridgeConnectTimeoutMs(options));
-  } catch {
+    start = await fetchJsonWithTimeout(connectUrlString, timeoutMs);
+    console.info("[Nova Adapter] Local bridge connect bootstrap response", start);
+  } catch (error) {
+    console.warn("[Nova Adapter] Local bridge connect bootstrap failed", {
+      url: connectUrlString,
+      timeoutMs,
+      error
+    });
     return null;
   }
   if (typeof start.requestId !== "string" || start.requestId.length === 0) {
+    console.warn("[Nova Adapter] Local bridge connect returned no requestId", start);
     return null;
   }
   const pollUrl = new URL(`/request/${start.requestId}`, bridgeBaseUrl(options)).toString();
+  console.info("[Nova Adapter] Polling local bridge connect request", {
+    requestId: start.requestId,
+    pollUrl
+  });
   const payload = await pollBridge(pollUrl, options);
+  console.info("[Nova Adapter] Local bridge connect poll resolved", payload);
   if (payload.status === "approved") {
     const session = sessionFromBridgePoll(payload);
     storeExternalSession(session);
+    console.info("[Nova Adapter] Local bridge connect approved", {
+      address: session.address,
+      sessionId: session.sessionId,
+      bridgeUrl: session.bridgeUrl
+    });
     return sessionToAccountInfo(session);
   }
   if (payload.status === "rejected") {
