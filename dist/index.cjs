@@ -1555,6 +1555,23 @@ function unwrap(value) {
   }
   return value;
 }
+var DESKTOP_BRIDGE_RETRY_WINDOW_MS = 8e3;
+var DESKTOP_BRIDGE_RETRY_DELAY_MS = 250;
+var DESKTOP_BRIDGE_RETRY_CONNECT_TIMEOUT_MS = 1e3;
+async function retryLocalBridgeConnectAfterDeeplink(options) {
+  const deadline = Date.now() + DESKTOP_BRIDGE_RETRY_WINDOW_MS;
+  while (Date.now() < deadline) {
+    const account = await tryLocalBridgeConnect({
+      ...options,
+      bridgeConnectTimeoutMs: DESKTOP_BRIDGE_RETRY_CONNECT_TIMEOUT_MS
+    });
+    if (account) {
+      return account;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, DESKTOP_BRIDGE_RETRY_DELAY_MS));
+  }
+  return null;
+}
 var NovaClient = class extends import_eventemitter3.default {
   constructor(options = {}) {
     super();
@@ -1627,10 +1644,7 @@ var NovaClient = class extends import_eventemitter3.default {
       }
       if (typeof window !== "undefined") {
         launchDesktopOrMobileConnect(this.options);
-        const retriedAccount = await tryLocalBridgeConnect({
-          ...this.options,
-          bridgeConnectTimeoutMs: 8e3
-        });
+        const retriedAccount = await retryLocalBridgeConnectAfterDeeplink(this.options);
         if (retriedAccount) {
           this.accountInfo = retriedAccount;
           const retriedSession = await readValidatedExternalSession(this.options);

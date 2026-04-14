@@ -15,6 +15,7 @@ describe("NovaClient", () => {
     delete (window as any).inferenco;
     window.localStorage.clear();
     window.sessionStorage.clear();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -80,6 +81,7 @@ describe("NovaClient", () => {
   });
 
   it("clears a revoked cached external session before restoring", async () => {
+    vi.useFakeTimers();
     const signer = Account.generate();
     bridge.storeExternalSession({
       transport: "desktop-bridge",
@@ -106,10 +108,13 @@ describe("NovaClient", () => {
     vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue(null);
 
     const client = new NovaClient();
-
-    await expect(client.connect()).rejects.toMatchObject({
+    const connectPromise = client.connect();
+    const rejection = expect(connectPromise).rejects.toMatchObject({
       code: NovaErrorCode.ConnectionTimeout
     });
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    await rejection;
     expect(window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
   });
 
@@ -158,43 +163,107 @@ describe("NovaClient", () => {
     verifySignatureAsync.mockRestore();
   });
 
-  it("completes cold-start desktop connect after deeplink handoff", async () => {
+  it("completes cold-start desktop connect during the retry window", async () => {
     const signer = Account.generate();
-    vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
+    const bridgeConnectSpy = vi
+      .spyOn(bridge, "tryLocalBridgeConnect")
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        address: signer.accountAddress,
+        publicKey: signer.publicKey as any
+      } as any);
     const launchSpy = vi
       .spyOn(bridge, "launchDesktopOrMobileConnect")
       .mockReturnValue("inferenco://login?redirect=https%3A%2F%2Fexample.com");
-    vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue({
-      transport: "desktop-bridge",
-      address: signer.accountAddress.toString(),
-      publicKey: signer.publicKey.toString(),
-      network: "testnet",
-      chainId: 2,
-      sessionId: "session-123",
-      bridgeUrl: "http://127.0.0.1:21984/session/session-123",
-      walletName: "Nova Desk"
-    });
+    const readValidatedSessionSpy = vi
+      .spyOn(bridge, "readValidatedExternalSession")
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        transport: "desktop-bridge",
+        address: signer.accountAddress.toString(),
+        publicKey: signer.publicKey.toString(),
+        network: "testnet",
+        chainId: 2,
+        sessionId: "session-123",
+        bridgeUrl: "http://127.0.0.1:21984/session/session-123",
+        walletName: "Nova Desk"
+      });
 
     const client = new NovaClient();
     const result = await client.connect();
 
     expect(launchSpy).toHaveBeenCalledTimes(1);
+    expect(bridgeConnectSpy).toHaveBeenCalledTimes(3);
+    expect(readValidatedSessionSpy).toHaveBeenCalled();
     expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
     expect(client.cachedNetwork?.name).toBe("testnet");
   });
 
-  it("reports a connection timeout when deeplink handoff never returns", async () => {
-    vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
+  it("falls back to callback handoff only after the retry window expires", async () => {
+    vi.useFakeTimers();
+    const bridgeConnectSpy = vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
+    const launchSpy = vi.spyOn(bridge, "launchDesktopOrMobileConnect").mockReturnValue(
+      "inferenco://login?redirect=https%3A%2F%2Fexample.com"
+    );
+    const signer = Account.generate();
+    const waitForExternalSessionSpy = vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue({
+      transport: "desktop-bridge",
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "session-456",
+      bridgeUrl: "http://127.0.0.1:21984/session/session-456",
+      walletName: "Nova Desk"
+    });
+
+    const client = new NovaClient();
+    const connectPromise = client.connect();
+    await vi.advanceTimersByTimeAsync(9_000);
+    const result = await connectPromise;
+
+    expect(launchSpy).toHaveBeenCalledTimes(1);
+    expect(bridgeConnectSpy.mock.calls.length).toBeGreaterThan(2);
+    expect(waitForExternalSessionSpy).toHaveBeenCalledTimes(1);
+    expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
+    expect(client.cachedNetwork?.name).toBe("testnet");
+  });
+
+  it("reports a connection timeout when retries exhaust and deeplink handoff never returns", async () => {
+    vi.useFakeTimers();
+    const bridgeConnectSpy = vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
     vi.spyOn(bridge, "launchDesktopOrMobileConnect").mockReturnValue(
       "inferenco://login?redirect=https%3A%2F%2Fexample.com"
     );
-    vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue(null);
+    const waitForExternalSessionSpy = vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue(null);
+
+    const client = new NovaClient();
+    const connectPromise = client.connect();
+    const rejection = expect(connectPromise).rejects.toMatchObject({
+      code: NovaErrorCode.ConnectionTimeout
+    });
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    await rejection;
+    expect(bridgeConnectSpy.mock.calls.length).toBeGreaterThan(2);
+    expect(waitForExternalSessionSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces bridge errors immediately during the retry window", async () => {
+    vi.spyOn(bridge, "tryLocalBridgeConnect")
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error("Nova Desk rejected the browser bridge request"));
+    const launchSpy = vi.spyOn(bridge, "launchDesktopOrMobileConnect").mockReturnValue(
+      "inferenco://login?redirect=https%3A%2F%2Fexample.com"
+    );
+    const waitForExternalSessionSpy = vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue(null);
 
     const client = new NovaClient();
 
-    await expect(client.connect()).rejects.toMatchObject({
-      code: NovaErrorCode.ConnectionTimeout
-    });
+    await expect(client.connect()).rejects.toThrow("Nova Desk rejected the browser bridge request");
+    expect(launchSpy).toHaveBeenCalledTimes(1);
+    expect(waitForExternalSessionSpy).not.toHaveBeenCalled();
   });
 
   it("uses the mobile relay path on mobile browsers", async () => {

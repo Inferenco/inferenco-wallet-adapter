@@ -63,6 +63,30 @@ function unwrap<T>(value: T | { data?: T; args?: T; result?: T }): T {
   return value as T;
 }
 
+const DESKTOP_BRIDGE_RETRY_WINDOW_MS = 8_000;
+const DESKTOP_BRIDGE_RETRY_DELAY_MS = 250;
+const DESKTOP_BRIDGE_RETRY_CONNECT_TIMEOUT_MS = 1_000;
+
+async function retryLocalBridgeConnectAfterDeeplink(
+  options: NovaWalletOptions
+): Promise<AccountInfo | null> {
+  const deadline = Date.now() + DESKTOP_BRIDGE_RETRY_WINDOW_MS;
+
+  while (Date.now() < deadline) {
+    const account = await tryLocalBridgeConnect({
+      ...options,
+      bridgeConnectTimeoutMs: DESKTOP_BRIDGE_RETRY_CONNECT_TIMEOUT_MS
+    });
+    if (account) {
+      return account;
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, DESKTOP_BRIDGE_RETRY_DELAY_MS));
+  }
+
+  return null;
+}
+
 export class NovaClient extends EventEmitter<NovaClientEvents> {
   private provider?: NovaProvider;
   private accountInfo: AccountInfo | null = null;
@@ -156,10 +180,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
       if (typeof window !== "undefined") {
         launchDesktopOrMobileConnect(this.options);
 
-        const retriedAccount = await tryLocalBridgeConnect({
-          ...this.options,
-          bridgeConnectTimeoutMs: 8000
-        });
+        const retriedAccount = await retryLocalBridgeConnectAfterDeeplink(this.options);
         if (retriedAccount) {
           this.accountInfo = retriedAccount;
           const retriedSession = await readValidatedExternalSession(this.options);

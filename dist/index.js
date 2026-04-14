@@ -90,7 +90,7 @@ import {
   validateExternalSession,
   waitForExternalSession,
   watchRelaySocket
-} from "./chunk-2DYBFGHW.js";
+} from "./chunk-WASQN2YQ.js";
 
 // src/types.ts
 var NovaWalletReadyState = /* @__PURE__ */ ((NovaWalletReadyState2) => {

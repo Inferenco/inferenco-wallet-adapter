@@ -1,7 +1,7 @@
 import {
   createNovaAIP62Wallet,
   registerNovaWallet
-} from "./chunk-2DYBFGHW.js";
+} from "./chunk-WASQN2YQ.js";
 export {
   createNovaAIP62Wallet,
   registerNovaWallet
