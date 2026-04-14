@@ -1,6 +1,6 @@
 import {
   registerNovaWallet
-} from "./chunk-WASQN2YQ.js";
+} from "./chunk-JEF6UFDS.js";
 
 // src/auto-register.ts
 registerNovaWallet();
