@@ -13,6 +13,7 @@ import {
 } from "@cedra-labs/wallet-standard";
 import { SigningScheme, type AnyRawTransaction } from "@cedra-labs/ts-sdk";
 import {
+  NOVA_CONNECT_NAME,
   NOVA_WALLET_ICON,
   NOVA_DESK_NAME,
   NOVA_WALLET_NAME,
@@ -149,7 +150,7 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
 
   return {
     version: "1.0.0",
-    name: isMobileBrowser() ? NOVA_WALLET_NAME : NOVA_DESK_NAME,
+    name: NOVA_CONNECT_NAME,
     icon: NOVA_WALLET_ICON,
     url: options.websiteUrl ?? DEFAULT_WEBSITE_URL,
     chains: CEDRA_CHAINS,
@@ -171,7 +172,8 @@ export function registerNovaWallet(options: NovaWalletOptions = {}): void {
   const forceRegistration = options.forceRegistration ?? DEFAULT_REGISTER_FORCE;
   const desktopRegistration = options.desktopRegistration ?? DEFAULT_DESKTOP_REGISTRATION;
   const shouldRegisterDesktop = desktopRegistration && typeof window !== "undefined" && !isMobileBrowser();
-  if (!client.hasProvider() && !client.hasExternalSession() && !forceRegistration && !shouldRegisterDesktop) return;
+  const shouldRegisterMobileRelay = typeof window !== "undefined" && isMobileBrowser();
+  if (!client.hasProvider() && !client.hasExternalSession() && !forceRegistration && !shouldRegisterDesktop && !shouldRegisterMobileRelay) return;
 
   registerWallet(createNovaAIP62Wallet(options));
   registered = true;
