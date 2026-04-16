@@ -18,7 +18,8 @@ import {
   NOVA_DESK_NAME,
   NOVA_WALLET_NAME,
   DEFAULT_DESKTOP_REGISTRATION,
-  DEFAULT_WEBSITE_URL,
+  DEFAULT_DESKTOP_WEBSITE_URL,
+  DEFAULT_MOBILE_WEBSITE_URL,
   DEFAULT_REGISTER_FORCE
 } from "./constants";
 import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
@@ -152,7 +153,7 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
     version: "1.0.0",
     name: NOVA_CONNECT_NAME,
     icon: NOVA_WALLET_ICON,
-    url: options.websiteUrl ?? DEFAULT_WEBSITE_URL,
+    url: options.websiteUrl ?? (isMobileBrowser() ? DEFAULT_MOBILE_WEBSITE_URL : DEFAULT_DESKTOP_WEBSITE_URL),
     chains: CEDRA_CHAINS,
     get accounts() {
       return accounts;

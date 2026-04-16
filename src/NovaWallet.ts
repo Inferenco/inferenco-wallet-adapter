@@ -13,7 +13,8 @@ import type {
 import {
   NOVA_CONNECT_NAME,
   NOVA_DESK_NAME,
-  DEFAULT_WEBSITE_URL,
+  DEFAULT_DESKTOP_WEBSITE_URL,
+  DEFAULT_MOBILE_WEBSITE_URL,
   NOVA_WALLET_ICON,
   NOVA_WALLET_NAME
 } from "./constants";
@@ -52,7 +53,7 @@ export class NovaWallet
 
   constructor(private readonly options: NovaWalletOptions = {}) {
     super();
-    this.url = options.websiteUrl ?? DEFAULT_WEBSITE_URL;
+    this.url = options.websiteUrl ?? (isMobileBrowser() ? DEFAULT_MOBILE_WEBSITE_URL : DEFAULT_DESKTOP_WEBSITE_URL);
     this.client = new NovaClient(options);
   }
 

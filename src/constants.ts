@@ -4,7 +4,10 @@ export const NOVA_CONNECT_NAME = "Nova Connect";
 export const NOVA_WALLET_NAME = "Nova Wallet";
 /** @deprecated Use NOVA_CONNECT_NAME instead. */
 export const NOVA_DESK_NAME = NOVA_CONNECT_NAME;
-export const DEFAULT_WEBSITE_URL = "https://inferenco.com";
+export const DEFAULT_DESKTOP_WEBSITE_URL = "https://inferenco.com/nova-desk";
+export const DEFAULT_MOBILE_WEBSITE_URL = "https://inferenco.com/nova-wallet";
+/** @deprecated Use DEFAULT_DESKTOP_WEBSITE_URL or DEFAULT_MOBILE_WEBSITE_URL instead. */
+export const DEFAULT_WEBSITE_URL = DEFAULT_DESKTOP_WEBSITE_URL;
 export const DEFAULT_DEEPLINK_BASE_URL = "inferenco://connect?callback=";
 export const DEFAULT_DESKTOP_LOGIN_URL = "inferenco://login";
 export const DEFAULT_DESKTOP_BRIDGE_URL = "http://127.0.0.1:21984";

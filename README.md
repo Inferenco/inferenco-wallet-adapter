@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  Wallet adapter for connecting Cedra dApps to <a href="https://inferenco.com">Nova Desk</a> and <a href="https://inferenco.com">Nova Wallet</a>.<br/>
+  Wallet adapter for connecting Cedra dApps to <a href="https://inferenco.com/nova-desk">Nova Desk</a> and <a href="https://inferenco.com/nova-wallet">Nova Wallet</a>.<br/>
   Supports the AIP-62 wallet-standard and plugin-style integration.
 </p>
 
@@ -251,7 +251,7 @@ const wallet = new NovaWallet({
   // Identity & deeplinks
   deeplinkBaseUrl: "inferenco://connect?callback=",
   deeplinkScheme: "inferenco",
-  websiteUrl: "https://inferenco.com",
+  websiteUrl: "https://inferenco.com/nova-desk",
 
   // Registration behavior
   forceRegistration: false,     // Register even without injected provider

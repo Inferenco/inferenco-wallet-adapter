@@ -561,7 +561,9 @@ type NovaWalletName<T extends string = string> = T & { __brand__: "WalletName" }
 | `NOVA_CONNECT_NAME` | `"Nova Connect"` | Public wallet display name |
 | `NOVA_WALLET_NAME` | `"Nova Wallet"` | Internal wallet name |
 | `NOVA_DESK_NAME` | `"Nova Connect"` | Deprecated alias for `NOVA_CONNECT_NAME` |
-| `DEFAULT_WEBSITE_URL` | `"https://inferenco.com"` | Default website URL |
+| `DEFAULT_DESKTOP_WEBSITE_URL` | `"https://inferenco.com/nova-desk"` | Default desktop website URL |
+| `DEFAULT_MOBILE_WEBSITE_URL` | `"https://inferenco.com/nova-wallet"` | Default mobile website URL |
+| `DEFAULT_WEBSITE_URL` | `"https://inferenco.com/nova-desk"` | Deprecated desktop website URL alias |
 | `DEFAULT_DEEPLINK_BASE_URL` | `"inferenco://connect?callback="` | Deeplink base |
 | `DEFAULT_DESKTOP_LOGIN_URL` | `"inferenco://login"` | Desktop login deeplink |
 | `DEFAULT_DESKTOP_BRIDGE_URL` | `"http://127.0.0.1:21984"` | Local bridge URL |
