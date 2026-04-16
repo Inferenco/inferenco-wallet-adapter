@@ -23,6 +23,7 @@ describe("registerNovaWallet", () => {
     registerNovaWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(wallet.name).toBe("Nova Connect");
+    expect(wallet.url).toBe("https://inferenco.com/nova-desk");
     expect(after).toBe(before + 1);
   });
 
@@ -60,6 +61,7 @@ describe("registerNovaWallet", () => {
     registerNovaWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(wallet.name).toBe("Nova Connect");
+    expect(wallet.url).toBe("https://inferenco.com/nova-wallet");
     expect(after).toBe(before + 1);
   });
 });

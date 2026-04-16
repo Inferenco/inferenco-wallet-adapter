@@ -55,7 +55,7 @@ new NovaWallet({
 | | |
 |-|-|
 | **Type** | `string` |
-| **Default** | `"https://inferenco.com"` |
+| **Default** | Desktop: `"https://inferenco.com/nova-desk"`; Mobile: `"https://inferenco.com/nova-wallet"` |
 
 The URL exposed as the wallet's website in the adapter metadata.
 
