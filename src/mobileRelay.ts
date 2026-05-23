@@ -1,8 +1,6 @@
 import {
   AccountAuthenticator,
-  Deserializer,
-  RawTransaction,
-  SimpleTransaction
+  Deserializer
 } from "@cedra-labs/ts-sdk";
 import type {
   CedraSignAndSubmitTransactionInput,
@@ -34,12 +32,14 @@ import {
 import { decryptJson, createKeyPair, deriveSharedSecret, encryptJson } from "./mobileCrypto";
 import { watchRelaySocket } from "./mobileSocket";
 import { NovaAdapterError, NovaErrorCode } from "./errors";
+import { deserializeAnyRawTransaction } from "./conversion";
 import type {
   NovaExternalSession,
   NovaMobilePairingCreateResponse,
   NovaMobilePairingStatus,
   NovaMobileRequestCreateResponse,
   NovaMobileRequestStatus,
+  NovaRawTransactionSignInput,
   NovaWalletOptions
 } from "./types";
 
@@ -400,7 +400,7 @@ export async function signMessageViaMobileRelay(
 }
 
 export async function signTransactionViaMobileRelay(
-  input: CedraSignTransactionInputV1_1,
+  input: CedraSignTransactionInputV1_1 | NovaRawTransactionSignInput,
   session: NovaExternalSession,
   options: NovaWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1> {
@@ -414,9 +414,7 @@ export async function signTransactionViaMobileRelay(
   }>(status.encryptedResult, session.sharedSecret);
   return {
     authenticator: AccountAuthenticator.deserialize(Deserializer.fromHex(result.authenticatorHex)),
-    rawTransaction: new SimpleTransaction(
-      RawTransaction.deserialize(Deserializer.fromHex(result.rawTransactionBcsHex))
-    )
+    rawTransaction: deserializeAnyRawTransaction(result.rawTransactionBcsHex)
   };
 }
 

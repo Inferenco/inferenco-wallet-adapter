@@ -8,6 +8,7 @@ import type {
   CedraSignAndSubmitTransactionOutput,
   CedraSignMessageInput,
   CedraSignMessageOutput,
+  CedraSignTransactionInputV1_1,
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
@@ -29,6 +30,7 @@ import {
   NovaWalletName,
   NovaWalletReadyState,
   NovaSignMessageResponse,
+  NovaSignedTransactionWithAuthenticator,
   NovaTransactionPayload,
   NovaWalletOptions
 } from "./types";
@@ -127,13 +129,13 @@ export class NovaWallet
   }
 
   async signTransaction(
-    transaction: AnyRawTransaction | NovaTransactionPayload,
+    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
     options?: unknown
-  ): Promise<Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array }> {
+  ): Promise<Uint8Array | NovaSignedTransactionWithAuthenticator> {
     const result = await this.client.signTransaction(transaction, options);
     if (result instanceof Uint8Array) return result;
     if (result && typeof result === "object" && "authenticator" in result) {
-      return result as { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array };
+      return result as NovaSignedTransactionWithAuthenticator;
     }
     return {
       authenticator: result as AccountAuthenticator

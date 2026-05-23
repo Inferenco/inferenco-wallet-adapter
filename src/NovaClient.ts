@@ -44,6 +44,7 @@ import type {
   NovaSignMessageResponse,
   NovaExternalSession,
   NovaProvider,
+  NovaRawTransactionSignInput,
   NovaSignTransactionResult,
   NovaTransactionPayload,
   NovaWalletOptions
@@ -53,6 +54,45 @@ type NovaClientEvents = {
   accountChange: [AccountInfo];
   networkChange: [NetworkInfo];
 };
+
+function isWalletStandardSignTransactionInput(
+  transaction: unknown
+): transaction is CedraSignTransactionInputV1_1 {
+  return (
+    !!transaction &&
+    typeof transaction === "object" &&
+    "payload" in transaction &&
+    !("rawTransaction" in transaction) &&
+    !("data" in transaction)
+  );
+}
+
+function isSdkRawTransaction(transaction: unknown): transaction is AnyRawTransaction {
+  return (
+    !!transaction &&
+    typeof transaction === "object" &&
+    "rawTransaction" in transaction &&
+    typeof (transaction as { toString?: unknown }).toString === "function"
+  );
+}
+
+function toExternalSignTransactionInput(
+  transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
+  options?: unknown
+): CedraSignTransactionInputV1_1 | NovaRawTransactionSignInput {
+  if (isWalletStandardSignTransactionInput(transaction)) return transaction;
+
+  if (isSdkRawTransaction(transaction)) {
+    return options === undefined
+      ? { rawTransactionBcsHex: transaction.toString() }
+      : { rawTransactionBcsHex: transaction.toString(), options };
+  }
+
+  throw new NovaAdapterError(
+    NovaErrorCode.Unsupported,
+    "Nova external signTransaction requires a wallet-standard v1.1 payload or prebuilt SDK transaction"
+  );
+}
 
 function unwrap<T>(value: T | { data?: T; args?: T; result?: T }): T {
   if (value && typeof value === "object") {
@@ -331,48 +371,19 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
       const provider = this.refreshProvider();
       if (provider?.signTransaction) {
         return unwrap(
-          await provider.signTransaction(transaction as AnyRawTransaction | NovaTransactionPayload, options)
+          await provider.signTransaction(
+            transaction as AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
+            options
+          )
         );
       }
 
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
-        if (externalSession.transport === "mobile-relay") {
-          if (
-            !transaction ||
-            typeof transaction !== "object" ||
-            !("payload" in transaction) ||
-            "rawTransaction" in transaction ||
-            "data" in transaction
-          ) {
-            throw new NovaAdapterError(
-              NovaErrorCode.Unsupported,
-              "Nova Connect mobile signTransaction requires a wallet-standard v1.1 payload"
-            );
-          }
-          return signTransactionViaMobileRelay(
-            transaction as CedraSignTransactionInputV1_1,
-            externalSession,
-            this.options
-          );
-        }
-        if (
-          !transaction ||
-          typeof transaction !== "object" ||
-          !("payload" in transaction) ||
-          "rawTransaction" in transaction ||
-          "data" in transaction
-        ) {
-          throw new NovaAdapterError(
-            NovaErrorCode.Unsupported,
-            "Nova Desk browser signTransaction requires a wallet-standard v1.1 payload"
-          );
-        }
-        return tryLocalBridgeSignTransaction(
-          transaction as CedraSignTransactionInputV1_1,
-          externalSession,
-          this.options
-        );
+        const externalInput = toExternalSignTransactionInput(transaction, options);
+        return externalSession.transport === "mobile-relay"
+          ? signTransactionViaMobileRelay(externalInput, externalSession, this.options)
+          : tryLocalBridgeSignTransaction(externalInput, externalSession, this.options);
       }
 
       throw new NovaAdapterError(NovaErrorCode.Unsupported, "Nova provider signTransaction() unavailable");

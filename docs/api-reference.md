@@ -122,8 +122,13 @@ Signs a transaction without submitting it.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `transaction` | `AnyRawTransaction \| NovaTransactionPayload` | Transaction to sign |
+| `transaction` | `AnyRawTransaction \| NovaTransactionPayload \| CedraSignTransactionInputV1_1` | Transaction to sign |
 | `options` | `InputGenerateTransactionOptions` | Optional transaction options |
+
+Prebuilt SDK transactions are serialized for external signing. Wallet-standard v1.1
+inputs may include `secondarySigners` and fee payer fields. Signed results preserve
+the returned SDK `AnyRawTransaction`, including multi-agent secondary signer
+addresses and fee payer metadata.
 
 ##### `signAndSubmitTransaction(transaction, options?): Promise<CedraSignAndSubmitTransactionOutput>`
 
@@ -540,7 +545,7 @@ Possible return types from `signTransaction`.
 type NovaSignTransactionResult =
   | AccountAuthenticator
   | Uint8Array
-  | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array }
+  | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array | AnyRawTransaction }
   | CedraSignTransactionOutputV1_1;
 ```
 
@@ -624,7 +629,7 @@ Exported from the main entry point.
 | `normalizeTransactionPayload(transaction)` | Normalize mixed transaction inputs |
 | `normalizeSignMessageOutput(output)` | Normalize signature outputs |
 | `getSdkNetwork(networkInfo?, fullnodeUrl?)` | Get `Cedra` SDK instance for network |
-| `submitSignedTransaction(args)` | Submit a signed transaction via SDK |
+| `submitSignedTransaction(args)` | Submit a signed transaction via SDK, including multi-agent authenticators |
 | `createFullMessage(input, address, chainId?)` | Build full message for signing |
 
 ---

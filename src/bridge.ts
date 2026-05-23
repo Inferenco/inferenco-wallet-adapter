@@ -1,9 +1,7 @@
 import {
   AccountAuthenticator,
   Deserializer,
-  Network,
-  RawTransaction,
-  SimpleTransaction
+  Network
 } from "@cedra-labs/ts-sdk";
 import type {
   AccountInfo,
@@ -22,6 +20,7 @@ import type {
   NovaBridgeStartResponse,
   NovaBridgeTransactionPoll,
   NovaExternalSession,
+  NovaRawTransactionSignInput,
   NovaWalletCoreLike,
   NovaWalletOptions
 } from "./types";
@@ -48,7 +47,7 @@ import {
   NOVA_CONNECT_NAME,
   NOVA_PROTOCOL_KEY_STORAGE_KEY
 } from "./constants";
-import { normalizeProviderAccount } from "./conversion";
+import { deserializeAnyRawTransaction, normalizeProviderAccount } from "./conversion";
 
 type NovaPendingMobilePairing = {
   pairingId: string;
@@ -916,7 +915,7 @@ function normalizeBridgeSignTransactionOutput(
 
   return {
     authenticator: AccountAuthenticator.deserialize(Deserializer.fromHex(authenticatorHex)),
-    rawTransaction: new SimpleTransaction(RawTransaction.deserialize(Deserializer.fromHex(rawTransactionBcsHex)))
+    rawTransaction: deserializeAnyRawTransaction(rawTransactionBcsHex)
   };
 }
 
@@ -1001,7 +1000,7 @@ export async function tryLocalBridgeSignMessage(
 }
 
 export async function tryLocalBridgeSignTransaction(
-  input: CedraSignTransactionInputV1_1,
+  input: CedraSignTransactionInputV1_1 | NovaRawTransactionSignInput,
   session: NovaExternalSession,
   options: NovaWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1> {

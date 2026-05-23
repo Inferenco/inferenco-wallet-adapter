@@ -3,8 +3,12 @@ import {
   AnyPublicKey,
   Cedra,
   CedraConfig,
+  Deserializer,
   Ed25519PublicKey,
-  Network
+  MultiAgentTransaction,
+  Network,
+  RawTransaction,
+  SimpleTransaction
 } from "@cedra-labs/ts-sdk";
 import type {
   AccountAuthenticator,
@@ -30,6 +34,39 @@ export function toUint8Array(input: string | Uint8Array): Uint8Array {
   if (input instanceof Uint8Array) return input;
   const hex = input.startsWith("0x") ? input.slice(2) : input;
   return new Uint8Array(hex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? []);
+}
+
+function tryDeserializeFinished<T>(
+  hex: string,
+  deserialize: (deserializer: Deserializer) => T
+): T | null {
+  try {
+    const deserializer = Deserializer.fromHex(hex);
+    const value = deserialize(deserializer);
+    deserializer.assertFinished();
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+export function deserializeAnyRawTransaction(hex: string): AnyRawTransaction {
+  const multiAgentTransaction = tryDeserializeFinished(hex, (deserializer) =>
+    MultiAgentTransaction.deserialize(deserializer)
+  );
+  if (multiAgentTransaction) return multiAgentTransaction;
+
+  const simpleTransaction = tryDeserializeFinished(hex, (deserializer) =>
+    SimpleTransaction.deserialize(deserializer)
+  );
+  if (simpleTransaction) return simpleTransaction;
+
+  const rawTransaction = tryDeserializeFinished(hex, (deserializer) =>
+    RawTransaction.deserialize(deserializer)
+  );
+  if (rawTransaction) return new SimpleTransaction(rawTransaction);
+
+  throw new Error("Unable to deserialize signed raw transaction payload");
 }
 
 export function normalizeProviderAccount(account: NovaProviderAccount): AccountInfo {
@@ -143,11 +180,27 @@ export async function submitSignedTransaction(args: {
   fullnodeUrl?: string;
   transaction: AnyRawTransaction;
   authenticator: AccountAuthenticator;
+  feePayerAuthenticator?: AccountAuthenticator;
+  additionalSignersAuthenticators?: AccountAuthenticator[];
 }): Promise<PendingTransactionResponse> {
   const cedra = getSdkNetwork(args.network, args.fullnodeUrl);
+  if (args.transaction.secondarySignerAddresses?.length || args.additionalSignersAuthenticators) {
+    if (!args.additionalSignersAuthenticators) {
+      throw new Error("Missing additionalSignersAuthenticators for multi-agent transaction submission");
+    }
+
+    return cedra.transaction.submit.multiAgent({
+      transaction: args.transaction,
+      senderAuthenticator: args.authenticator,
+      additionalSignersAuthenticators: args.additionalSignersAuthenticators,
+      feePayerAuthenticator: args.feePayerAuthenticator
+    });
+  }
+
   return cedra.transaction.submit.simple({
     transaction: args.transaction,
-    senderAuthenticator: args.authenticator
+    senderAuthenticator: args.authenticator,
+    feePayerAuthenticator: args.feePayerAuthenticator
   });
 }
 

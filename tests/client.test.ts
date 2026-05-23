@@ -1,4 +1,12 @@
-import { Account } from "@cedra-labs/ts-sdk";
+import {
+  Account,
+  ChainId,
+  EntryFunction,
+  MultiAgentTransaction,
+  parseTypeTag,
+  RawTransaction,
+  TransactionPayloadEntryFunction
+} from "@cedra-labs/ts-sdk";
 import * as bridge from "../src/bridge";
 import * as mobileRelay from "../src/mobileRelay";
 import { createKeyPair, deriveSharedSecret, encryptJson } from "../src/mobileCrypto";
@@ -161,6 +169,53 @@ describe("NovaClient", () => {
     ).resolves.toBe(true);
     verifySignature.mockRestore();
     verifySignatureAsync.mockRestore();
+  });
+
+  it("serializes prebuilt multi-agent transactions for external signing", async () => {
+    const sender = Account.generate();
+    const secondarySigner = Account.generate();
+    const rawTransaction = new RawTransaction(
+      sender.accountAddress,
+      0n,
+      new TransactionPayloadEntryFunction(
+        EntryFunction.build("0x1::account", "transfer", [], [])
+      ),
+      1_000n,
+      1n,
+      60n,
+      new ChainId(3),
+      parseTypeTag("0x1::cedra_coin::CedraCoin")
+    );
+    const transaction = new MultiAgentTransaction(rawTransaction, [
+      secondarySigner.accountAddress
+    ]);
+    const authenticator = sender.signTransactionWithAuthenticator(transaction);
+    const session = {
+      transport: "desktop-bridge" as const,
+      address: sender.accountAddress.toString(),
+      publicKey: sender.publicKey.toString(),
+      network: "devnet",
+      chainId: 3,
+      sessionId: "session-123",
+      bridgeUrl: "https://bridge.example"
+    };
+    vi.spyOn(bridge, "readValidatedExternalSession").mockResolvedValue(session);
+    const signSpy = vi.spyOn(bridge, "tryLocalBridgeSignTransaction").mockResolvedValue({
+      authenticator,
+      rawTransaction: transaction
+    });
+
+    const client = new NovaClient();
+    await expect(client.signTransaction(transaction)).resolves.toMatchObject({
+      authenticator,
+      rawTransaction: transaction
+    });
+
+    expect(signSpy).toHaveBeenCalledWith(
+      { rawTransactionBcsHex: transaction.toString() },
+      session,
+      {}
+    );
   });
 
   it("completes cold-start desktop connect during the retry window", async () => {
