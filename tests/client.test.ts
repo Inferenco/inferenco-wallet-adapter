@@ -42,6 +42,8 @@ describe("NovaClient", () => {
     const result = await client.connect();
 
     expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
+    expect(result.account.publicKey.toString()).toBe(signer.publicKey.toString());
+    expect(result.account.publicKey.toUint8Array()).toHaveLength(32);
     expect(client.account?.address.toString()).toBe(signer.accountAddress.toString());
     expect(client.cachedNetwork?.name).toBe("devnet");
   });

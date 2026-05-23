@@ -40,8 +40,15 @@ function tryDeserializeFinished<T>(
   hex: string,
   deserialize: (deserializer: Deserializer) => T
 ): T | null {
+  return tryDeserializeBytesFinished(toUint8Array(hex), deserialize);
+}
+
+function tryDeserializeBytesFinished<T>(
+  bytes: Uint8Array,
+  deserialize: (deserializer: Deserializer) => T
+): T | null {
   try {
-    const deserializer = Deserializer.fromHex(hex);
+    const deserializer = new Deserializer(bytes);
     const value = deserialize(deserializer);
     deserializer.assertFinished();
     return value;
@@ -69,11 +76,27 @@ export function deserializeAnyRawTransaction(hex: string): AnyRawTransaction {
   throw new Error("Unable to deserialize signed raw transaction payload");
 }
 
+function normalizeProviderPublicKey(publicKey: string | Uint8Array): Ed25519PublicKey | AnyPublicKey {
+  const bytes = publicKey instanceof Uint8Array ? publicKey : toUint8Array(publicKey);
+  if (bytes.length === Ed25519PublicKey.LENGTH) {
+    return new Ed25519PublicKey(bytes);
+  }
+
+  const anyPublicKey = tryDeserializeBytesFinished(bytes, (deserializer) =>
+    AnyPublicKey.deserialize(deserializer)
+  );
+  if (anyPublicKey?.publicKey instanceof Ed25519PublicKey) {
+    return anyPublicKey.publicKey;
+  }
+  if (anyPublicKey) return anyPublicKey;
+
+  return new Ed25519PublicKey(bytes);
+}
+
 export function normalizeProviderAccount(account: NovaProviderAccount): AccountInfo {
-  const publicKey = account.publicKey instanceof Uint8Array ? account.publicKey : toUint8Array(account.publicKey);
   return new AccountInfo({
     address: AccountAddress.from(account.address),
-    publicKey: new AnyPublicKey(new Ed25519PublicKey(publicKey))
+    publicKey: normalizeProviderPublicKey(account.publicKey)
   });
 }
 
