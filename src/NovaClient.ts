@@ -29,7 +29,13 @@ import {
   tryLocalBridgeSignTransaction,
   waitForExternalSession
 } from "./bridge";
-import { createFullMessage, normalizeNetwork, normalizeProviderAccount, normalizeSignMessageOutput } from "./conversion";
+import {
+  createFullMessage,
+  normalizeNetwork,
+  normalizeProviderAccount,
+  normalizeSignMessageOutput,
+  normalizeSignTransactionResult
+} from "./conversion";
 import { NovaAdapterError, NovaErrorCode, remapNovaError } from "./errors";
 import { buildDeeplinkUrl } from "./deeplink";
 import {
@@ -484,10 +490,12 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
     try {
       const provider = this.refreshProvider();
       if (provider?.signTransaction) {
-        return unwrap(
-          await provider.signTransaction(
-            transaction as AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
-            options
+        return normalizeSignTransactionResult(
+          unwrap(
+            await provider.signTransaction(
+              transaction as AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
+              options
+            )
           )
         );
       }

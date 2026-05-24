@@ -47,7 +47,7 @@ import {
   NOVA_CONNECT_NAME,
   NOVA_PROTOCOL_KEY_STORAGE_KEY
 } from "./constants";
-import { deserializeAnyRawTransaction, normalizeProviderAccount } from "./conversion";
+import { deserializeAnyRawTransaction, ensureBcsToHex, normalizeProviderAccount } from "./conversion";
 
 type NovaPendingMobilePairing = {
   pairingId: string;
@@ -914,7 +914,7 @@ function normalizeBridgeSignTransactionOutput(
   }
 
   return {
-    authenticator: AccountAuthenticator.deserialize(Deserializer.fromHex(authenticatorHex)),
+    authenticator: ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(authenticatorHex))),
     rawTransaction: deserializeAnyRawTransaction(rawTransactionBcsHex)
   };
 }

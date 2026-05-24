@@ -226,6 +226,47 @@ describe("NovaClient", () => {
     );
   });
 
+  it("normalizes provider JSON signTransaction results into SDK-compatible objects", async () => {
+    const sender = Account.generate();
+    const secondarySigner = Account.generate();
+    const rawTransaction = new RawTransaction(
+      sender.accountAddress,
+      0n,
+      new TransactionPayloadEntryFunction(
+        EntryFunction.build("0x1::account", "transfer", [], [])
+      ),
+      1_000n,
+      1n,
+      60n,
+      new ChainId(3),
+      parseTypeTag("0x1::cedra_coin::CedraCoin")
+    );
+    const transaction = new MultiAgentTransaction(rawTransaction, [
+      secondarySigner.accountAddress
+    ]);
+    const authenticator = sender.signTransactionWithAuthenticator(transaction);
+    (window as any).inferenco = {
+      isNovaWallet: true,
+      signTransaction: vi.fn().mockResolvedValue({
+        authenticatorHex: authenticator.toString(),
+        authenticator: { hex: authenticator.toString() },
+        rawTransactionBcsHex: transaction.toString()
+      })
+    };
+
+    const client = new NovaClient();
+    const result = await client.signTransaction(transaction);
+
+    expect(result).toMatchObject({
+      rawTransaction: expect.any(MultiAgentTransaction)
+    });
+    expect(
+      "authenticator" in result &&
+        typeof result.authenticator.bcsToHex === "function" &&
+        result.authenticator.bcsToHex().toString()
+    ).toBe(authenticator.toString());
+  });
+
   it("maps wallet-standard multi-agent metadata for external signing", async () => {
     const sender = Account.generate();
     const secondarySigner = Account.generate();

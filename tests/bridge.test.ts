@@ -273,6 +273,8 @@ describe("bridge resume helpers", () => {
     );
 
     expect(result.rawTransaction).toBeInstanceOf(MultiAgentTransaction);
+    expect(typeof result.authenticator.bcsToHex).toBe("function");
+    expect(result.authenticator.bcsToHex().toString()).toBe(authenticator.toString());
     expect(
       (result.rawTransaction as MultiAgentTransaction).secondarySignerAddresses.map((address) =>
         address.toString()

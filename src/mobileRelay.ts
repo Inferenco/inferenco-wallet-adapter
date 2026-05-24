@@ -32,7 +32,7 @@ import {
 import { decryptJson, createKeyPair, deriveSharedSecret, encryptJson } from "./mobileCrypto";
 import { watchRelaySocket } from "./mobileSocket";
 import { NovaAdapterError, NovaErrorCode } from "./errors";
-import { deserializeAnyRawTransaction } from "./conversion";
+import { deserializeAnyRawTransaction, ensureBcsToHex } from "./conversion";
 import type {
   NovaExternalSignTransactionInput,
   NovaExternalSession,
@@ -413,7 +413,7 @@ export async function signTransactionViaMobileRelay(
     rawTransactionBcsHex: string;
   }>(status.encryptedResult, session.sharedSecret);
   return {
-    authenticator: AccountAuthenticator.deserialize(Deserializer.fromHex(result.authenticatorHex)),
+    authenticator: ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(result.authenticatorHex))),
     rawTransaction: deserializeAnyRawTransaction(result.rawTransactionBcsHex)
   };
 }
