@@ -249,8 +249,34 @@ export interface NovaSignedTransactionWithAuthenticator {
 
 export interface NovaRawTransactionSignInput {
   rawTransactionBcsHex: string;
+  bcsHex?: string;
+  sender?: string;
+  secondarySignerAddresses?: string[];
+  feePayerAddress?: string;
   options?: unknown;
 }
+
+export interface NovaExternalAccountInput {
+  address: string;
+  publicKey?: string;
+}
+
+export type NovaExternalWalletStandardSignInput = Omit<
+  CedraSignTransactionInputV1_1,
+  "feePayer" | "secondarySigners" | "sender" | "signerAddress"
+> & {
+  feePayer?: NovaExternalAccountInput;
+  feePayerAddress?: string;
+  secondarySigners?: NovaExternalAccountInput[];
+  secondarySignerAddresses?: string[];
+  sender?: string;
+  signerAddress?: string;
+  options?: unknown;
+};
+
+export type NovaExternalSignTransactionInput =
+  | NovaRawTransactionSignInput
+  | NovaExternalWalletStandardSignInput;
 
 export interface NovaProvider {
   isNovaWallet?: boolean;

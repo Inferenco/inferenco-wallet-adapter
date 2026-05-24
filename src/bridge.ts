@@ -20,7 +20,7 @@ import type {
   NovaBridgeStartResponse,
   NovaBridgeTransactionPoll,
   NovaExternalSession,
-  NovaRawTransactionSignInput,
+  NovaExternalSignTransactionInput,
   NovaWalletCoreLike,
   NovaWalletOptions
 } from "./types";
@@ -1000,7 +1000,7 @@ export async function tryLocalBridgeSignMessage(
 }
 
 export async function tryLocalBridgeSignTransaction(
-  input: CedraSignTransactionInputV1_1 | NovaRawTransactionSignInput,
+  input: CedraSignTransactionInputV1_1 | NovaExternalSignTransactionInput,
   session: NovaExternalSession,
   options: NovaWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1> {

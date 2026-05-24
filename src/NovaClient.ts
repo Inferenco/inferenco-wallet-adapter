@@ -41,6 +41,8 @@ import {
 } from "./mobileRelay";
 import { detectProvider } from "./provider";
 import type {
+  NovaExternalAccountInput,
+  NovaExternalSignTransactionInput,
   NovaSignMessageResponse,
   NovaExternalSession,
   NovaProvider,
@@ -76,16 +78,128 @@ function isSdkRawTransaction(transaction: unknown): transaction is AnyRawTransac
   );
 }
 
+function addressToString(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && "address" in value) {
+    return addressToString((value as { address?: unknown }).address);
+  }
+  if (
+    typeof value === "object" &&
+    "toString" in value &&
+    typeof (value as { toString?: unknown }).toString === "function"
+  ) {
+    const text = (value as { toString: () => string }).toString();
+    return text && text !== "[object Object]" ? text : undefined;
+  }
+  return undefined;
+}
+
+function publicKeyToString(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "object" &&
+    "toString" in value &&
+    typeof (value as { toString?: unknown }).toString === "function"
+  ) {
+    const text = (value as { toString: () => string }).toString();
+    return text && text !== "[object Object]" ? text : undefined;
+  }
+  return undefined;
+}
+
+function normalizeExternalAccountInput(input: unknown): NovaExternalAccountInput | undefined {
+  const address = addressToString(input);
+  if (!address) return undefined;
+
+  const publicKey =
+    input && typeof input === "object" && "publicKey" in input
+      ? publicKeyToString((input as { publicKey?: unknown }).publicKey)
+      : undefined;
+
+  return publicKey ? { address, publicKey } : { address };
+}
+
+function toJsonCompatibleValue(value: unknown): unknown {
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Uint8Array) return Array.from(value);
+  if (Array.isArray(value)) return value.map(toJsonCompatibleValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        toJsonCompatibleValue(item)
+      ])
+    );
+  }
+  return value;
+}
+
+function normalizeWalletStandardSignTransactionInput(
+  transaction: CedraSignTransactionInputV1_1,
+  options?: unknown
+): NovaExternalSignTransactionInput {
+  const input: Record<string, unknown> = { ...transaction };
+  const sender = normalizeExternalAccountInput(transaction.sender);
+  const signerAddress = addressToString(transaction.signerAddress);
+  const feePayer = normalizeExternalAccountInput(transaction.feePayer);
+  const secondarySigners = transaction.secondarySigners
+    ?.map(normalizeExternalAccountInput)
+    .filter((account): account is NovaExternalAccountInput => !!account);
+
+  if (sender) input.sender = sender.address;
+  if (signerAddress) input.signerAddress = signerAddress;
+  if (feePayer) {
+    input.feePayer = feePayer;
+    input.feePayerAddress = feePayer.address;
+  }
+  if (secondarySigners?.length) {
+    input.secondarySigners = secondarySigners;
+    input.secondarySignerAddresses = secondarySigners.map((account) => account.address);
+  }
+  if (options !== undefined) input.options = options;
+
+  return toJsonCompatibleValue(input) as NovaExternalSignTransactionInput;
+}
+
+function normalizeSdkRawTransactionInput(
+  transaction: AnyRawTransaction,
+  options?: unknown
+): NovaRawTransactionSignInput {
+  const rawTransactionBcsHex = transaction.toString();
+  const input: NovaRawTransactionSignInput = {
+    rawTransactionBcsHex,
+    bcsHex: rawTransactionBcsHex
+  };
+  const rawTransaction = (transaction as { rawTransaction?: { sender?: unknown } }).rawTransaction;
+  const sender = addressToString(rawTransaction?.sender);
+  const secondarySignerAddresses = (transaction as { secondarySignerAddresses?: unknown[] })
+    .secondarySignerAddresses
+    ?.map(addressToString)
+    .filter((address): address is string => !!address);
+  const feePayerAddress = addressToString(
+    (transaction as { feePayerAddress?: unknown }).feePayerAddress
+  );
+
+  if (sender) input.sender = sender;
+  if (secondarySignerAddresses?.length) input.secondarySignerAddresses = secondarySignerAddresses;
+  if (feePayerAddress) input.feePayerAddress = feePayerAddress;
+  if (options !== undefined) input.options = options;
+
+  return input;
+}
+
 function toExternalSignTransactionInput(
   transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
   options?: unknown
-): CedraSignTransactionInputV1_1 | NovaRawTransactionSignInput {
-  if (isWalletStandardSignTransactionInput(transaction)) return transaction;
+): NovaExternalSignTransactionInput {
+  if (isWalletStandardSignTransactionInput(transaction)) {
+    return normalizeWalletStandardSignTransactionInput(transaction, options);
+  }
 
   if (isSdkRawTransaction(transaction)) {
-    return options === undefined
-      ? { rawTransactionBcsHex: transaction.toString() }
-      : { rawTransactionBcsHex: transaction.toString(), options };
+    return normalizeSdkRawTransactionInput(transaction, options);
   }
 
   throw new NovaAdapterError(

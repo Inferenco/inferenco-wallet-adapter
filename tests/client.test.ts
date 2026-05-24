@@ -7,6 +7,7 @@ import {
   RawTransaction,
   TransactionPayloadEntryFunction
 } from "@cedra-labs/ts-sdk";
+import type { CedraSignTransactionInputV1_1 } from "@cedra-labs/wallet-standard";
 import * as bridge from "../src/bridge";
 import * as mobileRelay from "../src/mobileRelay";
 import { createKeyPair, deriveSharedSecret, encryptJson } from "../src/mobileCrypto";
@@ -214,7 +215,81 @@ describe("NovaClient", () => {
     });
 
     expect(signSpy).toHaveBeenCalledWith(
-      { rawTransactionBcsHex: transaction.toString() },
+      {
+        rawTransactionBcsHex: transaction.toString(),
+        bcsHex: transaction.toString(),
+        sender: sender.accountAddress.toString(),
+        secondarySignerAddresses: [secondarySigner.accountAddress.toString()]
+      },
+      session,
+      {}
+    );
+  });
+
+  it("maps wallet-standard multi-agent metadata for external signing", async () => {
+    const sender = Account.generate();
+    const secondarySigner = Account.generate();
+    const feePayer = Account.generate();
+    const rawTransaction = new RawTransaction(
+      sender.accountAddress,
+      0n,
+      new TransactionPayloadEntryFunction(
+        EntryFunction.build("0x1::account", "transfer", [], [])
+      ),
+      1_000n,
+      1n,
+      60n,
+      new ChainId(3),
+      parseTypeTag("0x1::cedra_coin::CedraCoin")
+    );
+    const transaction = new MultiAgentTransaction(rawTransaction, [
+      secondarySigner.accountAddress
+    ], feePayer.accountAddress);
+    const authenticator = sender.signTransactionWithAuthenticator(transaction);
+    const input: CedraSignTransactionInputV1_1 = {
+      sender: { address: sender.accountAddress },
+      secondarySigners: [{ address: secondarySigner.accountAddress }],
+      feePayer: { address: feePayer.accountAddress },
+      payload: {
+        function: "0x1::account::transfer",
+        typeArguments: [],
+        functionArguments: []
+      },
+      gasUnitPrice: 1,
+      maxGasAmount: 1_000,
+      sequenceNumber: 0n,
+      expirationTimestamp: 60,
+      network: "devnet" as never
+    };
+    const session = {
+      transport: "desktop-bridge" as const,
+      address: sender.accountAddress.toString(),
+      publicKey: sender.publicKey.toString(),
+      network: "devnet",
+      chainId: 3,
+      sessionId: "session-123",
+      bridgeUrl: "https://bridge.example"
+    };
+    vi.spyOn(bridge, "readValidatedExternalSession").mockResolvedValue(session);
+    const signSpy = vi.spyOn(bridge, "tryLocalBridgeSignTransaction").mockResolvedValue({
+      authenticator,
+      rawTransaction: transaction
+    });
+
+    const client = new NovaClient();
+    await expect(client.signTransaction(input)).resolves.toMatchObject({
+      authenticator,
+      rawTransaction: transaction
+    });
+
+    expect(signSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: input.payload,
+        sequenceNumber: "0",
+        sender: sender.accountAddress.toString(),
+        secondarySignerAddresses: [secondarySigner.accountAddress.toString()],
+        feePayerAddress: feePayer.accountAddress.toString()
+      }),
       session,
       {}
     );

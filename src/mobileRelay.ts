@@ -34,12 +34,12 @@ import { watchRelaySocket } from "./mobileSocket";
 import { NovaAdapterError, NovaErrorCode } from "./errors";
 import { deserializeAnyRawTransaction } from "./conversion";
 import type {
+  NovaExternalSignTransactionInput,
   NovaExternalSession,
   NovaMobilePairingCreateResponse,
   NovaMobilePairingStatus,
   NovaMobileRequestCreateResponse,
   NovaMobileRequestStatus,
-  NovaRawTransactionSignInput,
   NovaWalletOptions
 } from "./types";
 
@@ -400,7 +400,7 @@ export async function signMessageViaMobileRelay(
 }
 
 export async function signTransactionViaMobileRelay(
-  input: CedraSignTransactionInputV1_1 | NovaRawTransactionSignInput,
+  input: CedraSignTransactionInputV1_1 | NovaExternalSignTransactionInput,
   session: NovaExternalSession,
   options: NovaWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1> {
