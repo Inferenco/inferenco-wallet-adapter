@@ -1,9 +1,7 @@
 import {
   AccountAuthenticator,
   Deserializer,
-  Network,
-  RawTransaction,
-  SimpleTransaction
+  Network
 } from "@cedra-labs/ts-sdk";
 import type {
   AccountInfo,
@@ -22,6 +20,7 @@ import type {
   NovaBridgeStartResponse,
   NovaBridgeTransactionPoll,
   NovaExternalSession,
+  NovaExternalSignTransactionInput,
   NovaWalletCoreLike,
   NovaWalletOptions
 } from "./types";
@@ -48,7 +47,7 @@ import {
   NOVA_CONNECT_NAME,
   NOVA_PROTOCOL_KEY_STORAGE_KEY
 } from "./constants";
-import { normalizeProviderAccount } from "./conversion";
+import { deserializeAnyRawTransaction, ensureBcsToHex, normalizeProviderAccount } from "./conversion";
 
 type NovaPendingMobilePairing = {
   pairingId: string;
@@ -906,17 +905,25 @@ function normalizeBridgeSignMessageOutput(payload: NovaBridgeMessagePoll): Cedra
 
 function normalizeBridgeSignTransactionOutput(
   payload: NovaBridgeSignTransactionPoll
-): CedraSignTransactionOutputV1_1 {
-  const authenticatorHex = payload.authenticatorHex ?? payload.authenticator_hex;
+): CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string } {
   const rawTransactionBcsHex = payload.rawTransactionBcsHex ?? payload.raw_transaction_bcs_hex;
+  
+  // Check for authenticatorHex directly, or nested in authenticator.hex
+  let authenticatorHex = payload.authenticatorHex ?? payload.authenticator_hex;
+  if (!authenticatorHex && payload.authenticator && typeof payload.authenticator === 'object') {
+    const nestedAuthenticator = payload.authenticator as { hex?: string };
+    authenticatorHex = nestedAuthenticator.hex;
+  }
 
   if (typeof authenticatorHex !== "string" || typeof rawTransactionBcsHex !== "string") {
     throw new Error("Nova Desk bridge returned an incomplete signTransaction payload");
   }
 
   return {
-    authenticator: AccountAuthenticator.deserialize(Deserializer.fromHex(authenticatorHex)),
-    rawTransaction: new SimpleTransaction(RawTransaction.deserialize(Deserializer.fromHex(rawTransactionBcsHex)))
+    authenticator: ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(authenticatorHex))),
+    rawTransaction: deserializeAnyRawTransaction(rawTransactionBcsHex),
+    authenticatorHex,
+    rawTransactionBcsHex
   };
 }
 
@@ -1001,7 +1008,7 @@ export async function tryLocalBridgeSignMessage(
 }
 
 export async function tryLocalBridgeSignTransaction(
-  input: CedraSignTransactionInputV1_1,
+  input: CedraSignTransactionInputV1_1 | NovaExternalSignTransactionInput,
   session: NovaExternalSession,
   options: NovaWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1> {

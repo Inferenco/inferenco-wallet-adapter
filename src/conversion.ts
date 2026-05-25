@@ -1,13 +1,18 @@
 import {
   AccountAddress,
+  AccountAuthenticator,
   AnyPublicKey,
   Cedra,
   CedraConfig,
+  Deserializer,
   Ed25519PublicKey,
-  Network
+  Hex,
+  MultiAgentTransaction,
+  Network,
+  RawTransaction,
+  SimpleTransaction
 } from "@cedra-labs/ts-sdk";
 import type {
-  AccountAuthenticator,
   AnyRawTransaction,
   InputGenerateTransactionOptions,
   InputGenerateTransactionPayloadData,
@@ -21,6 +26,7 @@ import type {
 import { AccountInfo } from "@cedra-labs/wallet-standard";
 import type {
   NovaSignMessageResponse,
+  NovaSignTransactionResult,
   NovaTransactionPayload,
   NovaProviderAccount
 } from "./types";
@@ -32,11 +38,151 @@ export function toUint8Array(input: string | Uint8Array): Uint8Array {
   return new Uint8Array(hex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? []);
 }
 
+function tryDeserializeFinished<T>(
+  hex: string,
+  deserialize: (deserializer: Deserializer) => T
+): T | null {
+  return tryDeserializeBytesFinished(toUint8Array(hex), deserialize);
+}
+
+function tryDeserializeBytesFinished<T>(
+  bytes: Uint8Array,
+  deserialize: (deserializer: Deserializer) => T
+): T | null {
+  try {
+    const deserializer = new Deserializer(bytes);
+    const value = deserialize(deserializer);
+    deserializer.assertFinished();
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+export function deserializeAnyRawTransaction(hex: string): AnyRawTransaction {
+  const multiAgentTransaction = tryDeserializeFinished(hex, (deserializer) =>
+    MultiAgentTransaction.deserialize(deserializer)
+  );
+  if (multiAgentTransaction) return multiAgentTransaction;
+
+  const simpleTransaction = tryDeserializeFinished(hex, (deserializer) =>
+    SimpleTransaction.deserialize(deserializer)
+  );
+  if (simpleTransaction) return simpleTransaction;
+
+  const rawTransaction = tryDeserializeFinished(hex, (deserializer) =>
+    RawTransaction.deserialize(deserializer)
+  );
+  if (rawTransaction) return new SimpleTransaction(rawTransaction);
+
+  throw new Error("Unable to deserialize signed raw transaction payload");
+}
+
+export function ensureBcsToHex<T extends { toString: () => string }>(
+  value: T
+): T & { bcsToHex: () => Hex } {
+  const target = value as T & { bcsToHex?: () => Hex };
+  if (typeof target.bcsToHex !== "function") {
+    Object.defineProperty(target, "bcsToHex", {
+      configurable: true,
+      value: () => Hex.fromHexInput(value.toString())
+    });
+  }
+  return target as T & { bcsToHex: () => Hex };
+}
+
+function stringField(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object" || !(key in value)) return undefined;
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === "string" ? field : undefined;
+}
+
+function normalizeAuthenticator(value: unknown, hex?: string): AccountAuthenticator | undefined {
+  const nestedHex = stringField(value, "hex");
+  if (hex || nestedHex) {
+    return ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(hex ?? nestedHex!)));
+  }
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { toString?: unknown }).toString === "function"
+  ) {
+    const text = (value as { toString: () => string }).toString();
+    if (text && text !== "[object Object]") {
+      return ensureBcsToHex(value as AccountAuthenticator);
+    }
+  }
+  return undefined;
+}
+
+function normalizeRawTransaction(value: unknown, hex?: string): AnyRawTransaction | Uint8Array | undefined {
+  if (hex) return deserializeAnyRawTransaction(hex);
+  if (value instanceof Uint8Array) return value;
+  if (value && typeof value === "object") return value as AnyRawTransaction;
+  return undefined;
+}
+
+export function normalizeSignTransactionResult(result: unknown): NovaSignTransactionResult {
+  if (result instanceof Uint8Array || !result || typeof result !== "object") {
+    return result as NovaSignTransactionResult;
+  }
+
+  const authenticatorHex =
+    stringField(result, "authenticatorHex") ?? stringField(result, "authenticator_hex");
+  const rawTransactionBcsHex =
+    stringField(result, "rawTransactionBcsHex") ?? stringField(result, "raw_transaction_bcs_hex");
+  const hasAuthenticatorField = "authenticator" in result;
+  const hasRawTransactionField = "rawTransaction" in result;
+  const authenticator = normalizeAuthenticator(
+    hasAuthenticatorField ? (result as { authenticator?: unknown }).authenticator : result,
+    authenticatorHex
+  );
+
+  if (!authenticator) return result as NovaSignTransactionResult;
+
+  const rawTransaction = normalizeRawTransaction(
+    hasRawTransactionField ? (result as { rawTransaction?: unknown }).rawTransaction : undefined,
+    rawTransactionBcsHex
+  );
+  if (rawTransaction) {
+    return {
+      ...(result as Record<string, unknown>),
+      authenticator,
+      rawTransaction
+    } as NovaSignTransactionResult;
+  }
+
+  if (hasAuthenticatorField) {
+    return {
+      ...(result as Record<string, unknown>),
+      authenticator
+    } as NovaSignTransactionResult;
+  }
+
+  return authenticator;
+}
+
+function normalizeProviderPublicKey(publicKey: string | Uint8Array): Ed25519PublicKey | AnyPublicKey {
+  const bytes = publicKey instanceof Uint8Array ? publicKey : toUint8Array(publicKey);
+  if (bytes.length === Ed25519PublicKey.LENGTH) {
+    return new Ed25519PublicKey(bytes);
+  }
+
+  const anyPublicKey = tryDeserializeBytesFinished(bytes, (deserializer) =>
+    AnyPublicKey.deserialize(deserializer)
+  );
+  if (anyPublicKey?.publicKey instanceof Ed25519PublicKey) {
+    return anyPublicKey.publicKey;
+  }
+  if (anyPublicKey) return anyPublicKey;
+
+  return new Ed25519PublicKey(bytes);
+}
+
 export function normalizeProviderAccount(account: NovaProviderAccount): AccountInfo {
-  const publicKey = account.publicKey instanceof Uint8Array ? account.publicKey : toUint8Array(account.publicKey);
   return new AccountInfo({
     address: AccountAddress.from(account.address),
-    publicKey: new AnyPublicKey(new Ed25519PublicKey(publicKey))
+    publicKey: normalizeProviderPublicKey(account.publicKey)
   });
 }
 
@@ -143,11 +289,27 @@ export async function submitSignedTransaction(args: {
   fullnodeUrl?: string;
   transaction: AnyRawTransaction;
   authenticator: AccountAuthenticator;
+  feePayerAuthenticator?: AccountAuthenticator;
+  additionalSignersAuthenticators?: AccountAuthenticator[];
 }): Promise<PendingTransactionResponse> {
   const cedra = getSdkNetwork(args.network, args.fullnodeUrl);
+  if (args.transaction.secondarySignerAddresses?.length || args.additionalSignersAuthenticators) {
+    if (!args.additionalSignersAuthenticators) {
+      throw new Error("Missing additionalSignersAuthenticators for multi-agent transaction submission");
+    }
+
+    return cedra.transaction.submit.multiAgent({
+      transaction: args.transaction,
+      senderAuthenticator: args.authenticator,
+      additionalSignersAuthenticators: args.additionalSignersAuthenticators,
+      feePayerAuthenticator: args.feePayerAuthenticator
+    });
+  }
+
   return cedra.transaction.submit.simple({
     transaction: args.transaction,
-    senderAuthenticator: args.authenticator
+    senderAuthenticator: args.authenticator,
+    feePayerAuthenticator: args.feePayerAuthenticator
   });
 }
 

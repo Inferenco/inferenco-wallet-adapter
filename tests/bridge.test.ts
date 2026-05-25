@@ -1,4 +1,14 @@
 import {
+  Account,
+  ChainId,
+  EntryFunction,
+  MultiAgentTransaction,
+  parseTypeTag,
+  RawTransaction,
+  TransactionPayloadEntryFunction
+} from "@cedra-labs/ts-sdk";
+import type { CedraSignTransactionInputV1_1 } from "@cedra-labs/wallet-standard";
+import {
   NOVA_CALLBACK_MARKER_STORAGE_KEY,
   NOVA_CONNECT_NAME
 } from "../src/constants";
@@ -7,6 +17,7 @@ import {
   storeCallbackSession,
   storeExternalSession,
   storePendingMobilePairing,
+  tryLocalBridgeSignTransaction,
   tryResumeNovaWalletConnection,
   waitForExternalSession
 } from "../src/bridge";
@@ -192,5 +203,82 @@ describe("bridge resume helpers", () => {
       address: "0xabc"
     });
     vi.useRealTimers();
+  });
+
+  it("preserves multi-agent transaction metadata returned by the signing bridge", async () => {
+    const sender = Account.generate();
+    const secondarySigner = Account.generate();
+    const rawTransaction = new RawTransaction(
+      sender.accountAddress,
+      0n,
+      new TransactionPayloadEntryFunction(
+        EntryFunction.build("0x1::account", "transfer", [], [])
+      ),
+      1_000n,
+      1n,
+      60n,
+      new ChainId(3),
+      parseTypeTag("0x1::cedra_coin::CedraCoin")
+    );
+    const transaction = new MultiAgentTransaction(rawTransaction, [
+      secondarySigner.accountAddress
+    ]);
+    const authenticator = sender.signTransactionWithAuthenticator(transaction);
+    const input: CedraSignTransactionInputV1_1 = {
+      payload: {
+        function: "0x1::account::transfer",
+        typeArguments: [],
+        functionArguments: []
+      }
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/sign-transaction")) {
+        return new Response(JSON.stringify({ requestId: "request-123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      if (url.endsWith("/sign-transaction-request/request-123")) {
+        return new Response(
+          JSON.stringify({
+            status: "approved",
+            authenticatorHex: authenticator.toString(),
+            rawTransactionBcsHex: transaction.toString()
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const result = await tryLocalBridgeSignTransaction(
+      input,
+      {
+        transport: "desktop-bridge",
+        address: sender.accountAddress.toString(),
+        publicKey: sender.publicKey.toString(),
+        network: "devnet",
+        chainId: 3,
+        sessionId: "session-123",
+        bridgeUrl: "https://bridge.example"
+      },
+      { bridgePollIntervalMs: 1, bridgePollTimeoutMs: 1_000 }
+    );
+
+    expect(result.rawTransaction).toBeInstanceOf(MultiAgentTransaction);
+    expect(typeof result.authenticator.bcsToHex).toBe("function");
+    expect(result.authenticator.bcsToHex().toString()).toBe(authenticator.toString());
+    expect(
+      (result.rawTransaction as MultiAgentTransaction).secondarySignerAddresses.map((address) =>
+        address.toString()
+      )
+    ).toEqual([secondarySigner.accountAddress.toString()]);
   });
 });

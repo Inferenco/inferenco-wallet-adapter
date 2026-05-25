@@ -230,8 +230,13 @@ The `encryptedRequest` contains the method-specific payload, encrypted with the 
 
 **Methods:**
 - `signMessage` &mdash; `{ message, nonce, address?, application?, chainId? }`
-- `signTransaction` &mdash; `{ rawTransactionBcsHex, options? }`
+- `signTransaction` &mdash; wallet-standard v1.1 input, or legacy `{ rawTransactionBcsHex, options? }`
 - `signAndSubmitTransaction` &mdash; `{ transactionPayload, options? }`
+
+For `signTransaction` responses, `rawTransactionBcsHex` should encode the full SDK
+transaction wrapper (`SimpleTransaction` or `MultiAgentTransaction`). Legacy
+raw-only `RawTransaction` BCS is still accepted for single-signer transactions, but
+it cannot carry secondary signer or fee payer metadata.
 
 **Response:**
 

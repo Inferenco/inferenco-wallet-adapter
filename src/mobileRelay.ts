@@ -1,8 +1,6 @@
 import {
   AccountAuthenticator,
-  Deserializer,
-  RawTransaction,
-  SimpleTransaction
+  Deserializer
 } from "@cedra-labs/ts-sdk";
 import type {
   CedraSignAndSubmitTransactionInput,
@@ -34,7 +32,9 @@ import {
 import { decryptJson, createKeyPair, deriveSharedSecret, encryptJson } from "./mobileCrypto";
 import { watchRelaySocket } from "./mobileSocket";
 import { NovaAdapterError, NovaErrorCode } from "./errors";
+import { deserializeAnyRawTransaction, ensureBcsToHex } from "./conversion";
 import type {
+  NovaExternalSignTransactionInput,
   NovaExternalSession,
   NovaMobilePairingCreateResponse,
   NovaMobilePairingStatus,
@@ -400,10 +400,10 @@ export async function signMessageViaMobileRelay(
 }
 
 export async function signTransactionViaMobileRelay(
-  input: CedraSignTransactionInputV1_1,
+  input: CedraSignTransactionInputV1_1 | NovaExternalSignTransactionInput,
   session: NovaExternalSession,
   options: NovaWalletOptions = {}
-): Promise<CedraSignTransactionOutputV1_1> {
+): Promise<CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string }> {
   const status = await startRequest("signTransaction", input, session, options);
   if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
     throwForStatus(status.status, status.errorMessage);
@@ -413,10 +413,10 @@ export async function signTransactionViaMobileRelay(
     rawTransactionBcsHex: string;
   }>(status.encryptedResult, session.sharedSecret);
   return {
-    authenticator: AccountAuthenticator.deserialize(Deserializer.fromHex(result.authenticatorHex)),
-    rawTransaction: new SimpleTransaction(
-      RawTransaction.deserialize(Deserializer.fromHex(result.rawTransactionBcsHex))
-    )
+    authenticator: ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(result.authenticatorHex))),
+    rawTransaction: deserializeAnyRawTransaction(result.rawTransactionBcsHex),
+    authenticatorHex: result.authenticatorHex,
+    rawTransactionBcsHex: result.rawTransactionBcsHex
   };
 }
 

@@ -1,4 +1,13 @@
 import { getCedraWallets } from "@cedra-labs/wallet-standard";
+import {
+  Account,
+  ChainId,
+  EntryFunction,
+  MultiAgentTransaction,
+  parseTypeTag,
+  RawTransaction,
+  TransactionPayloadEntryFunction
+} from "@cedra-labs/ts-sdk";
 
 describe("registerNovaWallet", () => {
   afterEach(() => {
@@ -63,5 +72,51 @@ describe("registerNovaWallet", () => {
     expect(wallet.name).toBe("Nova Connect");
     expect(wallet.url).toBe("https://inferenco.com/nova-wallet");
     expect(after).toBe(before + 1);
+  });
+
+  it("returns SDK-compatible authenticators from provider JSON signTransaction results", async () => {
+    const sender = Account.generate();
+    const secondarySigner = Account.generate();
+    const rawTransaction = new RawTransaction(
+      sender.accountAddress,
+      0n,
+      new TransactionPayloadEntryFunction(
+        EntryFunction.build("0x1::account", "transfer", [], [])
+      ),
+      1_000n,
+      1n,
+      60n,
+      new ChainId(3),
+      parseTypeTag("0x1::cedra_coin::CedraCoin")
+    );
+    const transaction = new MultiAgentTransaction(rawTransaction, [
+      secondarySigner.accountAddress
+    ]);
+    const authenticator = sender.signTransactionWithAuthenticator(transaction);
+    (window as any).inferenco = {
+      isNovaWallet: true,
+      signTransaction: vi.fn().mockResolvedValue({
+        authenticatorHex: authenticator.toString(),
+        authenticator: { hex: authenticator.toString() },
+        rawTransactionBcsHex: transaction.toString()
+      })
+    };
+
+    const { createNovaAIP62Wallet } = await import("../src/aip62");
+    const wallet = createNovaAIP62Wallet();
+    const response = await wallet.features["cedra:signTransaction"].signTransaction(transaction);
+
+    expect(response.status).toBe("Approved");
+    if (!("args" in response)) throw new Error("Expected approved signTransaction response");
+    const args = response.args as unknown as {
+      authenticator: {
+        bcsToHex?: () => { toString: () => string };
+      };
+    };
+    expect(
+      "authenticator" in args &&
+        typeof args.authenticator.bcsToHex === "function" &&
+        args.authenticator.bcsToHex().toString()
+    ).toBe(authenticator.toString());
   });
 });

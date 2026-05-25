@@ -148,6 +148,9 @@ export interface NovaBridgeSignTransactionPoll {
   role?: string;
   sender?: string;
   error?: string;
+  authenticator?: {
+    hex?: string;
+  };
 }
 
 export interface NovaBridgeTransactionPoll {
@@ -242,6 +245,42 @@ export interface NovaProviderResponse<T> {
   result?: T;
 }
 
+export interface NovaSignedTransactionWithAuthenticator {
+  authenticator: AccountAuthenticator;
+  rawTransaction?: Uint8Array | AnyRawTransaction;
+}
+
+export interface NovaRawTransactionSignInput {
+  rawTransactionBcsHex: string;
+  bcsHex?: string;
+  sender?: string;
+  secondarySignerAddresses?: string[];
+  feePayerAddress?: string;
+  options?: unknown;
+}
+
+export interface NovaExternalAccountInput {
+  address: string;
+  publicKey?: string;
+}
+
+export type NovaExternalWalletStandardSignInput = Omit<
+  CedraSignTransactionInputV1_1,
+  "feePayer" | "secondarySigners" | "sender" | "signerAddress"
+> & {
+  feePayer?: NovaExternalAccountInput;
+  feePayerAddress?: string;
+  secondarySigners?: NovaExternalAccountInput[];
+  secondarySignerAddresses?: string[];
+  sender?: string;
+  signerAddress?: string;
+  options?: unknown;
+};
+
+export type NovaExternalSignTransactionInput =
+  | NovaRawTransactionSignInput
+  | NovaExternalWalletStandardSignInput;
+
 export interface NovaProvider {
   isNovaWallet?: boolean;
   connect?: (...args: unknown[]) => Promise<NovaProviderAccount | NovaProviderResponse<NovaProviderAccount>>;
@@ -252,9 +291,9 @@ export interface NovaProvider {
     input: CedraSignMessageInput | SignMessagePayload
   ) => Promise<CedraSignMessageOutput | NovaSignMessageResponse | NovaProviderResponse<CedraSignMessageOutput | NovaSignMessageResponse>>;
   signTransaction?: (
-    transaction: AnyRawTransaction | NovaTransactionPayload,
+    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
     options?: unknown
-  ) => Promise<AccountAuthenticator | Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array } | CedraSignTransactionOutputV1_1 | NovaProviderResponse<AccountAuthenticator | Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array } | CedraSignTransactionOutputV1_1>>;
+  ) => Promise<AccountAuthenticator | Uint8Array | NovaSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1 | NovaProviderResponse<AccountAuthenticator | Uint8Array | NovaSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1>>;
   signAndSubmitTransaction?: (
     transaction: AnyRawTransaction | NovaTransactionPayload,
     options?: unknown
@@ -294,9 +333,9 @@ export interface NovaWalletAdapterLike {
     options?: InputGenerateTransactionOptions
   ): Promise<CedraSignAndSubmitTransactionOutput>;
   signTransaction(
-    transaction: AnyRawTransaction | NovaTransactionPayload,
+    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
     options?: InputGenerateTransactionOptions
-  ): Promise<Uint8Array | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array }>;
+  ): Promise<Uint8Array | NovaSignedTransactionWithAuthenticator>;
   signMessage(
     message: CedraSignMessageInput | SignMessagePayload
   ): Promise<CedraSignMessageOutput | NovaSignMessageResponse>;
@@ -319,5 +358,5 @@ export interface NovaWalletCoreLike {
 export type NovaSignTransactionResult =
   | AccountAuthenticator
   | Uint8Array
-  | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array }
+  | NovaSignedTransactionWithAuthenticator
   | CedraSignTransactionOutputV1_1;

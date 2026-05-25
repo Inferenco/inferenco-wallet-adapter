@@ -194,12 +194,17 @@ The plugin adapter class, compatible with plugin-style wallet consumers.
 | `account()` | `Promise<AccountInfo>` | Get current account info |
 | `disconnect()` | `Promise<void>` | Disconnect and clear session |
 | `signMessage(input)` | `Promise<CedraSignMessageOutput>` | Sign an arbitrary message |
-| `signTransaction(tx, opts?)` | `Promise<Uint8Array \| { authenticator, rawTransaction? }>` | Sign a transaction without submitting |
+| `signTransaction(tx, opts?)` | `Promise<Uint8Array \| { authenticator, rawTransaction?: AnyRawTransaction }>` | Sign a transaction without submitting |
 | `signAndSubmitTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>` | Sign and submit a transaction |
 | `signAndSubmitBCSTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>` | Sign and submit (BCS variant) |
 | `onAccountChange(cb)` | `Promise<void>` | Subscribe to account changes |
 | `onNetworkChange(cb)` | `Promise<void>` | Subscribe to network changes |
 | `deeplinkProvider(url?)` | `string` | Generate a deeplink URL |
+
+`signTransaction` accepts prebuilt SDK transactions and Cedra wallet-standard v1.1
+inputs, including `secondarySigners` and fee payer fields. When the wallet returns
+a signed multi-agent transaction, the adapter preserves the SDK `AnyRawTransaction`
+wrapper so secondary signer and fee payer metadata remains available for submission.
 
 **Properties:**
 
