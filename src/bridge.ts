@@ -905,9 +905,15 @@ function normalizeBridgeSignMessageOutput(payload: NovaBridgeMessagePoll): Cedra
 
 function normalizeBridgeSignTransactionOutput(
   payload: NovaBridgeSignTransactionPoll
-): CedraSignTransactionOutputV1_1 {
-  const authenticatorHex = payload.authenticatorHex ?? payload.authenticator_hex;
+): CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string } {
   const rawTransactionBcsHex = payload.rawTransactionBcsHex ?? payload.raw_transaction_bcs_hex;
+  
+  // Check for authenticatorHex directly, or nested in authenticator.hex
+  let authenticatorHex = payload.authenticatorHex ?? payload.authenticator_hex;
+  if (!authenticatorHex && payload.authenticator && typeof payload.authenticator === 'object') {
+    const nestedAuthenticator = payload.authenticator as { hex?: string };
+    authenticatorHex = nestedAuthenticator.hex;
+  }
 
   if (typeof authenticatorHex !== "string" || typeof rawTransactionBcsHex !== "string") {
     throw new Error("Nova Desk bridge returned an incomplete signTransaction payload");
@@ -915,7 +921,9 @@ function normalizeBridgeSignTransactionOutput(
 
   return {
     authenticator: ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(authenticatorHex))),
-    rawTransaction: deserializeAnyRawTransaction(rawTransactionBcsHex)
+    rawTransaction: deserializeAnyRawTransaction(rawTransactionBcsHex),
+    authenticatorHex,
+    rawTransactionBcsHex
   };
 }
 

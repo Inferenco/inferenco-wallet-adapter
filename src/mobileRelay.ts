@@ -403,7 +403,7 @@ export async function signTransactionViaMobileRelay(
   input: CedraSignTransactionInputV1_1 | NovaExternalSignTransactionInput,
   session: NovaExternalSession,
   options: NovaWalletOptions = {}
-): Promise<CedraSignTransactionOutputV1_1> {
+): Promise<CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string }> {
   const status = await startRequest("signTransaction", input, session, options);
   if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
     throwForStatus(status.status, status.errorMessage);
@@ -414,7 +414,9 @@ export async function signTransactionViaMobileRelay(
   }>(status.encryptedResult, session.sharedSecret);
   return {
     authenticator: ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(result.authenticatorHex))),
-    rawTransaction: deserializeAnyRawTransaction(result.rawTransactionBcsHex)
+    rawTransaction: deserializeAnyRawTransaction(result.rawTransactionBcsHex),
+    authenticatorHex: result.authenticatorHex,
+    rawTransactionBcsHex: result.rawTransactionBcsHex
   };
 }
 

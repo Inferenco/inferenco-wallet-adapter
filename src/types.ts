@@ -148,6 +148,9 @@ export interface NovaBridgeSignTransactionPoll {
   role?: string;
   sender?: string;
   error?: string;
+  authenticator?: {
+    hex?: string;
+  };
 }
 
 export interface NovaBridgeTransactionPoll {
