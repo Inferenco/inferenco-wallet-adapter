@@ -13,3 +13,20 @@ export {
 } from "./token.js";
 
 export { getBridgeBaseUrlWithToken, bridgePathWithToken, bridgeUrlWithToken } from "./url.js";
+
+/**
+ * A3 (deeplink hardening, PKCE): public re-exports for the PKCE
+ * helper. The dapp calls `generatePkcePair()` once per connect
+ * attempt, stores the `codeVerifier` in `sessionStorage`, passes
+ * the `codeChallenge` to `launchDesktopOrMobileConnect`, and on the
+ * callback invokes `storeCallbackSessionViaPkce({ codeVerifier })`
+ * (or `exchangeCodeForSession` directly).
+ */
+export {
+  PkceVerificationFailed,
+  appendCodeChallengeToDeeplink,
+  exchangeCodeForSession,
+  generatePkcePair
+} from "./pkce.js";
+
+export type { PkcePair } from "./pkce.js";

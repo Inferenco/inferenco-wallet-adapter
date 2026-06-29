@@ -141,7 +141,20 @@ export function buildDesktopOrMobileConnectUrl(
     redirect: callbackUrl,
     app: typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk"
   });
-  return `${DEFAULT_DESKTOP_LOGIN_URL}?${params.toString()}`;
+  let url = `${DEFAULT_DESKTOP_LOGIN_URL}?${params.toString()}`;
+
+  // A3 (deeplink hardening): if the dapp passed a `codeChallenge` in
+  // its options, append it to the deeplink URL. The wallet reads
+  // this on launch and stores it for the eventual `/exchange`
+  // request. The dapp keeps the `code_verifier` private; the
+  // wallet only sees the `code_challenge`.
+  const codeChallenge = (options as { codeChallenge?: string }).codeChallenge;
+  if (typeof codeChallenge === "string" && codeChallenge.length > 0) {
+    const separator = url.includes("?") ? "&" : "?";
+    url = `${url}${separator}code_challenge=${encodeURIComponent(codeChallenge)}`;
+  }
+
+  return url;
 }
 
 export function launchDesktopOrMobileConnect(
@@ -592,6 +605,70 @@ export function storeCallbackSession(): void {
     broadcastReadySession(callbackSession);
     tryCloseCallbackWindow();
   }
+}
+
+/**
+ * A3 (deeplink hardening, PKCE consumption): the dapp calls this
+ * from its callback handler when the URL has a `code` param instead
+ * of the legacy `address`/`sessionId` bundle. The helper reads the
+ * `code_verifier` from `sessionStorage` (where the dapp stored it
+ * before firing the deeplink), calls `exchangeCodeForSession`, and
+ * stores the resulting session in `localStorage`. Cleans up the
+ * `code` query param and the `sessionStorage` entry.
+ *
+ * Returns the consumed session, or `null` if no `code` param was
+ * present (callers should fall through to `storeCallbackSession` in
+ * that case for the legacy flow).
+ */
+export async function storeCallbackSessionViaPkce(input: {
+  codeVerifier: string;
+  options?: NovaWalletOptions;
+}): Promise<NovaExternalSession | null> {
+  if (!isBrowser()) return null;
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get("code");
+  if (!code) return null;
+  if (typeof input.codeVerifier !== "string" || input.codeVerifier.length === 0) {
+    throw new Error("codeVerifier is required to consume a PKCE callback");
+  }
+
+  const { exchangeCodeForSession } = await import("./bridge/pkce.js");
+  const session = await exchangeCodeForSession({
+    code,
+    codeVerifier: input.codeVerifier,
+    options: input.options
+  });
+
+  storeExternalSession({
+    transport: "desktop-bridge",
+    address: session.address,
+    publicKey: session.publicKey,
+    network: session.network,
+    chainId: session.chainId,
+    sessionId: session.sessionId,
+    bridgeUrl: session.bridgeUrl,
+    walletName: session.walletName ?? "Nova Connect"
+  });
+
+  // Mark the callback as resolved for the legacy marker path.
+  window.sessionStorage.setItem(
+    NOVA_CALLBACK_MARKER_STORAGE_KEY,
+    JSON.stringify({
+      requestId: "pkce",
+      status: "approved"
+    } satisfies NovaCallbackMarker)
+  );
+
+  // Strip the `code` query param from the URL.
+  url.searchParams.delete("code");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+
+  const stored = readExternalSession();
+  if (stored) {
+    broadcastReadySession(stored);
+    tryCloseCallbackWindow();
+  }
+  return stored;
 }
 
 export function readCallbackMarker(): NovaCallbackMarker | null {

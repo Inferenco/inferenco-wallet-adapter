@@ -39,6 +39,10 @@ export const CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM = "protocolPublicKey";
 export const CALLBACK_WALLET_NAME_PARAM = "walletName";
 export const CALLBACK_REQUEST_ID_PARAM = "novaRequestId";
 export const CALLBACK_STATUS_PARAM = "novaStatus";
+/** A3 (PKCE): the dapp keeps the code_verifier here between the deeplink
+ * launch and the callback. The sessionStorage is cleared by the
+ * callback consumer once the verifier is consumed. */
+export const PKCE_VERIFIER_STORAGE_KEY = "inferenco:pkce-verifier";
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#0a3d91"/><path d="M32 12 40 28 56 32 40 36 32 52 24 36 8 32 24 28Z" fill="#66d9ff"/></svg>`;
 
