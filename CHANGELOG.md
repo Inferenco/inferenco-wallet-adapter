@@ -5,6 +5,30 @@ All notable changes to `@inferenco/nova-wallet-adapter` will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.5] - 2026-06-29
+
+### Fixed (transparent deeplink fallback)
+
+- **`tryLocalBridgeConnect` no longer throws `MissingBridgeTokenError` synchronously.** When the dapp is in an external browser and the per-session URL token is not available, the function used to throw at the `bridgePathWithToken` call site (before the existing deeplink fallback at `NovaClient.connect` could fire). It now catches the throw and returns `null`, allowing the existing deeplink flow to take over: the OS hands off to Nova Desk, the user approves, the browser returns to the dapp's callback URL, and `tryResumeNovaWalletConnection` (which the dapp's `useEffect` already calls) consumes the session. **No dapp code change required.**
+
+- **`tryResumeNovaWalletConnection` now auto-consumes the URL callback** before reading from `localStorage`. The new `consumeExternalCallbackIfPresent(options)` helper detects either the legacy `?address=...&sessionId=...` bundle or the PKCE `?code=...` query param, stores the resulting session in `localStorage`, and the rest of the resume flow picks it up. This is the second half of the transparent deeplink path: the dapp's `useEffect` runs `tryResumeNovaWalletConnection` on every page load, so the callback consumption is automatic.
+
+### Backwards compatibility
+
+- The dapp dev's contract is unchanged: call `walletCore.connect('Nova Connect')`. In the embedded browser, this works directly. In an external browser, the adapter fires the `inferenco://` deeplink internally and the user comes back connected. No new exports are required and no opt-in is needed.
+- The `MissingBridgeTokenError` exception is no longer thrown to the dapp for the no-token case (the deeplink fallback catches it). It is still exported and can still be thrown by direct callers of `readBridgeToken` / `ensureBridgeToken` if they bypass the `walletCore.connect` path.
+- `consumeExternalCallbackIfPresent(options)` is exported for dapps that want to call it directly (e.g. in a SPA route that handles the callback URL), but the standard useEffect path does not need to call it explicitly.
+
+### Test totals
+
+77 → 83 (+6 new in `tests/bridge/transparent_deeplink.test.ts`):
+  - `no_op_when_url_has_no_callback_params`
+  - `consumes_legacy_callback_address_param_into_localStorage`
+  - `consumes_pkce_callback_code_param_into_localStorage`
+  - `prefers_pkce_over_legacy_when_both_are_present`
+  - `tolerates_malformed_url_without_throwing`
+  - `tryLocalBridgeConnect returns_null_when_readBridgeToken_throws_MissingBridgeTokenError`
+
 ## [0.2.0-rc.4] - 2026-06-29
 
 ### Added (deeplink hardening, non-breaking)

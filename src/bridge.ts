@@ -3,7 +3,8 @@ import {
   Deserializer,
   Network
 } from "@cedra-labs/ts-sdk";
-import { CallbackOriginMismatch } from "./errors.js";
+import { CallbackOriginMismatch, NovaAdapterError } from "./errors.js";
+import { MissingBridgeTokenError } from "./bridge/token.js";
 import type {
   AccountInfo,
   CedraSignAndSubmitTransactionInput,
@@ -46,7 +47,8 @@ import {
   NOVA_EXTERNAL_SESSION_STORAGE_KEY,
   NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY,
   NOVA_CONNECT_NAME,
-  NOVA_PROTOCOL_KEY_STORAGE_KEY
+  NOVA_PROTOCOL_KEY_STORAGE_KEY,
+  PKCE_VERIFIER_STORAGE_KEY
 } from "./constants";
 import { forceRefreshBridgeToken } from "./bridge/token.js";
 import { bridgePathWithToken, bridgeUrlWithToken, getBridgeBaseUrlWithToken } from "./bridge/url.js";
@@ -231,6 +233,53 @@ export function readExternalSession(): NovaExternalSession | null {
 
 export function hasStoredExternalSession(): boolean {
   return !!readExternalSession();
+}
+
+/**
+ * 0.2.0-rc.5: if the dapp just returned from a Nova Desk
+ * deeplink handoff, the URL has either the legacy
+ * `?address=...&sessionId=...` bundle or the PKCE
+ * `?code=...` query param. Consume it into localStorage so the
+ * rest of the resume flow (which reads from localStorage) can
+ * pick it up. The dapp dev does not need to call any of this
+ * directly — `tryResumeNovaWalletConnection` invokes this on
+ * every page load.
+ */
+export async function consumeExternalCallbackIfPresent(
+  options: NovaWalletOptions = {}
+): Promise<void> {
+  if (!isBrowser()) return;
+  // Defensive: if the location isn't a parseable URL (jsdom test
+  // setup, server-side render, etc.), skip the callback consumption.
+  // The resume flow falls through to the localStorage read.
+  let url: URL;
+  try {
+    url = new URL(window.location.href);
+  } catch {
+    return;
+  }
+
+  if (url.searchParams.has("code")) {
+    const codeVerifier = window.sessionStorage.getItem(PKCE_VERIFIER_STORAGE_KEY);
+    if (codeVerifier) {
+      // Best-effort: if the PKCE exchange fails (e.g. wallet
+      // unreachable, expired code, missing verifier), the localStorage
+      // read below is the next fallback. We do not throw — the
+      // resume helper is `async` and the dapp's useEffect can
+      // surface the failure separately if it wants to.
+      try {
+        await storeCallbackSessionViaPkce({ codeVerifier, options });
+      } catch {
+        // Swallow; the caller is `tryResumeNovaWalletConnection`,
+        // which has its own error surface.
+      }
+      return;
+    }
+  }
+
+  if (url.searchParams.has(CALLBACK_ADDRESS_PARAM)) {
+    storeCallbackSession();
+  }
 }
 
 export function storeExternalSession(session: NovaExternalSession): void {
@@ -870,6 +919,16 @@ export async function tryResumeNovaWalletConnection(
   if (!isBrowser()) return false;
   installExternalSessionResumeListeners();
 
+  // 0.2.0-rc.5: if Nova Desk redirected us back to the dapp with
+  // a callback URL (legacy `?address=...&sessionId=...` or PKCE
+  // `?code=...`), consume it BEFORE the localStorage read. The
+  // dapp's useEffect calls this on every page load; if the URL
+  // has callback params, they land in localStorage here and the
+  // existing flow below picks them up. This makes the deeplink
+  // path transparent to the dapp dev — no callback handling code
+  // required.
+  await consumeExternalCallbackIfPresent(options);
+
   const candidateWalletName = [NOVA_CONNECT_NAME, LEGACY_NOVA_DESK_LABEL].find((walletName) =>
     walletCore.wallets.some((wallet) => wallet.name === walletName)
   );
@@ -956,7 +1015,32 @@ async function pollBridge<T extends { status?: string; error?: string }>(
 export async function tryLocalBridgeConnect(options: NovaWalletOptions = {}): Promise<AccountInfo | null> {
   if (!isBrowser() || isMobileBrowser()) return null;
 
-  const connectUrl = new URL(bridgePathWithToken("/connect", options), DEFAULT_DESKTOP_BRIDGE_URL);
+  // 0.2.0-rc.5: catch the synchronous `MissingBridgeTokenError` from
+  // `bridgePathWithToken` (which calls `readBridgeToken`).
+  // The dapp is in an external browser, the per-session URL token
+  // is not available, and the bridge is unreachable. Return null
+  // so the caller (`NovaClient.connect`) can fire its existing
+  // deeplink fallback at line 340+. The page navigates away,
+  // the user approves in Nova Desk, the browser returns to the
+  // dapp's callback URL, and `tryResumeNovaWalletConnection` on
+  // the new page consumes the session. The dapp dev code does
+  // not need to change.
+  let connectPath: string;
+  try {
+    connectPath = bridgePathWithToken("/connect", options);
+  } catch (error) {
+    if (
+      error instanceof MissingBridgeTokenError ||
+      // Some other synchronous failure (e.g. `bridgeBaseUrl` not a
+      // URL): also fall through to the deeplink fallback rather
+      // than surfacing a hard error.
+      !(error instanceof NovaAdapterError)
+    ) {
+      return null;
+    }
+    throw error;
+  }
+  const connectUrl = new URL(connectPath, DEFAULT_DESKTOP_BRIDGE_URL);
   connectUrl.searchParams.set("origin", window.location.origin);
   connectUrl.searchParams.set("app", typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk");
   const connectUrlString = connectUrl.toString();
