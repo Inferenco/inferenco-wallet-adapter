@@ -25,7 +25,7 @@ export const DEFAULT_BRIDGE_POLL_INTERVAL_MS = 250;
 export const DEFAULT_BRIDGE_POLL_TIMEOUT_MS = 120000;
 export const NOVA_PROTOCOL_KEY_STORAGE_KEY = "inferenco:nova-protocol-key";
 export const MISSING_BRIDGE_TOKEN_MESSAGE =
-  "Nova Desk bridge token not available. Open this dapp via Nova Desk.";
+  "Nova Desk bridge token not available. Open this dapp via Nova Desk (either inside its embedded browser, or via the inferenco:// deeplink).";
 export const NOVA_EXTERNAL_SESSION_STORAGE_KEY = "inferenco:nova-session";
 export const NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY = "inferenco:nova-pending-mobile-pairing";
 export const NOVA_CALLBACK_MARKER_STORAGE_KEY = "inferenco:nova-callback-marker";

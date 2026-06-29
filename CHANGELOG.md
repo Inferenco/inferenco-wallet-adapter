@@ -20,6 +20,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test-only token helpers (`_resetBridgeTokenForTesting`,
   `_setBridgeTokenForTesting`) remain internal.
 
+## [0.2.0-rc.4] - 2026-06-29
+
+### Changed (clarification, not a new feature)
+
+- **External browsers must use the deeplink flow.** Earlier
+  drafts proposed a third delivery channel (a token-free
+  `GET /token` discovery endpoint on the wallet's HTTP bridge)
+  to let external dapps learn the per-session URL token without
+  the deeplink. The wallet side of that proposal was rejected
+  — it bypasses the F-03 token-prefix security boundary, which
+  is the audit-intended control. `0.2.0-rc.4` documents the
+  supported path instead:
+  1. The dapp detects that no token is available
+     (`readBridgeToken()` / `ensureBridgeToken()` throws
+     `MissingBridgeTokenError`).
+  2. The dapp calls `launchDesktopOrMobileConnect(options)`,
+     which fires the `inferenco://` deeplink. The OS hands
+     off to Nova Desk.
+  3. Nova Desk shows the approval sheet, the user approves,
+     and Nova Desk redirects the browser back to the dapp
+     with the session in the callback URL.
+  4. The dapp's existing `installExternalSessionResumeListeners()`
+     + `tryResumeNovaWalletConnection` flow picks up the
+     callback and stores the session.
+  5. Subsequent bridge calls use the new session normally.
+  This is the same flow the deeplink has always used; nothing
+  about the audit broke it. The dapp just needs to call
+  `launchDesktopOrMobileConnect` on its Connect button when
+  the adapter reports no token.
+
+- **Error message tightened.** `MISSING_BRIDGE_TOKEN_MESSAGE`
+  now explicitly tells the dapp user to open the dapp via
+  Nova Desk (either inside its embedded browser or via the
+  `inferenco://` deeplink), instead of a generic "open this
+  dapp via Nova Desk" hint.
+
+### Test totals
+
+60 passing — no test changes in this commit (the HTTP
+discovery path was a previous-commit artefact, and the
+deeplink flow is already covered by existing tests in
+`tests/bridge.test.ts` and `tests/aip62.test.ts`).
+
 ## [0.2.0-rc.2] - 2026-06-29
 
 > **WARNING — broken release. Do not use.**

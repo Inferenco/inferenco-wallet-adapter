@@ -115,6 +115,11 @@ function resolveFromPathname(): string | null {
  *
  * Safe to call from any module. The first call kicks off the listener
  * registration; subsequent calls return the cached value once resolved.
+ *
+ * Note: this is the synchronous accessor. If you can await, prefer
+ * `ensureBridgeToken()` which lets both delivery channels complete
+ * before resolving. The sync variant is for URL constructors that
+ * need a string at the moment of construction.
  */
 export function readBridgeToken(): string {
   if (resolvedToken !== null) return resolvedToken;
@@ -132,12 +137,6 @@ export function readBridgeToken(): string {
     installPostMessageListener(ready);
   }
 
-  // We are not in an async context here; the caller is expected to be
-  // either (a) inside an `await` that wraps `readBridgeToken` (the
-  // helper `ensureBridgeToken` below) or (b) inside a URL constructor
-  // that is invoked lazily. Both paths can tolerate the synchronous
-  // throw — the typical dapp flow awaits `ensureBridgeToken` before
-  // any bridge call.
   if (resolvedToken !== null) return resolvedToken;
 
   throw new MissingBridgeTokenError();
@@ -146,6 +145,22 @@ export function readBridgeToken(): string {
 /**
  * Async accessor. Awaits the postMessage listener (or rejects on
  * timeout). Use this from connect/sign flows where you can await.
+ *
+ * Order of resolution:
+ *   1. Cached token from a previous call.
+ *   2. `window.location.pathname` first segment — used when the dapp
+ *      is loaded inside Nova Desk's embedded browser.
+ *   3. `window.postMessage({type:"nova:bridge-token", token})` — the
+ *      wallet's embedded provider script posts this once at
+ *      script-injection time.
+ *
+ * There is intentionally **no** HTTP discovery fallback. The wallet's
+ * HTTP bridge is protected by the per-session URL token (F-03); the
+ * token is the security boundary. External browsers (regular Chrome
+ * tabs at e.g. `localhost:5173`) that do not share a window with the
+ * wallet's webview cannot learn the token through this adapter and
+ * must use the `inferenco://` deeplink flow instead — see
+ * `launchDesktopOrMobileConnect` exported from `./bridge.js`.
  */
 export async function ensureBridgeToken(): Promise<string> {
   if (resolvedToken !== null) return resolvedToken;
