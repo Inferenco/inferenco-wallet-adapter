@@ -54,3 +54,27 @@ export function remapNovaError(error: unknown): never {
 
   throw new NovaAdapterError(NovaErrorCode.InternalError, message, error);
 }
+
+/**
+ * Thrown by `tryResumeNovaWalletConnection` when the dapp passes an
+ * `expectedOrigin` option and the callback URL's `window.location.origin`
+ * does not match. Indicates the deeplink flow was redirected to a
+ * different origin than the dapp that initiated it — likely a phishing
+ * attempt.
+ */
+export class CallbackOriginMismatch extends Error {
+  readonly expected: string;
+  readonly actual: string;
+
+  constructor(expected: string, actual: string) {
+    super(
+      `Callback origin mismatch: expected ${expected}, got ${actual}. ` +
+        `Refusing to consume a session whose origin does not match the dapp's. ` +
+        `This usually indicates a phishing attempt or a misconfigured deeplink.`
+    );
+    this.name = "CallbackOriginMismatch";
+    this.expected = expected;
+    this.actual = actual;
+    Object.setPrototypeOf(this, CallbackOriginMismatch.prototype);
+  }
+}

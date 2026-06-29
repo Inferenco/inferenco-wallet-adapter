@@ -81,6 +81,15 @@ export interface NovaWalletOptions {
   mobilePollIntervalMs?: number;
   mobileRequestTimeoutMs?: number;
   mobileSocketTimeoutMs?: number;
+  /**
+   * Tier 1 (deeplink hardening): if set, the adapter verifies that
+   * the deeplink callback's `window.location.origin` matches this
+   * value before consuming the session. A mismatch throws
+   * `CallbackOriginMismatch`. Defends against phishing sites that
+   * redirect the deeplink flow to a different origin than the dapp
+   * that initiated the connection.
+   */
+  expectedOrigin?: string;
 }
 
 export interface NovaExternalSession {

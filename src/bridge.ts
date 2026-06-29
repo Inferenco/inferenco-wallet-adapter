@@ -3,6 +3,7 @@ import {
   Deserializer,
   Network
 } from "@cedra-labs/ts-sdk";
+import { CallbackOriginMismatch } from "./errors.js";
 import type {
   AccountInfo,
   CedraSignAndSubmitTransactionInput,
@@ -168,6 +169,21 @@ function parseExternalSession(
     return null;
   }
 
+  // Tier 1 (deeplink hardening): the wallet name is set by the wallet,
+  // not the dapp. An attacker who controls the callback URL can
+  // substitute any string here to confuse the dapp's UI. Reject any
+  // value other than the canonical `NOVA_CONNECT_NAME`. The legacy
+  // alias `LEGACY_NOVA_DESK_LABEL` is also accepted for backward
+  // compatibility with older wallet builds that named themselves
+  // "Nova Desk" (pre-0.1.1).
+  if (
+    typeof candidate.walletName === "string" &&
+    candidate.walletName !== NOVA_CONNECT_NAME &&
+    candidate.walletName !== LEGACY_NOVA_DESK_LABEL
+  ) {
+    return null;
+  }
+
   return {
     transport: candidate.transport === "mobile-relay" ? "mobile-relay" : "desktop-bridge",
     address: candidate.address,
@@ -301,7 +317,14 @@ function sessionBridgeBaseUrl(
   session: Pick<NovaExternalSession, "bridgeUrl">,
   options: NovaWalletOptions = {}
 ): string {
-  const configuredUrl = session.bridgeUrl ?? bridgeBaseUrl(options);
+  // Tier 1 (deeplink hardening): the dapp's configured `bridgeBaseUrl`
+  // is the source of truth. `session.bridgeUrl` is treated as advisory
+  // only — an attacker who controls the callback URL can substitute any
+  // string there to point the dapp at a fake bridge server that logs
+  // every signed message. We only fall back to `session.bridgeUrl`
+  // when the dapp did not configure its own.
+  const configuredUrl =
+    options.bridgeBaseUrl ?? session.bridgeUrl ?? bridgeBaseUrl(options);
 
   try {
     const url = new URL(configuredUrl);
@@ -312,7 +335,7 @@ function sessionBridgeBaseUrl(
     }
     return url.toString();
   } catch {
-    return bridgeBaseUrl(options);
+    return options.bridgeBaseUrl ?? bridgeBaseUrl(options);
   }
 }
 
@@ -775,6 +798,23 @@ export async function tryResumeNovaWalletConnection(
   );
   if (!candidateWalletName) {
     return false;
+  }
+
+  // Tier 1 (deeplink hardening): if the dapp passed an `expectedOrigin`
+  // option, verify that the callback URL's `window.location.origin`
+  // matches. A mismatch indicates the deeplink was redirected to a
+  // different origin than the dapp that initiated the connection —
+  // usually a phishing attempt. This check fires after `readValidatedExternalSession`
+  // has accepted the session shape; it's a defense-in-depth check on
+  // where the callback actually landed.
+  const expectedOrigin = (options as { expectedOrigin?: string }).expectedOrigin;
+  if (expectedOrigin && typeof window !== "undefined") {
+    const actualOrigin = window.location.origin;
+    if (actualOrigin !== expectedOrigin) {
+      // Clear the session so a subsequent retry starts clean.
+      clearExternalSession();
+      throw new CallbackOriginMismatch(expectedOrigin, actualOrigin);
+    }
   }
 
   const hasPendingResume = hasPendingMobilePairingCallbackResume();
