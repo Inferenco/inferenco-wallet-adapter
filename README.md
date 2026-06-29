@@ -8,7 +8,7 @@
   <a href="https://github.com/Inferenco/nova-plugin-wallet-adapter/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="license" /></a>
   <img src="https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/ESM%20%2B%20CJS-supported-brightgreen" alt="Module formats" />
-  <img src="https://img.shields.io/badge/version-0.1.0-0a3d91" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.2.0--rc.2-0a3d91" alt="version" />
 </p>
 
 <p align="center">
@@ -50,6 +50,36 @@ yarn add @inferenco/nova-wallet-adapter
 ```bash
 pnpm add @inferenco/nova-wallet-adapter
 ```
+
+> **Note:** versions `0.2.0-rc.1` is a broken release — see [Bridge token](#bridge-token) for the migration path. Upgrade directly to `0.2.0-rc.2` or later.
+
+## Bridge token
+
+Nova Desk's HTTP bridge binds at `http://127.0.0.1:21984/<token>/<route>` and rejects unprefixed requests with 404 (no CORS). The token is generated at every wallet startup and is delivered to the dapp via two channels:
+
+1. **`window.postMessage({type: "nova:bridge-token", token: "<64-hex>"})`** — fires once at provider script injection when the dapp is loaded inside Nova Desk's embedded browser.
+2. **`bridgeToken` field in the `GET /<token>/connect` response body** — the only channel available to an external browser tab.
+
+The adapter consumes either channel and prefixes every bridge URL with `/<token>/`. No dapp-side configuration is required.
+
+```typescript
+import { readBridgeToken, bridgeUrlWithToken, MISSING_BRIDGE_TOKEN_MESSAGE } from "@inferenco/nova-wallet-adapter";
+
+// The token is read at module-init time. After wallet restart, the
+// dapp re-reads on the next page load.
+const token = readBridgeToken();
+console.log("current bridge token:", token);
+
+// Build a fully-qualified URL with the per-session token in the path.
+const url = bridgeUrlWithToken("/connect", { bridgeBaseUrl: "http://127.0.0.1:21984" });
+// => "http://127.0.0.1:21984/<token>/connect"
+
+// If the dapp is opened outside Nova Desk, the adapter throws this:
+MISSING_BRIDGE_TOKEN_MESSAGE;
+// => "Nova Desk bridge token not available. Open this dapp via Nova Desk."
+```
+
+See [`docs/bridge-token.md`](docs/bridge-token.md) for the full contract.
 
 ## Quick Start
 
