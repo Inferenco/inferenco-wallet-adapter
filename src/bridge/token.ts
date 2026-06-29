@@ -26,6 +26,8 @@
 
 import { MISSING_BRIDGE_TOKEN_MESSAGE } from "../constants.js";
 
+export { MISSING_BRIDGE_TOKEN_MESSAGE };
+
 export const BRIDGE_TOKEN_PATH_REGEX = /^[0-9a-f]{64}$/;
 
 export class MissingBridgeTokenError extends Error {
@@ -162,7 +164,9 @@ export async function ensureBridgeToken(): Promise<string> {
 
 /**
  * Test-only: reset the cached token. Used by the unit tests to simulate
- * token rotation mid-session. Not exported from the package index.
+ * token rotation mid-session. Not re-exported from the package index
+ * (use the explicit `*_for_testing` imports inside the test suite).
+ * @internal
  */
 export function _resetBridgeTokenForTesting(): void {
   resolvedToken = null;
@@ -172,6 +176,7 @@ export function _resetBridgeTokenForTesting(): void {
 /**
  * Test-only: directly set the cached token. Used to verify the URL
  * constructor in the absence of a real postMessage delivery.
+ * @internal
  */
 export function _setBridgeTokenForTesting(token: string | null): void {
   if (token === null) {

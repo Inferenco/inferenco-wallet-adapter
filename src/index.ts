@@ -3,9 +3,17 @@ export * from "./types";
 export * from "./errors";
 export * from "./provider";
 export * from "./deeplink";
-export * from "./bridge";
-export * from "./bridge/token.js";
-export * from "./bridge/url.js";
+export {
+  BRIDGE_TOKEN_PATH_REGEX,
+  MISSING_BRIDGE_TOKEN_MESSAGE,
+  MissingBridgeTokenError,
+  bridgePathWithToken,
+  bridgeUrlWithToken,
+  ensureBridgeToken,
+  forceRefreshBridgeToken,
+  getBridgeBaseUrlWithToken,
+  readBridgeToken
+} from "./bridge/index-public.js";
 export * from "./conversion";
 export * from "./NovaClient";
 export * from "./NovaWallet";
