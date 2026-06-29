@@ -3,6 +3,7 @@ export * from "./types";
 export * from "./errors";
 export * from "./provider";
 export * from "./deeplink";
+export * from "./bridge";
 export {
   BRIDGE_TOKEN_PATH_REGEX,
   MISSING_BRIDGE_TOKEN_MESSAGE,
