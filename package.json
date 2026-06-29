@@ -1,6 +1,6 @@
 {
   "name": "@inferenco/nova-wallet-adapter",
-  "version": "0.2.0-rc.2",
+  "version": "0.2.0-rc.3",
   "description": "Standalone Nova wallet adapter for Cedra dapps",
   "license": "Apache-2.0",
   "author": "TOO Spielcrypto and Singularity Shift Ltd",

@@ -8,7 +8,7 @@
   <a href="https://github.com/Inferenco/nova-plugin-wallet-adapter/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="license" /></a>
   <img src="https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/ESM%20%2B%20CJS-supported-brightgreen" alt="Module formats" />
-  <img src="https://img.shields.io/badge/version-0.2.0--rc.2-0a3d91" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.2.0--rc.3-0a3d91" alt="version" />
 </p>
 
 <p align="center">
@@ -51,7 +51,7 @@ yarn add @inferenco/nova-wallet-adapter
 pnpm add @inferenco/nova-wallet-adapter
 ```
 
-> **Note:** versions `0.2.0-rc.1` is a broken release — see [Bridge token](#bridge-token) for the migration path. Upgrade directly to `0.2.0-rc.2` or later.
+> **Note:** versions `0.2.0-rc.1` and `0.2.0-rc.2` are broken releases — see [Bridge token](#bridge-token) for the migration path. Upgrade directly to `0.2.0-rc.3` or later.
 
 ## Bridge token
 
