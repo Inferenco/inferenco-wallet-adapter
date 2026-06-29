@@ -21,6 +21,7 @@ import {
   tryResumeNovaWalletConnection,
   waitForExternalSession
 } from "../src/bridge";
+import { _setBridgeTokenForTesting } from "../src/bridge/token";
 
 describe("bridge resume helpers", () => {
   const originalBroadcastChannel = globalThis.BroadcastChannel;
@@ -231,6 +232,12 @@ describe("bridge resume helpers", () => {
         functionArguments: []
       }
     };
+
+    // The bridge requires a per-session URL token. Set one for the test
+    // so the URL construction succeeds.
+    _setBridgeTokenForTesting(
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    );
 
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : input.toString();

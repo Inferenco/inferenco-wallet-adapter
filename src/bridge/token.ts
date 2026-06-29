@@ -183,3 +183,18 @@ export function _setBridgeTokenForTesting(token: string | null): void {
   }
   resolvedToken = token;
 }
+
+/**
+ * Force-refresh the token from the source. Clears the cache and
+ * re-reads the pathname; if the pathname does not match the 64-hex
+ * shape, re-arms the postMessage listener for a fresh attempt.
+ *
+ * Used by the B+ retry logic: a 404 from the wallet's HTTP bridge
+ * most likely means the wallet was restarted and the token rotated.
+ * The dapp must re-read on every retry attempt.
+ */
+export function forceRefreshBridgeToken(): string {
+  resolvedToken = null;
+  readyPromise = null;
+  return readBridgeToken();
+}

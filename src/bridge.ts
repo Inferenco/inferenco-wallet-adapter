@@ -47,6 +47,8 @@ import {
   NOVA_CONNECT_NAME,
   NOVA_PROTOCOL_KEY_STORAGE_KEY
 } from "./constants";
+import { forceRefreshBridgeToken } from "./bridge/token.js";
+import { bridgePathWithToken, bridgeUrlWithToken, getBridgeBaseUrlWithToken } from "./bridge/url.js";
 import { deserializeAnyRawTransaction, ensureBcsToHex, normalizeProviderAccount } from "./conversion";
 
 type NovaPendingMobilePairing = {
@@ -837,7 +839,7 @@ async function pollBridge<T extends { status?: string; error?: string }>(
 export async function tryLocalBridgeConnect(options: NovaWalletOptions = {}): Promise<AccountInfo | null> {
   if (!isBrowser() || isMobileBrowser()) return null;
 
-  const connectUrl = new URL("/connect", bridgeBaseUrl(options));
+  const connectUrl = new URL(bridgePathWithToken("/connect", options), DEFAULT_DESKTOP_BRIDGE_URL);
   connectUrl.searchParams.set("origin", window.location.origin);
   connectUrl.searchParams.set("app", typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk");
   const connectUrlString = connectUrl.toString();
@@ -854,7 +856,7 @@ export async function tryLocalBridgeConnect(options: NovaWalletOptions = {}): Pr
     return null;
   }
 
-  const pollUrl = new URL(`/request/${start.requestId}`, bridgeBaseUrl(options)).toString();
+  const pollUrl = bridgeUrlWithToken(`/request/${start.requestId}`, options);
   const payload = await pollBridge<NovaBridgeConnectPoll>(pollUrl, options);
 
   if (payload.status === "approved") {
@@ -933,9 +935,13 @@ async function startBridgeRequest<T>(
   options: NovaWalletOptions,
   reconnectError: Error
 ): Promise<string> {
-  try {
-    const start = await fetchJsonWithTimeout<NovaBridgeStartResponse>(
-      new URL(path, bridgeBaseUrl(options)).toString(),
+  // B+ retry logic: a 404 from the wallet's HTTP bridge most likely
+  // means the wallet was restarted and the per-session URL token
+  // rotated. We force-refresh the token (re-read pathname + re-arm
+  // the postMessage listener) and retry once before giving up.
+  const tryOnce = async () =>
+    fetchJsonWithTimeout<NovaBridgeStartResponse>(
+      bridgeUrlWithToken(path, options),
       bridgeConnectTimeoutMs(options),
       {
         method: "POST",
@@ -944,21 +950,31 @@ async function startBridgeRequest<T>(
       }
     );
 
-    if (typeof start.requestId !== "string" || start.requestId.length === 0) {
-      throw new Error("Nova Desk bridge did not return a request id");
-    }
-
-    return start.requestId;
+  let start: NovaBridgeStartResponse;
+  try {
+    start = await tryOnce();
   } catch (error) {
-    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+    if (error instanceof BridgeHttpError && error.status === 404) {
+      try {
+        forceRefreshBridgeToken();
+        start = await tryOnce();
+      } catch (retryError) {
+        clearExternalSession();
+        throw reconnectError;
+      }
+    } else if (error instanceof BridgeHttpError && (error.status === 403 || error.status >= 500)) {
       clearExternalSession();
       throw reconnectError;
+    } else {
+      throw error;
     }
-    if (error instanceof BridgeHttpError && error.status >= 500) {
-      throw reconnectError;
-    }
-    throw error;
   }
+
+  if (typeof start.requestId !== "string" || start.requestId.length === 0) {
+    throw new Error("Nova Desk bridge did not return a request id");
+  }
+
+  return start.requestId;
 }
 
 async function pollSignedResult<T extends { status?: string; error?: string }>(
@@ -967,10 +983,26 @@ async function pollSignedResult<T extends { status?: string; error?: string }>(
   options: NovaWalletOptions,
   reconnectError: Error
 ): Promise<T> {
+  // B+ retry logic: same token-refresh on 404, applied to the poll
+  // loop. If the wallet rotated mid-session, the first poll returns
+  // 404, the token is force-refreshed, and the second attempt uses
+  // the new token.
+  const tryOnce = () =>
+    pollBridge<T>(bridgeUrlWithToken(`${path}/${requestId}`, options), options);
+
   try {
-    return await pollBridge<T>(new URL(`${path}/${requestId}`, bridgeBaseUrl(options)).toString(), options);
+    return await tryOnce();
   } catch (error) {
-    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+    if (error instanceof BridgeHttpError && error.status === 404) {
+      try {
+        forceRefreshBridgeToken();
+        return await tryOnce();
+      } catch (retryError) {
+        clearExternalSession();
+        throw reconnectError;
+      }
+    }
+    if (error instanceof BridgeHttpError && (error.status === 403 || error.status >= 500)) {
       clearExternalSession();
       throw reconnectError;
     }

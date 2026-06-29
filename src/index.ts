@@ -5,6 +5,7 @@ export * from "./provider";
 export * from "./deeplink";
 export * from "./bridge";
 export * from "./bridge/token.js";
+export * from "./bridge/url.js";
 export * from "./conversion";
 export * from "./NovaClient";
 export * from "./NovaWallet";
