@@ -5,6 +5,14 @@ All notable changes to `@inferenco/nova-wallet-adapter` will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.6] - 2026-06-29
+
+### Fixed (export surface)
+
+- **`src/index.ts` was missing the PKCE re-exports.** The PKCE helpers (`generatePkcePair`, `exchangeCodeForSession`, `appendCodeChallengeToDeeplink`, `PkceVerificationFailed`) were exported from `src/bridge/index-public.ts` but never re-exported from the top-level `src/index.ts`. The CJS bundle happened to include them via tsup's tree-shaking, but the ESM bundle and the `.d.ts` types did not. Dapps that imported `generatePkcePair` from the package (ESM consumers, TypeScript users) saw `does not provide an export named: 'generatePkcePair'`. The PKCE exports are now in the explicit re-export block at `src/index.ts:7-23`, so ESM, CJS, and `.d.ts` are all in sync.
+
+No code changes to the runtime behavior. The bug was purely in the public API surface — the source code was correct, the dist was incomplete. `0.2.0-rc.6` is identical to `0.2.0-rc.5` at runtime; only the export surface was patched.
+
 ## [0.2.0-rc.5] - 2026-06-29
 
 ### Fixed (transparent deeplink fallback)

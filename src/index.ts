@@ -8,10 +8,14 @@ export {
   BRIDGE_TOKEN_PATH_REGEX,
   MISSING_BRIDGE_TOKEN_MESSAGE,
   MissingBridgeTokenError,
+  PkceVerificationFailed,
+  appendCodeChallengeToDeeplink,
   bridgePathWithToken,
   bridgeUrlWithToken,
   ensureBridgeToken,
+  exchangeCodeForSession,
   forceRefreshBridgeToken,
+  generatePkcePair,
   getBridgeBaseUrlWithToken,
   readBridgeToken
 } from "./bridge/index-public.js";

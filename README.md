@@ -8,7 +8,7 @@
   <a href="https://github.com/Inferenco/nova-plugin-wallet-adapter/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="license" /></a>
   <img src="https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/ESM%20%2B%20CJS-supported-brightgreen" alt="Module formats" />
-  <img src="https://img.shields.io/badge/version-0.2.0--rc.5-0a3d91" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.2.0--rc.6-0a3d91" alt="version" />
 </p>
 
 <p align="center">
