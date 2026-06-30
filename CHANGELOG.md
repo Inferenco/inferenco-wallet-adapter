@@ -55,6 +55,24 @@ Companion to the wallet's F-07b self-heal registration change.
 - 83 -> 93 (+10 new tests covering token preservation, fallback chain,
   and the new callback-consume behavior).
 
+### Paired release
+
+- **Nova Desk release tag `v0.6.0-rc.1`** (commits `3a6b585`..
+  `dd84f04` on `Inferenco/nova_desk::fix/audit-06-2026`). Notable
+  changes on the wallet side for this RC pair:
+  - `inferenco://` protocol auto-registers the wrapper script and
+    `.desktop` entry on every launch — no more stale handler from
+    a previous install.
+  - `confirm login` button now surfaces approval errors via toast
+    + state (previously silently dropped).
+  - `NOVA_DESK_ALLOW_HTTP_LOOPBACK=1` — opt-in to allow the wallet to
+    approve connections from `http://localhost:*` (Vite dev server)
+    when running a release-built wallet against a dev server. Without
+    this env var, release builds of the wallet reject loopback http
+    redirects per F-06; with it set, the developer workflow works.
+  - `NOVA_DESK_DEEPLINK_DEBUG=1` — verbose deeplink tracing that
+    logs every state transition to `~/.nova_desk/runtime/deeplink-flow.log`.
+
 ## [0.2.0-rc.6] - 2026-06-29
 
 ### Fixed (export surface)
