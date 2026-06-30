@@ -5,6 +5,56 @@ All notable changes to `@inferenco/nova-wallet-adapter` will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.7] - 2026-06-30
+
+### Fixed (external-dapp-connect)
+
+Restores the end-to-end "Connect Nova Connect" flow when the dapp loads
+in a regular web browser (not inside Nova Desk's WebKit2GTK webview).
+
+Companion to the wallet's F-07b self-heal registration change.
+
+- **`NovaClient.connect()` now consumes the callback URL params first.**
+  When the wallet fires `xdg-open <redirect>?address=...&sessionId=...`
+  after the user approves, the browser navigates back to the dapp with
+  the callback params in the URL. Before rc.7, `connect()` would re-fire
+  the deeplink (asking the user to approve again) and `waitForExternalSession`
+  would time out at 120s because nothing consumed the params from the URL
+  on the new page load. The fix: `connect()` now invokes
+  `consumeExternalCallbackIfPresent` (which now returns `Promise<boolean>`)
+  before trying the local bridge or deeplink paths.
+
+- **`sessionEndpointUrl` and `connectionEndpointUrl` preserve the per-session URL token.**
+  These helpers previously used the URL constructor to build
+  `/session/<id>` paths against a token-bearing base
+  (`http://127.0.0.1:21984/<token>/`), which treated the token as a
+  directory and replaced it with `session/<id>`. The wallet's F-03
+  token gate would 404 the resulting request, and `validateExternalSession`
+  would call `clearExternalSession()` on every post-callback page load,
+  wiping the freshly-consumed session. Fix: detect the token via
+  `BRIDGE_TOKEN_PATH_REGEX` and prefix the path manually.
+
+- **`bridgePathWithToken` falls back to `options.bridgeBaseUrl`'s token.**
+  In an external browser the postMessage delivery channel never fires
+  (it's only set up inside Nova Desk's embedded webview). The token
+  was delivered via the wallet's redirect callback URL's `bridgeUrl=`
+  parameter. When `readBridgeToken()` throws, the function now extracts
+  the token from the configured base URL. This makes `signMessage`,
+  `signTransaction`, and `signAndSubmit` work in external browsers.
+
+- **Moved `BRIDGE_TOKEN_PATH_REGEX` to `constants.ts`** (was duplicated
+  in `bridge/token.ts`). Re-exported for tests.
+
+### Internal
+
+- Test-only helpers `_sessionEndpointUrlInternal` and
+  `_connectionEndpointUrlInternal` underscore-prefixed.
+
+### Tests
+
+- 83 -> 93 (+10 new tests covering token preservation, fallback chain,
+  and the new callback-consume behavior).
+
 ## [0.2.0-rc.6] - 2026-06-29
 
 ### Fixed (export surface)
