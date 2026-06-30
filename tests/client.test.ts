@@ -728,4 +728,128 @@ describe("NovaClient", () => {
       /* expected to reject with timeout / not installed */
     });
   });
+
+  // v0.2.0-rc.8 (Phase 5 UX): disconnect event emission
+  it("emits disconnect when the dapp itself calls disconnect()", async () => {
+    const signer = Account.generate();
+    bridge.storeExternalSession({
+      transport: "desktop-bridge",
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "session-self-disconnect",
+      bridgeUrl: "http://127.0.0.1:21984",
+      walletName: "Nova Desk"
+    });
+    // Ensure /<token>/connection responds OK so disconnect() doesn't throw.
+    // Each fetch must return a fresh Response object so its body can be
+    // read exactly once.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ status: "revoked" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    const client = new NovaClient();
+    await client.connect(); // populates accountInfo/networkInfo
+
+    const onDisconnect = vi.fn();
+    client.on("disconnect", onDisconnect);
+
+    await client.disconnect();
+
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(client.account).toBeNull();
+  });
+
+  it("emits disconnect when liveness heartbeat observes a revoked session", async () => {
+    const signer = Account.generate();
+    bridge.storeExternalSession({
+      transport: "desktop-bridge",
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "session-heartbeat",
+      bridgeUrl: "http://127.0.0.1:21984",
+      walletName: "Nova Desk"
+    });
+
+    // First fetch (validate session during connect): returns the session.
+    // Subsequent polls: 404 (revoked).
+    let pollCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      pollCount += 1;
+      if (pollCount === 1) {
+        return new Response(
+          JSON.stringify({
+            address: signer.accountAddress.toString(),
+            publicKey: signer.publicKey.toString(),
+            network: "testnet",
+            chainId: 2,
+            sessionId: "session-heartbeat",
+            bridgeUrl: "http://127.0.0.1:21984",
+            walletName: "Nova Desk"
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(JSON.stringify({ error: "session_not_found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+
+    const onDisconnect = vi.fn();
+    const client = new NovaClient({ sessionLivenessIntervalMs: 5 });
+    client.on("disconnect", onDisconnect);
+    await client.connect();
+
+    // Two heartbeat ticks at ~5ms each, so ~30ms is plenty.
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(pollCount).toBeGreaterThanOrEqual(2);
+    expect(onDisconnect).toHaveBeenCalled();
+  });
+
+  it("does not start a heartbeat when sessionLivenessIntervalMs is 0 (default)", async () => {
+    const signer = Account.generate();
+    bridge.storeExternalSession({
+      transport: "desktop-bridge",
+      address: signer.accountAddress.toString(),
+      publicKey: signer.publicKey.toString(),
+      network: "testnet",
+      chainId: 2,
+      sessionId: "session-no-heartbeat",
+      bridgeUrl: "http://127.0.0.1:21984",
+      walletName: "Nova Desk"
+    });
+
+    // Mock fetch: connect-path uses it once for session validation; a
+    // heartbeat would call it again within the wait window.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          address: signer.accountAddress.toString(),
+          publicKey: signer.publicKey.toString(),
+          network: "testnet",
+          chainId: 2,
+          sessionId: "session-no-heartbeat",
+          bridgeUrl: "http://127.0.0.1:21984",
+          walletName: "Nova Desk"
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = new NovaClient(); // no opt-in
+    await client.connect();
+
+    const callsAfterConnect = fetchSpy.mock.calls.length;
+    // Wait long enough for any 5+ ms heartbeat to fire at least once.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fetchSpy.mock.calls.length).toBe(callsAfterConnect);
+  });
 });

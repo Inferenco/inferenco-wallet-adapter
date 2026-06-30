@@ -90,7 +90,40 @@ export interface NovaWalletOptions {
    * that initiated the connection.
    */
   expectedOrigin?: string;
+  /**
+   * v0.2.0-rc.8 (Phase 5 UX): opt-in liveness heartbeat for external
+   * browsers. When set to a positive number of milliseconds, the
+   * adapter periodically issues `GET /<token>/session/<id>` against
+   * the local Nova Desk bridge. On a 403/404 (wallet revoked the
+   * session), the new `"disconnect"` event is emitted on
+   * `NovaClient` / `NovaWallet` / `cedra:onDisconnect` (AIP-62),
+   * giving dapps sub-second disconnect detection without polling
+   * the bridge themselves.
+   *
+   * Default: `0` (disabled) — backwards-compatible with v0.2.0-rc.7.
+   * Dapps that don't opt in fall back to lazy detection on the next
+   * user-initiated `connect()`/`getAccount()` (existing behaviour).
+   *
+   * Cost: 1 HTTP call per dapp tab per interval against `127.0.0.1`.
+   * Recommended values: 15_000–60_000.
+   */
+  sessionLivenessIntervalMs?: number;
 }
+
+/** v0.2.0-rc.8 (Phase 5 UX): payload-less disconnect event surface,
+ * shared by `NovaClient`, `NovaWallet`, and the AIP-62 `cedra:onDisconnect`
+ * feature. Fires when either:
+ *   (a) the dapp itself called `client.disconnect()`,
+ *   (b) the wallet revoked the session from its dashboard,
+ *   (c) a peer tab cleared `inferenco:nova-session` in localStorage,
+ *   (d) the opt-in liveness heartbeat saw a 403/404 from
+ *       `GET /<token>/session/<id>`.
+ *
+ * Subscribing to this event is the dapp's signal to drop any cached
+ * account/network state, surface a "Disconnected by Nova Desk" toast,
+ * and require a fresh `connect()` to resume.
+ */
+export type NovaDisconnectEvent = void;
 
 export interface NovaExternalSession {
   transport: "desktop-bridge" | "mobile-relay";

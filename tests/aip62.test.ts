@@ -119,4 +119,18 @@ describe("registerNovaWallet", () => {
         args.authenticator.bcsToHex().toString()
     ).toBe(authenticator.toString());
   });
+
+  // v0.2.0-rc.8 (Phase 5 UX): cedra:onDisconnect AIP-62 feature
+  it("exposes cedra:onDisconnect on the wallet features object", async () => {
+    const { createNovaAIP62Wallet } = await import("../src/aip62");
+    const wallet = createNovaAIP62Wallet();
+    const features = wallet.features as unknown as Record<string, unknown>;
+    expect(features["cedra:onDisconnect"]).toBeDefined();
+    const feature = features["cedra:onDisconnect"] as {
+      version?: string;
+      onDisconnect?: unknown;
+    };
+    expect(feature.version).toBe("1.0.0");
+    expect(typeof feature.onDisconnect).toBe("function");
+  });
 });

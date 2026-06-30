@@ -34,6 +34,17 @@ export const BRIDGE_TOKEN_PATH_REGEX = /^[0-9a-f]{64}$/;
 export const NOVA_EXTERNAL_SESSION_STORAGE_KEY = "inferenco:nova-session";
 export const NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY = "inferenco:nova-pending-mobile-pairing";
 export const NOVA_CALLBACK_MARKER_STORAGE_KEY = "inferenco:nova-callback-marker";
+/** v0.2.0-rc.8: pub/sub channel name used to broadcast a wallet-initiated
+ * (or peer-tab-initiated) disconnect to all adapters observing the same
+ * origin. Mirror of `NOVA_SESSION_READY_MESSAGE_TYPE` from `bridge.ts` for
+ * symmetry — the two channels together cover the full session lifecycle. */
+export const NOVA_SESSION_CLEARED_MESSAGE_TYPE = "inferenco:nova-session-cleared";
+/** v0.2.0-rc.8: default value for `NovaWalletOptions.sessionLivenessIntervalMs`.
+ * 0 means "no heartbeat"; the dapp must opt in to a positive value to
+ * detect wallet-initiated disconnects faster than the next user-initiated
+ * `connect()`. Backwards-compatible: existing dapps that don't set the
+ * option keep their current lazy-fallback behaviour. */
+export const DEFAULT_SESSION_LIVENESS_INTERVAL_MS = 0;
 export const CALLBACK_ADDRESS_PARAM = "address";
 export const CALLBACK_PUBLIC_KEY_PARAM = "publicKey";
 export const CALLBACK_NETWORK_PARAM = "network";

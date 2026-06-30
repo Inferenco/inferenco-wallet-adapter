@@ -200,6 +200,32 @@ new NovaWallet({
 });
 ```
 
+### `sessionLivenessIntervalMs` _(added in v0.2.0-rc.8)_
+
+| | |
+|-|-|
+| **Type** | `number` |
+| **Default** | `0` (disabled) |
+
+When set to a positive number of milliseconds, the adapter periodically
+validates the current external session by issuing `GET /<token>/session/<id>`
+against the Nova Desk bridge (the same endpoint that
+`validateExternalSession` uses during the next user-initiated
+`connect()`/`getAccount()`). On a 403/404 (wallet revoked the session)
+the new `"disconnect"` event fires on `NovaClient`, `NovaWallet`, and
+the AIP-62 `cedra:onDisconnect` feature.
+
+Recommended values: `15_000` – `60_000`. Cost: 1 HTTP call per dapp
+tab per interval against `127.0.0.1:21984`. Dapps that don't opt in
+keep the existing lazy fallback (detection on next user-initiated
+`connect()` / `getAccount()`).
+
+```typescript
+new NovaWallet({
+  sessionLivenessIntervalMs: 30_000, // poll every 30 s
+});
+```
+
 ---
 
 ## Nova Wallet (Mobile Relay)

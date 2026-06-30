@@ -164,6 +164,14 @@ Subscribes to account change events.
 
 Subscribes to network change events.
 
+##### `onDisconnect(callback: () => void): Promise<void>` _(added in v0.2.0-rc.8)_
+
+Subscribes to wallet-initiated disconnects (and to peer-tab-initiated
+self disconnects). The callback receives no payload — drop cached state
+and route the user back through the connect flow. Available only when
+Nova Connect is the active wallet; the underlying detection is opt-in
+(see `NovaWalletOptions.sessionLivenessIntervalMs`).
+
 ##### `deeplinkProvider(url?: string): string`
 
 Generates a deeplink URL for launching Nova Desk or Nova Wallet.
@@ -178,7 +186,7 @@ Generates a deeplink URL for launching Nova Desk or Nova Wallet.
 
 ### `NovaClient`
 
-Core client powering both adapter surfaces. Extends `EventEmitter<{ accountChange, networkChange }>`.
+Core client powering both adapter surfaces. Extends `EventEmitter<{ accountChange, networkChange, disconnect }>`.
 
 ```typescript
 import { NovaClient } from "@inferenco/nova-wallet-adapter";
@@ -309,6 +317,9 @@ const wallet = createNovaAIP62Wallet();
 - `cedra:account` (v1.0.0)
 - `cedra:onAccountChange` (v1.0.0)
 - `cedra:onNetworkChange` (v1.0.0)
+- **`cedra:onDisconnect` (v1.0.0, added in v0.2.0-rc.8)** —
+  `wallet.features["cedra:onDisconnect"].onDisconnect(callback)`. Payload-less
+  listener for wallet-initiated (or peer-tab-initiated) disconnects.
 - `cedra:signMessage` (v1.0.0)
 - `cedra:signTransaction` (v1.1)
 - `cedra:signAndSubmitTransaction` (v1.1.0)

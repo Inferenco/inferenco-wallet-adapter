@@ -27,6 +27,29 @@ import { buildDeeplinkUrl } from "./deeplink";
 import { NovaClient } from "./NovaClient";
 import type { NovaWalletOptions } from "./types";
 
+/** v0.2.0-rc.8 (Phase 5 UX): extension to CedraFeatures for the
+ * Nova Connect–specific "cedra:onDisconnect" listener. Modeled after
+ * CedraOnAccountChangeFeature. Defined locally so callers that want
+ * to subscribe to wallet-initiated disconnects through the AIP-62
+ * surface can do so without depending on a future wallet-standard
+ * revision. Dapp code:
+ *
+ *   const wallet = getCedraWallet("Nova Connect");
+ *   if (wallet.features["cedra:onDisconnect"]) {
+ *     await wallet.features["cedra:onDisconnect"].onDisconnect(() => {
+ *       // ...
+ *     });
+ *   }
+ */
+type NovaCedraOnDisconnectFeature = {
+  "cedra:onDisconnect": {
+    version: "1.0.0";
+    onDisconnect: (callback: () => void) => Promise<void>;
+  };
+};
+
+type NovaCedraFeatures = CedraFeatures & NovaCedraOnDisconnectFeature;
+
 class NovaWalletAccount implements CedraWalletAccount {
   address: string;
   publicKey: Uint8Array;
@@ -60,7 +83,7 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
     return account;
   };
 
-  const features: CedraFeatures = {
+  const features: NovaCedraFeatures = {
     "cedra:connect": {
       version: "1.0.0",
       connect: async () => {
@@ -96,6 +119,16 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
       onNetworkChange: async (callback) => {
         client.on("networkChange", callback);
         await client.subscribe();
+      }
+    },
+    // v0.2.0-rc.8 (Phase 5 UX): opted-in listener for wallet-initiated
+    // (or peer-tab-initiated) disconnect events. Modeled after
+    // CedraOnAccountChangeFeature. Subscribers should drop cached state
+    // and wait for a fresh `cedra:connect` to resume.
+    "cedra:onDisconnect": {
+      version: "1.0.0",
+      onDisconnect: async (callback) => {
+        client.on("disconnect", callback);
       }
     },
     "cedra:signMessage": {
@@ -159,9 +192,9 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
       return accounts;
     },
     get features() {
-      return features;
+      return features as unknown as CedraFeatures;
     }
-  };
+  } as unknown as CedraWallet;
 }
 
 let registered = false;

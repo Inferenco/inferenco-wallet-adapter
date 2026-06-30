@@ -10,9 +10,14 @@ import {
 import type { CedraSignTransactionInputV1_1 } from "@cedra-labs/wallet-standard";
 import {
   NOVA_CALLBACK_MARKER_STORAGE_KEY,
-  NOVA_CONNECT_NAME
+  NOVA_CONNECT_NAME,
+  NOVA_SESSION_CLEARED_MESSAGE_TYPE
 } from "../src/constants";
 import {
+  _resetExternalSessionResumeListenersForTesting,
+  awaitExternalDisconnect,
+  installExternalSessionResumeListeners,
+  notifyExternalDisconnect,
   readExternalSession,
   storeCallbackSession,
   storeExternalSession,
@@ -287,5 +292,57 @@ describe("bridge resume helpers", () => {
         address.toString()
       )
     ).toEqual([secondarySigner.accountAddress.toString()]);
+  });
+
+  // v0.2.0-rc.8 (Phase 5 UX): disconnect dispatcher tests
+  it("storage event with newValue=null triggers the disconnect dispatcher", async () => {
+    _resetExternalSessionResumeListenersForTesting();
+    const customEventListener = vi.fn();
+    window.addEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
+
+    installExternalSessionResumeListeners();
+
+    // Trigger the same-tab path the storage listener uses.
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "inferenco:nova-session",
+        newValue: null
+      })
+    );
+
+    expect(customEventListener).toHaveBeenCalled();
+    window.removeEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
+  });
+
+  it("BroadcastChannel disconnect message triggers the disconnect dispatcher", async () => {
+    _resetExternalSessionResumeListenersForTesting();
+    const customEventListener = vi.fn();
+    window.addEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
+
+    installExternalSessionResumeListeners();
+
+    // The MockBroadcastChannel above records each construction. Find the
+    // cleared channel and dispatch on it.
+    const cleared = MockBroadcastChannel.instances.find(
+      (instance) => instance.name === NOVA_SESSION_CLEARED_MESSAGE_TYPE
+    );
+    expect(cleared).toBeDefined();
+    cleared.dispatch({ type: NOVA_SESSION_CLEARED_MESSAGE_TYPE });
+
+    expect(customEventListener).toHaveBeenCalled();
+    window.removeEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
+  });
+
+  it("awaitExternalDisconnect resolves after notifyExternalDisconnect fires", async () => {
+    _resetExternalSessionResumeListenersForTesting();
+    installExternalSessionResumeListeners();
+
+    const waiter = awaitExternalDisconnect();
+    // Yield so any pending tasks run.
+    await Promise.resolve();
+
+    notifyExternalDisconnect();
+
+    await expect(waiter).resolves.toBeUndefined();
   });
 });

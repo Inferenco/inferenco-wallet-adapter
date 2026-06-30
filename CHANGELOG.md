@@ -5,6 +5,100 @@ All notable changes to `@inferenco/nova-wallet-adapter` will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.8] - 2026-07-01
+
+### Added (Phase 5 UX — wallet-initiated disconnect notification)
+
+First-class `disconnect` event across all three adapter surfaces so dapps learn
+when Nova Connect revokes their session (or when they themselves revoke it) —
+without polling `GET /<token>/session/<id>` from the dapp side.
+
+- **`NovaClient.on("disconnect", cb)`** — payload-less event emitted when the
+  adapter loses its session. Subscribers should drop cached account/network
+  state and route the user back through the connect flow.
+- **`NovaWallet.onDisconnect(cb)`** — mirror of `NovaClient`'s event for the
+  plugin-style adapter. Also re-emitted as `wallet.emit("disconnect")`.
+- **`cedra:onDisconnect`** AIP-62 feature — `wallet.features["cedra:onDisconnect"].onDisconnect(cb)`
+  for wallet-standard consumers. Modeled after `cedra:onAccountChange`.
+- **`NovaWalletOptions.sessionLivenessIntervalMs?: number`** — opt-in
+  liveness heartbeat (default `0` = disabled, backwards-compatible). When
+  set to a positive integer the adapter schedules
+  `setInterval(readValidatedExternalSession, intervalMs)`; a 403/404
+  response from `GET /<token>/session/<id>` triggers the new disconnect
+  event. Recommended range: 15_000 – 60_000. Cost: 1 HTTP call per dapp
+  tab per interval against `127.0.0.1`.
+
+### Changed
+
+- **Cross-tab session-cleared detection.** `installExternalSessionResumeListeners`
+  now also handles `storage` events with `newValue === null` (peer-tab
+  `clearExternalSession`), `window.message` events carrying
+  `inferenco:nova-session-cleared`, and the corresponding `BroadcastChannel`
+  messages. Peer tabs learn about a disconnect in the same tick.
+- **New `inferenco:nova-session-cleared` BroadcastChannel / CustomEvent**
+  string constant (`NOVA_SESSION_CLEARED_MESSAGE_TYPE`) imported from
+  `constants.ts`. Exported for dapps that want to listen on `window`
+  directly without going through the typed adapter surface.
+- **`NovaClient.disconnect()` now emits `"disconnect"` locally** and
+  notifies peer tabs (via the new clear channel) before clearing state.
+  Parity with the wallet-revoked path. Reset of the
+  `disconnectEmitted` guard happens at the next successful
+  `connectResultFromExternalSession`.
+
+### Public-API additions
+
+```typescript
+// NovaClient (event emitter, payload-less)
+client.on("disconnect", () => {
+  // Drop cached state, route user back through connect()
+});
+
+// NovaWallet (plugin adapter)
+await wallet.onDisconnect(() => { /* ... */ });
+
+// AIP-62 (wallet-standard)
+await wallet.features["cedra:onDisconnect"].onDisconnect(() => { /* ... */ });
+
+// Opt-in liveness heartbeat
+new NovaClient({ sessionLivenessIntervalMs: 30_000 });
+```
+
+### Backwards compatibility
+
+- All new behaviours are opt-in or non-breaking additions. Dapps that don't
+  set `sessionLivenessIntervalMs` see identical behaviour to `0.2.0-rc.7`
+  (lazy disconnect detection on the next user-initiated `connect()` /
+  `getAccount()`).
+- The `provider.disconnect` path inside Nova Desk's embedded webview is
+  unchanged. The new event covers cross-tab and cross-process cases only.
+
+### Tests
+
+93 → 100 (+7 new tests):
+- `tests/bridge.test.ts`: storage `newValue=null`, BroadcastChannel cleared,
+  `awaitExternalDisconnect` resolves after `notifyExternalDisconnect`.
+- `tests/client.test.ts`: disconnect event on explicit `disconnect()`,
+  disconnect via liveness heartbeat, `sessionLivenessIntervalMs=0`
+  does not start a heartbeat.
+- `tests/aip62.test.ts`: `cedra:onDisconnect` is exposed on the wallet
+  features object.
+
+### Paired release
+
+- **Nova Desk release tag `v0.6.0-rc.2`** (force-update of `v0.6.0-rc.1`,
+  which was never released to anyone). Companion change on the wallet
+  side: `disconnect_connected_app` now pushes
+  `__novaDeskHostUpdate({action:"disconnect", connected:false, …})` via
+  `webview.evaluate_script` into any open in-wallet webview tab whose
+  origin matches the disconnected dapp. The embedded provider's
+  `applyHostState` already emits `disconnect` from the existing
+  `wasConnected && !connected` branch (`dapp_provider.rs:366`), so this
+  becomes an instant notification for the embedded case.
+- External browser still requires `sessionLivenessIntervalMs` opt-in or
+  next user-initiated `connect()` to detect. Documented in
+  `SECURITY.md` (Phase 5 addendum) — flagged as **UX improvement, not a
+  security boundary**.
+
 ## [0.2.0-rc.7] - 2026-06-30
 
 ### Fixed (external-dapp-connect)

@@ -38,6 +38,15 @@ import {
 type NovaWalletEvents = {
   accountChange: [string];
   networkChange: [NovaNetworkInfo];
+  /**
+   * v0.2.0-rc.8 (Phase 5 UX): mirror of `NovaClient`'s
+   * `"disconnect"` event. Fires when Nova Connect revokes the
+   * dapp's session (either from the wallet's own UI, or via the
+   * opt-in liveness heartbeat), or when the dapp itself calls
+   * `disconnect()`. Subscribers should drop cached state and
+   * surface a "Reconnect to Nova Connect" affordance.
+   */
+  disconnect: [];
 };
 
 export class NovaWallet
@@ -168,6 +177,29 @@ export class NovaWallet
       });
     });
     await this.client.subscribe();
+  }
+
+  /**
+   * v0.2.0-rc.8 (Phase 5 UX): subscribe to wallet-initiated or
+   * peer-tab-initiated disconnects. The callback fires on either:
+   * (a) wallet revocation detected via liveness heartbeat (opt-in)
+   *     or on next user-initiated `connect()`/`getAccount()`,
+   * (b) the dapp itself called `disconnect()`,
+   * (c) a peer tab cleared `inferenco:nova-session` in localStorage,
+   * (d) the embedded provider was pushed a disconnect via
+   *     `__novaDeskHostUpdate` (Nova Desk wallet's webview).
+   *
+   * Subscribers should drop cached account/network state, surface
+   * a "Reconnect to Nova Connect" affordance, and avoid making
+   * signing requests until a fresh `connect()` resolves.
+   */
+  async onDisconnect(callback: () => void): Promise<void> {
+    this.client.on("disconnect", () => {
+      this.cachedAccount = null;
+      this.cachedNetwork = null;
+      callback();
+      this.emit("disconnect");
+    });
   }
 
   deeplinkProvider(url?: string): string {

@@ -222,38 +222,69 @@ Once connected, signing operations follow the same transport that was used to co
 ## Session Lifecycle
 
 ```
-                    ┌──────────────┐
-                    │   No Session │
-                    └──────┬───────┘
-                           │ connect()
-                           ▼
-                    ┌──────────────┐
-                    │   Pending    │ ←── waiting for user approval
-                    └──────┬───────┘
-                           │ approved
-                           ▼
-                    ┌──────────────┐
-         ┌────────▶│   Active     │ ←── stored in localStorage
-         │         └──────┬───────┘
-         │                │
-         │    ┌───────────┼────────────┐
-         │    │           │            │
-         │    ▼           ▼            ▼
-         │  page       disconnect()  expired/
-         │  reload                   revoked
-         │    │           │            │
-         │    ▼           ▼            ▼
-         │  validate   ┌──────────────┐
-         │  session    │   Cleared    │
-         │    │        └──────────────┘
-         │    │
-         │    ├─ valid ──┘
-         │    │
-         └────┘
-              └─ invalid → clear → fresh connect()
+                     ┌──────────────┐
+                     │   No Session │
+                     └──────┬───────┘
+                            │ connect()
+                            ▼
+                     ┌──────────────┐
+                     │   Pending    │ ←── waiting for user approval
+                     └──────┬───────┘
+                            │ approved
+                            ▼
+                     ┌──────────────┐
+          ┌────────▶│   Active     │ ←── stored in localStorage
+          │         └──────┬───────┘
+          │                │
+          │    ┌───────────┼────────────┐
+          │    │           │            │
+          │    ▼           ▼            ▼
+          │  page       disconnect()  expired/
+          │  reload                   revoked
+          │    │           │            │
+          │    ▼           ▼            ▼
+          │  validate   ┌──────────────┐
+          │  session    │   Cleared    │
+          │    │        └──────┬───────┘
+          │    │               │
+          │    │               ▼
+          │    │      ┌────────────────────────────┐
+          │    │      │ NovaClient.emit("disconnect")│ ─── peer tabs, embedded webview
+          │    │      └────────────────────────────┘
+          │    │
+          │    ├─ valid ──┘
+          │    │
+          └────┘
+               └─ invalid → clear → fresh connect()
 ```
 
-**Nova Desk sessions** are validated by calling the bridge's `/session/{id}` endpoint on reconnect.
+**Disconnect detection paths (added in v0.2.0-rc.8):**
+
+1. **Dapp-side `disconnect()`** — calls `clearExternalSession()`, fires the
+   new `NovaClient.emit("disconnect")` event locally, and broadcasts
+   `inferenco:nova-session-cleared` over `BroadcastChannel` /
+   `window.postMessage` so peer tabs learn in the same tick.
+2. **Peer-tab `clearExternalSession`** — the `storage` event fires in
+   other tabs with `newValue === null`; the
+   `installExternalSessionResumeListeners` storage handler dispatches
+   `broadcastExternalDisconnect()` which clears state and emits
+   `disconnect` in each tab.
+3. **Wallet-initiated disconnect from inside Nova Desk's embedded
+   webview** — `disconnect_connected_app` pushes
+   `__novaDeskHostUpdate({action:"disconnect"})` via
+   `webview.evaluate_script` into any matching in-wallet webview tab;
+   the embedded provider's `applyHostState` calls `emit("disconnect")`.
+4. **Wallet-initiated disconnect from external browser** — opt-in via
+   `NovaWalletOptions.sessionLivenessIntervalMs`. When set, the adapter
+   schedules `setInterval(readValidatedExternalSession, intervalMs)`;
+   a 403/404 response from `GET /<token>/session/<id>` triggers
+   `NovaClient.emit("disconnect")` (the same path as #1).
+5. **Lazy fallback (always available)** — the next user-initiated
+   `connect()` / `getAccount()` sees a 404 from `validateExternalSession`
+   and silently clears state. No event fires (the dapp code is in
+   control at that moment).
+
+**Nova Desk sessions** are validated by calling the bridge's `/session/{id}` endpoint on reconnect (the same call used for the liveness heartbeat in #4).
 
 **Nova Wallet sessions** trust the stored encrypted credentials (shared secret, session token).
 

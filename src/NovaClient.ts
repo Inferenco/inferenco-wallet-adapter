@@ -19,6 +19,8 @@ import {
   installExternalSessionResumeListeners,
   isMobileBrowser,
   launchDesktopOrMobileConnect,
+  notifyExternalDisconnect,
+  parseDisconnectPayload,
   readExternalSession,
   readValidatedExternalSession,
   revokeExternalSession,
@@ -37,6 +39,7 @@ import {
   normalizeSignMessageOutput,
   normalizeSignTransactionResult
 } from "./conversion";
+import { DEFAULT_SESSION_LIVENESS_INTERVAL_MS, NOVA_SESSION_CLEARED_MESSAGE_TYPE } from "./constants";
 import { NovaAdapterError, NovaErrorCode, remapNovaError } from "./errors";
 import { buildDeeplinkUrl } from "./deeplink";
 import {
@@ -62,6 +65,18 @@ import type {
 type NovaClientEvents = {
   accountChange: [AccountInfo];
   networkChange: [NetworkInfo];
+  /**
+   * v0.2.0-rc.8 (Phase 5 UX): fires when the adapter loses its
+   * session — either because the dapp itself called `disconnect()`,
+   * a peer tab cleared the localStorage entry, the wallet revoked
+   * the session from its dashboard (detected via opt-in heartbeat
+   * or the next user-initiated `connect()`), or the embedded
+   * provider was pushed a disconnect via `__novaDeskHostUpdate`.
+   *
+   * Subscribers should drop any cached account/network state and
+   * route the user back through the connect flow.
+   */
+  disconnect: [];
 };
 
 function isWalletStandardSignTransactionInput(
@@ -252,12 +267,106 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
   private provider?: NovaProvider;
   private accountInfo: AccountInfo | null = null;
   private networkInfo: NetworkInfo | null = null;
+  /** v0.2.0-rc.8 (Phase 5 UX): opt-in session liveness handle. */
+  private livenessHandle: ReturnType<typeof setInterval> | null = null;
+  /** v0.2.0-rc.8 (Phase 5 UX): tracks whether we already cleaned up after
+   * a disconnect this generation, so a duplicate `disconnect` event
+   * (e.g., storage event in peer tab + direct emit) doesn't double-clear. */
+  private disconnectEmitted = false;
 
   constructor(private readonly options: NovaWalletOptions = {}) {
     super();
     installExternalSessionResumeListeners();
     storeCallbackSession();
     this.provider = detectProvider(options);
+    this.installDisconnectBridgeListeners();
+    this.maybeStartSessionLiveness();
+  }
+
+  /** v0.2.0-rc.8 (Phase 5 UX): wire `bridge.ts`'s disconnect
+   * dispatchers into `this.emit("disconnect")` and reset cached
+   * state. Idempotent — `installExternalSessionResumeListeners`
+   * is already idempotent, and the bridge listeners are installed
+   * once per tab. */
+  private installDisconnectBridgeListeners(): void {
+    if (typeof window === "undefined") return;
+
+    // Same-window CustomEvent delivery.
+    window.addEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, () => {
+      this.handleExternalSessionCleared();
+    });
+
+    // Cross-tab BroadcastChannel delivery — only relevant for tabs that
+    // join after the first one installed its channel listener.
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(NOVA_SESSION_CLEARED_MESSAGE_TYPE);
+      channel.addEventListener("message", (event) => {
+        if (parseDisconnectPayload(event.data)) {
+          this.handleExternalSessionCleared();
+        }
+      });
+      // We intentionally let the channel be garbage-collected with
+      // the tab; no manual cleanup required.
+    }
+
+    // window.opener delivery — dapp callback scenarios where a popup
+    // hands control back to the opener tab.
+    window.addEventListener("message", (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (parseDisconnectPayload(event.data)) {
+        this.handleExternalSessionCleared();
+      }
+    });
+  }
+
+  /** v0.2.0-rc.8 (Phase 5 UX): unified cleanup path. Clears cached
+   * state, emits the event once per generation, and stops any active
+   * heartbeat. Safe to call repeatedly — the second and subsequent
+   * invocations are no-ops once `disconnectEmitted` is set. */
+  private handleExternalSessionCleared(): void {
+    if (this.disconnectEmitted) return;
+    this.disconnectEmitted = true;
+
+    if (this.livenessHandle !== null) {
+      clearInterval(this.livenessHandle);
+      this.livenessHandle = null;
+    }
+
+    this.accountInfo = null;
+    this.networkInfo = null;
+    this.emit("disconnect");
+  }
+
+  /** v0.2.0-rc.8 (Phase 5 UX): opt-in liveness heartbeat. When
+   * `options.sessionLivenessIntervalMs > 0`, schedule a periodic
+   * `readValidatedExternalSession` against the local Nova Desk
+   * bridge. A 403/404 response indicates the wallet revoked our
+   * session, so we emit the `disconnect` event. */
+  private maybeStartSessionLiveness(): void {
+    const intervalMs =
+      this.options.sessionLivenessIntervalMs ?? DEFAULT_SESSION_LIVENESS_INTERVAL_MS;
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) return;
+    if (this.livenessHandle !== null) return;
+    if (typeof window === "undefined") return;
+
+    this.livenessHandle = setInterval(() => {
+      void this.pollSessionLiveness();
+    }, intervalMs);
+  }
+
+  /** v0.2.0-rc.8 (Phase 5 UX): one tick of the liveness heartbeat. */
+  private async pollSessionLiveness(): Promise<void> {
+    try {
+      const session = await readValidatedExternalSession(this.options);
+      if (session === null) {
+        // 403/404 from the bridge — wallet revoked our session.
+        this.handleExternalSessionCleared();
+      }
+    } catch {
+      // Transient errors (network blip, wallet restarting) are
+      // tolerated; the next tick will retry. We don't want the
+      // heartbeat to surface false positives.
+    }
   }
 
   refreshProvider(): NovaProvider | undefined {
@@ -327,6 +436,9 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
       const consumedCallback = await consumeExternalCallbackIfPresent(this.options);
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
+        // v0.2.0-rc.8: a successful connect resets the disconnect
+        // gate so future disconnect events can fire again.
+        this.disconnectEmitted = false;
         return this.connectResultFromExternalSession(externalSession);
       }
       // If the callback was consumed but the session isn't yet
@@ -427,6 +539,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
   async disconnect(): Promise<void> {
     const provider = this.refreshProvider();
     const externalSession = readExternalSession();
+    this.disconnectEmitted = false;
     try {
       await provider?.disconnect?.();
       if (externalSession) {
@@ -437,8 +550,13 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
     } finally {
       clearExternalSession();
       clearPendingMobilePairing();
-      this.accountInfo = null;
-      this.networkInfo = null;
+      // v0.2.0-rc.8 (Phase 5 UX): notify peer tabs (storage event in
+      // other tabs will fire from the `clearExternalSession` call above,
+      // but ensure same-tab listeners see the disconnect too) and emit
+      // the local event so dapps register a single handler for both
+      // wallet-revoked and self-initiated disconnects.
+      notifyExternalDisconnect();
+      this.handleExternalSessionCleared();
     }
   }
 

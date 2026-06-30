@@ -43,7 +43,9 @@ import {
   DEFAULT_DESKTOP_BRIDGE_URL,
   DEFAULT_DESKTOP_LOGIN_URL,
   DEFAULT_DEEPLINK_BASE_URL,
+  DEFAULT_SESSION_LIVENESS_INTERVAL_MS,
   NOVA_CALLBACK_MARKER_STORAGE_KEY,
+  NOVA_SESSION_CLEARED_MESSAGE_TYPE,
   NOVA_EXTERNAL_SESSION_STORAGE_KEY,
   NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY,
   NOVA_CONNECT_NAME,
@@ -73,9 +75,19 @@ type NovaSessionReadyPayload = {
   session?: NovaExternalSession;
 };
 
+type NovaSessionClearedPayload = {
+  type: typeof NOVA_SESSION_CLEARED_MESSAGE_TYPE;
+};
+
 let sessionResumeListenersInstalled = false;
 let sessionReadyChannel: BroadcastChannel | null | undefined;
+let sessionClearedChannel: BroadcastChannel | null | undefined;
 const pendingExternalSessionWaiters = new Set<(session: NovaExternalSession) => void>();
+/** v0.2.0-rc.8 (Phase 5 UX): wakeup set for any caller awaiting the
+ * next external-session *clear* event. Used by NovaClient's storage-event
+ * fallback path so internal callers can serialize against the
+ * same-tab-disconnect case. */
+const pendingExternalDisconnectWaiters = new Set<() => void>();
 
 export class BridgeHttpError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -531,6 +543,16 @@ function dispatchSessionReadyEvent(session: NovaExternalSession): void {
   );
 }
 
+/** v0.2.0-rc.8 (Phase 5 UX): payload-less same-window dispatch. Dapp code
+ * that wants to observe disconnect events without going through
+ * `NovaClient` can listen directly with
+ * `window.addEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, ...)`.
+ * Mirror of `dispatchSessionReadyEvent`. */
+function dispatchExternalDisconnect(): void {
+  if (!isBrowser()) return;
+  window.dispatchEvent(new CustomEvent(NOVA_SESSION_CLEARED_MESSAGE_TYPE));
+}
+
 function resolvePendingExternalSessionWaiters(session: NovaExternalSession): void {
   if (!isBrowser()) return;
 
@@ -553,6 +575,20 @@ function getSessionReadyChannel(): BroadcastChannel | null {
   return sessionReadyChannel;
 }
 
+/** v0.2.0-rc.8 (Phase 5 UX): lazy-init BroadcastChannel for the
+ * disconnect signal. Mirror of `getSessionReadyChannel`. */
+function getSessionClearedChannel(): BroadcastChannel | null {
+  if (!isBrowser() || typeof BroadcastChannel === "undefined") {
+    return null;
+  }
+  if (sessionClearedChannel !== undefined) {
+    return sessionClearedChannel;
+  }
+
+  sessionClearedChannel = new BroadcastChannel(NOVA_SESSION_CLEARED_MESSAGE_TYPE);
+  return sessionClearedChannel;
+}
+
 function parseSessionReadyPayload(payload: unknown): NovaExternalSession | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -564,6 +600,17 @@ function parseSessionReadyPayload(payload: unknown): NovaExternalSession | null 
   }
 
   return parseExternalSession(candidate.session);
+}
+
+/** v0.2.0-rc.8 (Phase 5 UX): typecheck for incoming cross-window /
+ * BroadcastChannel messages carrying the disconnect signal. */
+export function parseDisconnectPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const candidate = payload as Partial<NovaSessionClearedPayload>;
+  return candidate.type === NOVA_SESSION_CLEARED_MESSAGE_TYPE;
 }
 
 function syncReadySession(session: NovaExternalSession | null): void {
@@ -579,10 +626,19 @@ export function installExternalSessionResumeListeners(): void {
   }
 
   window.addEventListener("storage", (event) => {
-    if (
-      event.key !== NOVA_EXTERNAL_SESSION_STORAGE_KEY ||
-      typeof event.newValue !== "string"
-    ) {
+    if (event.key !== NOVA_EXTERNAL_SESSION_STORAGE_KEY) {
+      return;
+    }
+
+    // v0.2.0-rc.8 (Phase 5 UX): peer tabs that clear their
+    // external-session localStorage entry fire a storage event
+    // here with `newValue === null`. Treat that as a disconnect.
+    if (event.newValue === null) {
+      broadcastExternalDisconnect();
+      return;
+    }
+
+    if (typeof event.newValue !== "string") {
       return;
     }
 
@@ -599,6 +655,11 @@ export function installExternalSessionResumeListeners(): void {
       return;
     }
 
+    if (parseDisconnectPayload(event.data)) {
+      broadcastExternalDisconnect();
+      return;
+    }
+
     syncReadySession(parseSessionReadyPayload(event.data));
   });
 
@@ -606,7 +667,88 @@ export function installExternalSessionResumeListeners(): void {
     syncReadySession(parseSessionReadyPayload(event.data));
   });
 
+  // v0.2.0-rc.8 (Phase 5 UX): mirror listener on the cleared channel.
+  getSessionClearedChannel()?.addEventListener("message", () => {
+    broadcastExternalDisconnect();
+  });
+
   sessionResumeListenersInstalled = true;
+}
+
+/** v0.2.0-rc.8 (Phase 5 UX): fire-and-forget helper that wakes every
+ * consumer registered for a disconnect event. Idempotent — multiple
+ * sources firing in the same tick result in a single logical event for
+ * the waiters but multiple CustomEvent / BroadcastChannel /
+ * `window.opener.postMessage` emissions, which is fine (no consumer
+ * double-resolves because we `.clear()` the waiter set on the first
+ * invocation). */
+function broadcastExternalDisconnect(): void {
+  if (!isBrowser()) {
+    return;
+  }
+
+  const payload: NovaSessionClearedPayload = {
+    type: NOVA_SESSION_CLEARED_MESSAGE_TYPE
+  };
+
+  dispatchExternalDisconnect();
+  getSessionClearedChannel()?.postMessage(payload);
+
+  if (window.opener && window.opener !== window) {
+    try {
+      window.opener.postMessage(payload, window.location.origin);
+    } catch {
+      // Ignore cross-window messaging failures and keep fallback paths active.
+    }
+  }
+
+  for (const resolve of pendingExternalDisconnectWaiters) {
+    resolve();
+  }
+  pendingExternalDisconnectWaiters.clear();
+}
+
+/** v0.2.0-rc.8 (Phase 5 UX): same-tab, in-process subscribe helper. Used
+ * by `NovaClient` to wait for a disconnect signal to settle (e.g., to
+ * serialize a reconnect attempt behind a wallet-initiated revoke).
+ * Resolves immediately if a disconnect was already observed in this
+ * tab before the subscribe call returned. */
+export function awaitExternalDisconnect(): Promise<void> {
+  if (!isBrowser()) {
+    return Promise.resolve();
+  }
+
+  installExternalSessionResumeListeners();
+  return new Promise((resolve) => {
+    pendingExternalDisconnectWaiters.add(resolve);
+  });
+}
+
+/** v0.2.0-rc.8 (Phase 5 UX): explicit dispatcher for dapp-side
+ * disconnect events. Public API so a dapp that calls `clearExternalSession`
+ * directly (without going through `client.disconnect()`) can still
+ * broadcast a disconnect to peer tabs and listeners. `NovaClient`
+ * emits this internally; dapp code calling `client.disconnect()` does
+ * not need to invoke this directly. */
+export function notifyExternalDisconnect(): void {
+  broadcastExternalDisconnect();
+}
+
+/** v0.2.0-rc.8 (Phase 5 UX): test-only helper that resets the
+ * module-level idempotency guard so subsequent test cases can verify
+ * the install path runs fresh. NOT part of the public API surface
+ * — the underscore prefix flags it for `_setBridgeTokenForTesting`
+ * style consumers.
+ *
+ * Sets the channel sentinels back to `undefined` (not `null`) so the
+ * lazy-init guards `if (sessionReadyChannel !== undefined)` rebuild
+ * them on the next call. */
+export function _resetExternalSessionResumeListenersForTesting(): void {
+  sessionResumeListenersInstalled = false;
+  sessionReadyChannel = undefined;
+  sessionClearedChannel = undefined;
+  pendingExternalSessionWaiters.clear();
+  pendingExternalDisconnectWaiters.clear();
 }
 
 function broadcastReadySession(session: NovaExternalSession): void {
