@@ -144,8 +144,9 @@ describe("consumeExternalCallbackIfPresent", () => {
       value: { href: undefined, origin: "https://dapp.example" }
     });
 
-    // Should not throw — falls through to the localStorage read.
-    await expect(consumeExternalCallbackIfPresent()).resolves.toBeUndefined();
+    // 0.2.0-rc.7: returns false (no consumption) instead of throwing;
+    // the resume flow falls through to the localStorage read.
+    await expect(consumeExternalCallbackIfPresent()).resolves.toBe(false);
   });
 
   it("prefers_pkce_over_legacy_when_both_are_present", async () => {

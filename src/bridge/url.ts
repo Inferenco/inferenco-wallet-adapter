@@ -1,6 +1,6 @@
-import { DEFAULT_DESKTOP_BRIDGE_URL } from "../constants.js";
+import { BRIDGE_TOKEN_PATH_REGEX, DEFAULT_DESKTOP_BRIDGE_URL } from "../constants.js";
 import type { NovaWalletOptions } from "../types.js";
-import { readBridgeToken } from "./token.js";
+import { MissingBridgeTokenError, readBridgeToken } from "./token.js";
 
 /**
  * Returns the bridge base URL with the per-session URL token in the
@@ -25,6 +25,28 @@ export function getBridgeBaseUrlWithToken(options: NovaWalletOptions = {}): stri
 }
 
 /**
+ * 0.2.0-rc.7: extract the per-session URL token from any string-shaped
+ * base URL (default, configured, or embedded in `session.bridgeUrl`).
+ * Used as a fallback when `readBridgeToken()` throws because the dapp
+ * is running in an external browser where the postMessage delivery
+ * channel never fires.
+ *
+ * Returns `null` when no matching token segment is found.
+ */
+export function extractBridgeTokenFromBaseUrl(
+  baseUrl: string | null | undefined
+): string | null {
+  if (!baseUrl) return null;
+  try {
+    const u = new URL(baseUrl);
+    const first = u.pathname.replace(/^\//, "").split("/")[0] ?? "";
+    return BRIDGE_TOKEN_PATH_REGEX.test(first) ? first : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Returns a token-prefixed path suitable for use as the first argument
  * to `new URL(...)` (or as a bare path in a fetch call). The returned
  * string starts with `/<token>` and concatenates `route` if non-empty.
@@ -32,12 +54,36 @@ export function getBridgeBaseUrlWithToken(options: NovaWalletOptions = {}): stri
  * Use this everywhere the adapter previously did
  * `new URL("/connect", bridgeBaseUrl(options))`. The old form landed
  * the request on the unprefixed route, which the wallet rejects.
+ *
+ * Token resolution order (rc.7):
+ *   1. `readBridgeToken()` (pathname / postMessage). Used inside
+ *      Nova Desk's WebKit2GTK webview where the wallet's injected
+ *      provider posted the token at startup.
+ *   2. Fallback to extracting the token from `options.bridgeBaseUrl`
+ *      or the package default `DEFAULT_DESKTOP_BRIDGE_URL`. Used in
+ *      external browsers where the token was delivered via the
+ *      wallet's redirect callback URL (`?bridgeUrl=http://127.0.0.1:21984/<token>`).
+ *
+ * Both branches throw `MissingBridgeTokenError` when no token is
+ * recoverable. Callers that want graceful fallback (e.g. the
+ * `tryLocalBridgeConnect` deeplink retry) catch the throw and return
+ * `null` rather than re-throw.
  */
 export function bridgePathWithToken(
   route: string,
   options: NovaWalletOptions = {}
 ): string {
-  const token = readBridgeToken();
+  let token: string;
+  try {
+    token = readBridgeToken();
+  } catch (err) {
+    if (!(err instanceof MissingBridgeTokenError)) throw err;
+    const fallback =
+      extractBridgeTokenFromBaseUrl(options.bridgeBaseUrl) ??
+      extractBridgeTokenFromBaseUrl(DEFAULT_DESKTOP_BRIDGE_URL);
+    if (!fallback) throw err;
+    token = fallback;
+  }
   const trimmed = route.startsWith("/") ? route : `/${route}`;
   return `/${token}${trimmed}`;
 }

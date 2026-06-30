@@ -638,4 +638,94 @@ describe("NovaClient", () => {
     });
     expect(window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
   });
+
+  it("0.2.0-rc.7: connect resolves from callback URL without re-firing the deeplink", async () => {
+    // External browser: Nova Desk fires the deeplink, user approves,
+    // wallet redirects back to the dapp at <redirect>?address=...&sessionId=...
+    // &bridgeUrl=... The dapp's React re-mount fires walletCore.connect()
+    // again on the new page load. The connect() helper must consume
+    // the URL params FIRST (instead of firing another deeplink).
+    const tokenHex =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const callbackBridgeUrl = `http://127.0.0.1:21984/${tokenHex}`;
+    // Use a valid 64-hex-char address (matches AccountAddress requirements).
+    const validAddress =
+      "0x" + "a".repeat(64);
+    const validPublicKey =
+      "0x" + "d".repeat(64);
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: {
+        href: `https://dapp.example/?address=${validAddress}&publicKey=${validPublicKey}&network=testnet&chainId=2&sessionId=sess-1&bridgeUrl=${encodeURIComponent(callbackBridgeUrl)}&walletName=Nova%20Connect`,
+        origin: "https://dapp.example",
+        pathname: "/"
+      }
+    });
+
+    // The validation fetch would normally hit /<token>/session/<id>; mock
+    // it to return success with the echoed session shape.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          address: validAddress,
+          publicKey: validPublicKey,
+          network: "testnet",
+          chainId: 2,
+          sessionId: "sess-1",
+          bridgeUrl: callbackBridgeUrl,
+          walletName: "Nova Connect"
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = new NovaClient();
+    const result = await client.connect();
+
+    expect(result.account.address.toString()).toBe(validAddress);
+    // Token survives in the persisted session.bridgeUrl — the next
+    // sign-message / sign-transaction call will extract it from there.
+    const stored = JSON.parse(
+      window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY) || "null"
+    );
+    expect(stored?.bridgeUrl).toBe(callbackBridgeUrl);
+    // The deeplink must NOT have been fired a second time.
+    expect((window as any).location.href).not.toContain("inferenco://");
+  });
+
+  it("0.2.0-rc.7: connect falls through to deeplink when no callback params are present", async () => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: {
+        href: "https://dapp.example/",
+        origin: "https://dapp.example",
+        pathname: "/"
+      }
+    });
+    window.localStorage.clear();
+
+    // Stub launchDesktopOrMobileConnect to be a no-op so the test can
+    // observe its effect (or absence) without affecting the test runner.
+    const launchSpy = vi
+      .spyOn(bridge, "launchDesktopOrMobileConnect")
+      .mockImplementation(() => "");
+
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new TypeError("MissingBridgeTokenError: token unavailable")
+    );
+
+    const client = new NovaClient();
+    const connectPromise = client.connect();
+
+    // Let the microtask queue run so launchDesktopOrMobileConnect
+    // gets a chance to be invoked.
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(launchSpy).toHaveBeenCalled();
+    connectPromise.catch(() => {
+      /* expected to reject with timeout / not installed */
+    });
+  });
 });

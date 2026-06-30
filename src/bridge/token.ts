@@ -24,11 +24,9 @@
  * previous (now-stale) token across wallet restarts.
  */
 
-import { MISSING_BRIDGE_TOKEN_MESSAGE } from "../constants.js";
+import { BRIDGE_TOKEN_PATH_REGEX, MISSING_BRIDGE_TOKEN_MESSAGE } from "../constants.js";
 
-export { MISSING_BRIDGE_TOKEN_MESSAGE };
-
-export const BRIDGE_TOKEN_PATH_REGEX = /^[0-9a-f]{64}$/;
+export { BRIDGE_TOKEN_PATH_REGEX, MISSING_BRIDGE_TOKEN_MESSAGE };
 
 export class MissingBridgeTokenError extends Error {
   constructor(message: string = MISSING_BRIDGE_TOKEN_MESSAGE) {

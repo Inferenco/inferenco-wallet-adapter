@@ -15,6 +15,7 @@ import type {
 import {
   clearPendingMobilePairing,
   clearExternalSession,
+  consumeExternalCallbackIfPresent,
   installExternalSessionResumeListeners,
   isMobileBrowser,
   launchDesktopOrMobileConnect,
@@ -314,9 +315,35 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         return this.connectResultFromExternalSession(resumedMobileSession);
       }
 
+      // 0.2.0-rc.7: if Nova Desk redirected us back to the dapp with
+      // the callback URL params (?address=...&sessionId=...&bridgeUrl=...),
+      // consume them into localStorage BEFORE trying the local-bridge
+      // or deeplink paths. Without this, the page navigation that the
+      // callback causes destroys the in-flight connect promise, and
+      // the next user-triggered connect() invocation re-fires the
+      // deeplink (asking the user to connect again), and
+      // waitForExternalSession times out because nothing consumed
+      // the params.
+      const consumedCallback = await consumeExternalCallbackIfPresent(this.options);
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         return this.connectResultFromExternalSession(externalSession);
+      }
+      // If the callback was consumed but the session isn't yet
+      // validated (e.g., legacy callback where the local bridge is
+      // unreachable), don't fall through to the deeplink — we already
+      // got the answer.
+      if (consumedCallback) {
+        // Wait briefly for the session to land in localStorage; if the
+        // PKCE flow is in progress it'll arrive via storeCallbackSession
+        // within a few ticks.
+        for (let i = 0; i < 20; i += 1) {
+          const pending = readExternalSession();
+          if (pending) {
+            return this.connectResultFromExternalSession(pending);
+          }
+          await new Promise((r) => setTimeout(r, 50));
+        }
       }
 
       if (typeof window !== "undefined" && isMobileBrowser()) {

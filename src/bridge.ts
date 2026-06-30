@@ -50,6 +50,7 @@ import {
   NOVA_PROTOCOL_KEY_STORAGE_KEY,
   PKCE_VERIFIER_STORAGE_KEY
 } from "./constants";
+import { BRIDGE_TOKEN_PATH_REGEX } from "./bridge/token.js";
 import { forceRefreshBridgeToken } from "./bridge/token.js";
 import { bridgePathWithToken, bridgeUrlWithToken, getBridgeBaseUrlWithToken } from "./bridge/url.js";
 import { deserializeAnyRawTransaction, ensureBcsToHex, normalizeProviderAccount } from "./conversion";
@@ -247,8 +248,8 @@ export function hasStoredExternalSession(): boolean {
  */
 export async function consumeExternalCallbackIfPresent(
   options: NovaWalletOptions = {}
-): Promise<void> {
-  if (!isBrowser()) return;
+): Promise<boolean> {
+  if (!isBrowser()) return false;
   // Defensive: if the location isn't a parseable URL (jsdom test
   // setup, server-side render, etc.), skip the callback consumption.
   // The resume flow falls through to the localStorage read.
@@ -256,7 +257,7 @@ export async function consumeExternalCallbackIfPresent(
   try {
     url = new URL(window.location.href);
   } catch {
-    return;
+    return false;
   }
 
   if (url.searchParams.has("code")) {
@@ -269,17 +270,20 @@ export async function consumeExternalCallbackIfPresent(
       // surface the failure separately if it wants to.
       try {
         await storeCallbackSessionViaPkce({ codeVerifier, options });
+        return true;
       } catch {
         // Swallow; the caller is `tryResumeNovaWalletConnection`,
         // which has its own error surface.
+        return false;
       }
-      return;
     }
   }
 
   if (url.searchParams.has(CALLBACK_ADDRESS_PARAM)) {
     storeCallbackSession();
+    return true;
   }
+  return false;
 }
 
 export function storeExternalSession(session: NovaExternalSession): void {
@@ -358,21 +362,97 @@ function sessionEndpointUrl(
   session: Pick<NovaExternalSession, "sessionId" | "bridgeUrl">,
   options: NovaWalletOptions = {}
 ): string {
-  return new URL(
-    `/session/${encodeURIComponent(session.sessionId)}`,
-    sessionBridgeBaseUrl(session, options)
-  ).toString();
+  return _sessionEndpointUrlInternal(session, options);
+}
+
+/**
+ * 0.2.0-rc.7: exposed for tests. Production callers go through
+ * `sessionEndpointUrl` (which currently just aliases this function).
+ * Underscore-prefixed so package consumers understand this is not a
+ * stable surface — it may be removed or renamed without a major bump.
+ */
+export function _sessionEndpointUrlInternal(
+  session: Pick<NovaExternalSession, "sessionId" | "bridgeUrl">,
+  options: NovaWalletOptions = {}
+): string {
+  const sessionId = encodeURIComponent(session.sessionId);
+  const base = sessionBridgeBaseUrl(session, options);
+  // 0.2.0-rc.7: if the configured/embedded bridge URL carries the
+  // per-session token as its first path segment (`.../<64-hex>`),
+  // resolving `/session/<id>` against it via the URL constructor
+  // replaces `<token>` with `session/<id>` (treating the token as
+  // a "directory"). The bridge's F-03 token gate would then reject
+  // the resulting request with a 404 and `validateExternalSession`
+  // would call `clearExternalSession()`, wiping the freshly-consumed
+  // session and breaking the dapp's connect promise.
+  //
+  // Detect the token segment and prefix it manually.
+  const tokenSegment = extractBridgeTokenFromBaseUrl(base, options);
+  if (tokenSegment) {
+    try {
+      const u = new URL(base);
+      return `${u.protocol}//${u.host}/${tokenSegment}/session/${sessionId}`;
+    } catch {
+      /* fall through to URL constructor default */
+    }
+  }
+  return new URL(`/session/${sessionId}`, base).toString();
 }
 
 function connectionEndpointUrl(
   session: Pick<NovaExternalSession, "address" | "network" | "bridgeUrl">,
   options: NovaWalletOptions = {}
 ): string {
-  const url = new URL("/connection", sessionBridgeBaseUrl(session, options));
+  return _connectionEndpointUrlInternal(session, options);
+}
+
+/**
+ * 0.2.0-rc.7: exposed for tests. Production callers go through
+ * `connectionEndpointUrl` (which currently just aliases this function).
+ * Underscore-prefixed so package consumers understand this is not a
+ * stable surface — it may be removed or renamed without a major bump.
+ */
+export function _connectionEndpointUrlInternal(
+  session: Pick<NovaExternalSession, "address" | "network" | "bridgeUrl">,
+  options: NovaWalletOptions = {}
+): string {
+  const base = sessionBridgeBaseUrl(session, options);
+  const tokenSegment = extractBridgeTokenFromBaseUrl(base, options);
+  const url = new URL(
+    tokenSegment ? `/${tokenSegment}/connection` : "/connection",
+    base
+  );
   url.searchParams.set("origin", window.location.origin);
   url.searchParams.set("address", session.address);
   url.searchParams.set("network", session.network);
   return url.toString();
+}
+
+/**
+ * 0.2.0-rc.7: extract the per-session URL token from a base bridge
+ * URL. Looks for the first path segment after `host:port`. Returns
+ * null when the base has no recognisable token (the dapp is using
+ * an unprefixed `http://127.0.0.1:21984` or no token in the URL).
+ *
+ * Used to preserve the `/<token>/` prefix when constructing URLs
+ * relative to `session.bridgeUrl` in external browsers.
+ */
+function extractBridgeTokenFromBaseUrl(
+  baseUrl: string,
+  options: NovaWalletOptions = {}
+): string | null {
+  const candidates = [baseUrl, options.bridgeBaseUrl ?? ""];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    try {
+      const u = new URL(raw);
+      const segment = u.pathname.replace(/^\//, "").split("/")[0] ?? "";
+      if (BRIDGE_TOKEN_PATH_REGEX.test(segment)) return segment;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 function sessionBridgeBaseUrl(

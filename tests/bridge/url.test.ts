@@ -105,4 +105,36 @@ describe("bridge/url", () => {
     expect(urlB).toContain(SAMPLE_TOKEN_2);
     expect(urlA).not.toEqual(urlB);
   });
+
+  it("bridgePathWithToken_falls_back_to_options_bridgeBaseUrl_token_when_module_scope_empty", async () => {
+    // 0.2.0-rc.7: external browser scenario. The pathname/postMessage
+    // delivery channels never fire; the token was delivered via the
+    // wallet redirect's bridgeUrl. Reset module-scope state and confirm
+    // the fallback extracts the token from options.bridgeBaseUrl.
+    _resetBridgeTokenForTesting();
+    const customBase = `http://127.0.0.1:21984/${SAMPLE_TOKEN}`;
+    const path = bridgePathWithToken("/connect", { bridgeBaseUrl: customBase });
+    expect(path).toBe(`/${SAMPLE_TOKEN}/connect`);
+  });
+
+  it("bridgePathWithToken_falls_back_to_default_bridge_url_token", () => {
+    // 0.2.0-rc.7: when neither module-scope nor options.bridgeBaseUrl
+    // carries a token, look for one in DEFAULT_DESKTOP_BRIDGE_URL.
+    // (In practice this defaults to the bare host — no token. Test that
+    // the function falls back to MissingBridgeTokenError cleanly.)
+    _resetBridgeTokenForTesting();
+    expect(() => bridgePathWithToken("/connect")).toThrow(
+      /Nova Desk bridge token not available/
+    );
+  });
+
+  it("extractBridgeTokenFromBaseUrl_recognises_token_segment", async () => {
+    const { extractBridgeTokenFromBaseUrl } = await import("../../src/bridge/url.js");
+    expect(extractBridgeTokenFromBaseUrl(`http://127.0.0.1:21984/${SAMPLE_TOKEN}`)).toBe(SAMPLE_TOKEN);
+    expect(extractBridgeTokenFromBaseUrl(`http://127.0.0.1:21984/${SAMPLE_TOKEN}/foo`)).toBe(SAMPLE_TOKEN);
+    expect(extractBridgeTokenFromBaseUrl("http://127.0.0.1:21984")).toBeNull();
+    expect(extractBridgeTokenFromBaseUrl("not a url")).toBeNull();
+    expect(extractBridgeTokenFromBaseUrl(null)).toBeNull();
+    expect(extractBridgeTokenFromBaseUrl(undefined)).toBeNull();
+  });
 });
