@@ -13,6 +13,9 @@ import type {
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
+  bridgePollIntervalMs,
+  bridgePollTimeoutMs,
+  buildDesktopOrMobileConnectUrlWithRequest,
   clearPendingMobilePairing,
   clearExternalSession,
   consumeExternalCallbackIfPresent,
@@ -21,11 +24,14 @@ import {
   launchDesktopOrMobileConnect,
   notifyExternalDisconnect,
   parseDisconnectPayload,
+  pollPreauthConnect,
   readExternalSession,
   readValidatedExternalSession,
   revokeExternalSession,
   sessionToAccountInfo,
+  startPreauthConnect,
   storeCallbackSession,
+  storeExternalSession,
   tryLocalBridgeConnect,
   tryLocalBridgeSignAndSubmit,
   tryLocalBridgeSignMessage,
@@ -263,6 +269,40 @@ async function retryLocalBridgeConnectAfterDeeplink(
   return null;
 }
 
+/**
+ * v0.3.0+ pre-auth polling loop. Calls
+ * `pollPreauthConnect(requestId)` every 250 ms until the wallet
+ * responds with `approved` or `rejected`, or the bridge poll
+ * deadline (`DEFAULT_BRIDGE_POLL_TIMEOUT_MS = 120 s`) elapses.
+ *
+ * Returns the validated `NovaExternalSession` on approval; null
+ * on timeout or rejection. Single-shot: the dapp's tab is the
+ * only consumer — the wallet invalidates the request_id after
+ * the first `Approved` poll.
+ */
+async function pollPreauthUntilResolved(
+  requestId: string,
+  options: NovaWalletOptions
+): Promise<NovaExternalSession | null> {
+  const deadline = Date.now() + bridgePollTimeoutMs(options);
+  while (Date.now() < deadline) {
+    const result = await pollPreauthConnect({ requestId, options });
+    if (result) {
+      if (result.status === "approved" && result.session) {
+        storeExternalSession(result.session);
+        return result.session;
+      }
+      if (result.status === "rejected") {
+        return null;
+      }
+    }
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, bridgePollIntervalMs(options))
+    );
+  }
+  return null;
+}
+
 export class NovaClient extends EventEmitter<NovaClientEvents> {
   private provider?: NovaProvider;
   private accountInfo: AccountInfo | null = null;
@@ -458,9 +498,52 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         }
       }
 
-      if (typeof window !== "undefined" && isMobileBrowser()) {
+if (typeof window !== "undefined" && isMobileBrowser()) {
         const mobileSession = await connectViaMobileRelay(this.options);
         return this.connectResultFromExternalSession(mobileSession);
+      }
+
+      // 0.2.0-rc.10 pre-auth flow (Nova Desk 0.6.0-rc.6+). Desktop
+      // browser path: NO deeplink, NO new tab. The dapp creates a
+      // connect request via `POST /preauth-connect`, then polls
+      // `GET /preauth-poll/<request_id>` until the user approves
+      // in Nova Desk. Nova Desk auto-shows the approval sheet
+      // from the bridge queue (no `inferenco://` deeplink needed).
+      //
+      // v0.2.0-rc.10 removed the `window.location.href = deeplink`
+      // call that rc.9 used to fire — the wallet surfaces the
+      // approval sheet directly from the POST /preauth-connect
+      // queue, so the browser's external-protocol handler dialog
+      // (Chrome on Linux) is avoided entirely.
+      if (typeof window !== "undefined" && !isMobileBrowser()) {
+        const app =
+          (typeof document !== "undefined" && document.title) ||
+          "Nova Desk";
+        const preauth = await startPreauthConnect({
+          origin: window.location.origin,
+          app,
+          options: this.options,
+        });
+        if (preauth) {
+          const session = await pollPreauthUntilResolved(
+            preauth.requestId,
+            this.options,
+          );
+          if (session) {
+            return this.connectResultFromExternalSession(session);
+          }
+          throw new NovaAdapterError(
+            NovaErrorCode.ConnectionTimeout,
+            "Timed out waiting for Nova Desk to approve the pre-auth connect request.",
+          );
+        }
+
+        // Pre-auth route unavailable (older wallet build, or the
+        // bridge is down). Fall through to the legacy inferenco://
+        // deeplink to launch the wallet via the OS handler. This
+        // keeps the adapter working against pre-0.6.0-rc.6
+        // wallets and against cold-start cases where Nova Desk
+        // isn't running yet.
       }
 
       const bridgedAccount = await tryLocalBridgeConnect(this.options);

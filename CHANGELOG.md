@@ -5,6 +5,60 @@ All notable changes to `@inferenco/nova-wallet-adapter` will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.11] - 2026-07-02
+
+### Fixed (bridge "already pending" guard getting stuck after dapp abort)
+
+When a dapp cancelled or aborted a `signMessage` / `signTransaction` /
+`signAndSubmit` request before the wallet could transition the state out of
+`Pending`, the wallet's "Another Nova Desk ... approval is already pending."
+guard would block every subsequent request — including after
+disconnect/reconnect, until the wallet process restarted. Root cause:
+the per-request maps were never cleared when the dapp side aborted, and
+session-revoke only cleaned the session/connect maps, not the per-request
+maps.
+
+Requires Nova Desk `v0.6.0-rc.6+` (the new `POST /cancel/<id>` endpoint
+and the session-revoke cleanup are wallet-side changes that ship with
+the next wallet release; the adapter just consumes them).
+
+- **`tryLocalBridgeSignMessage`** — on any error during
+  `startBridgeRequest` / `pollSignedResult` the adapter now fires a
+  fire-and-forget `POST <bridgeUrl>/cancel/<requestId>` with the error
+  message as the `reason`. The wallet's cancel handler transitions
+  `Pending` → `Failed` (idempotent) so the next request can proceed.
+- **`tryLocalBridgeSignTransaction`** — same pattern.
+- **`tryLocalBridgeSignAndSubmit`** — same pattern.
+- **`cancelPendingRequest`** — new internal helper. `void` `fetch` with
+  `.catch(() => {})` so a wallet-side blip never delays the caller.
+  Server-side cancel is idempotent (no-op on terminal/unknown ids), so
+  duplicate cancels are safe.
+
+### Migration from 0.2.0-rc.10
+
+| Wallet | Adapter | Behaviour |
+|---|---|---|
+| v0.6.0-rc.6+ | **0.2.0-rc.11** | Cancelled/aborted requests release the pending guard immediately. |
+| v0.6.0-rc.6+ | 0.2.0-rc.10 | Still works; the wallet's 5-min lazy expiration sweep eventually clears stale entries. |
+| v0.6.0-rc.5 or older | 0.2.0-rc.11 | Cancel POST returns 404; the adapter swallows the error so nothing regresses (the wallet won't ever expose the cancel endpoint). |
+
+### Tests
+
+- 112/112 passing (no new test files — the cancel path is a fire-and-forget
+  side effect that's hard to assert without a live bridge, so the
+  coverage lives in the wallet's `nova-desk-ui` test suite which spins
+  up the bridge directly).
+
+## [0.2.0-rc.10] - 2026-07-01
+
+### Changed (deprecation)
+
+- **`buildDesktopOrMobileConnectUrlWithRequest`** is now marked
+  `@deprecated since 0.2.0-rc.10` with a console warning. The
+  pre-auth flow no longer needs the deeplink in the success path —
+  `NovaClient.connect()` no longer fires it. Kept exported for
+  dapps that call it directly. Will be removed in `0.4.0`.
+
 ## [0.2.0-rc.8] - 2026-07-01
 
 ### Added (Phase 5 UX — wallet-initiated disconnect notification)
@@ -344,3 +398,55 @@ deeplink flow is already covered by existing tests in
 - `NOVA_DESK_NAME` exported as deprecated alias for backward compatibility
 - Default hosted relay: `https://nova-service-160604102004.europe-west1.run.app`
 - Default desktop bridge: `http://127.0.0.1:21984`
+
+## [0.2.0-rc.10] - 2026-07-01
+
+### Changed
+
+- `NovaClient.connect()` no longer fires the `inferenco://` deeplink in the
+  pre-auth success branch. Nova Desk 0.6.0-rc.6+ auto-shows the approval
+  sheet from the `POST /preauth-connect` queue — firing the deeplink
+  triggers the browser's external-protocol handler dialog (Chrome on
+  Linux) and is redundant. The dapp simply polls `GET /preauth-poll/<uuid>`
+  and receives the session via JSON.
+
+- `launchDesktopOrMobileConnect` (and the legacy `?redirect=...` deeplink)
+  remains as the **fallback** path: when `startPreauthConnect` returns
+  `null` (wallet not reachable, or pre-rc.6 wallet build), the adapter
+  fires the legacy deeplink to launch the wallet via the OS handler.
+  Cold-start scenarios still work; nothing changes for the user gesture
+  of clicking Connect in the dapp.
+
+### Deprecated
+
+- `buildDesktopOrMobileConnectUrlWithRequest` is deprecated and will be
+  removed in `0.4.0`. The function still works (emits a `console.warn`
+  on each call); it remains exported for dapps that call it directly
+  outside the pre-auth flow. The wallet-side approval is now driven by
+  the pre-auth POST, not by the deeplink.
+
+### Tests
+
+108 → 112 (+4 new tests):
+- `tests/bridge/preauth.test.ts`:
+  - `buildDesktopOrMobileConnectUrlWithRequest emits a deprecation warning`
+  - `NovaClient source does NOT assign window.location.href to a deeplink URL`
+  - `NovaClient source does NOT call launchDesktopOrMobileConnect inside the preauth success branch`
+  - `buildDesktopOrMobileConnectUrlWithRequest still produces the legacy URL shape for callers that need it`
+
+### Migration
+
+For dapps currently using `@inferenco/nova-wallet-adapter < 0.2.0-rc.10`:
+
+- **Adapter 0.2.0-rc.10 + wallet 0.6.0-rc.6+ (primary path):** no code
+  changes required. The dapp's `NovaClient.connect()` works against the
+  new wallet without a deeplink firing.
+
+- **Adapter 0.2.0-rc.10 + wallet < 0.6.0-rc.6:** `startPreauthConnect`
+  returns `null` (pre-auth routes don't exist), and the adapter falls
+  through to the legacy deeplink. Same behavior as rc.9.
+
+- **Adapter < 0.2.0-rc.10 + wallet 0.6.0-rc.6+:** the adapter fires
+  the legacy `?redirect=...` deeplink, which the wallet accepts on the
+  fallback path. Same behavior as rc.3 from the user's perspective.
+  Recommend upgrading to rc.10 for the no-new-tab UX.

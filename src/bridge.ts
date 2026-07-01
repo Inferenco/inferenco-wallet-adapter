@@ -119,9 +119,13 @@ function bridgePollIntervalMs(options: NovaWalletOptions = {}): number {
   return options.bridgePollIntervalMs ?? DEFAULT_BRIDGE_POLL_INTERVAL_MS;
 }
 
+export { bridgePollIntervalMs };
+
 function bridgePollTimeoutMs(options: NovaWalletOptions = {}): number {
   return options.bridgePollTimeoutMs ?? DEFAULT_BRIDGE_POLL_TIMEOUT_MS;
 }
+
+export { bridgePollTimeoutMs };
 
 export function currentUrlWithoutCallbackKey(): string {
   if (!isBrowser()) return "";
@@ -1234,6 +1238,229 @@ async function pollBridge<T extends { status?: string; error?: string }>(
   throw new Error("Timed out waiting for Nova Desk approval");
 }
 
+/**
+ * v0.3.0+ pre-auth flow (Nova Desk 0.6.0-rc.3+, no-new-tab):
+ *
+ * The dapp's adapter calls `POST /preauth-connect` on the wallet's
+ * bridge (no token required, `Origin` header is the auth — browsers
+ * enforce it). The wallet returns a `requestId`. The adapter fires
+ * the `inferenco://login?request=<requestId>&app=<name>` deeplink.
+ * After the user approves in Nova Desk, the adapter polls
+ * `GET /preauth-poll/<requestId>` and receives the session.
+ *
+ * This eliminates the legacy `xdg-open` step that opened a new tab
+ * to deliver the session via a callback URL. The dapp's original
+ * tab stays open the entire time.
+ *
+ * Returns `null` if the bridge is unreachable (e.g., wallet not
+ * running). The caller should fall back to `tryLocalBridgeConnect`
+ * for the legacy token-gated path (used by the embedded webview
+ * path via postMessage).
+ */
+export interface PreauthStartResult {
+  requestId: string;
+  pollUrl: string;
+  bridgeUrl: string;
+}
+
+export async function startPreauthConnect(input: {
+  origin: string;
+  app: string;
+  expectedOrigin?: string;
+  codeChallenge?: string;
+  options?: NovaWalletOptions;
+}): Promise<PreauthStartResult | null> {
+  if (!isBrowser() || isMobileBrowser()) return null;
+
+  const base = bridgeBaseUrl(input.options ?? {});
+  // Strip any `/<token>` prefix from the configured bridge URL.
+  // The pre-auth route is token-less; the wallet's `Origin`-based
+  // auth is sufficient.
+  const cleanedBase = base.replace(/\/[0-9a-f]{32,}\/?$/, "").replace(/\/$/, "");
+  const url = `${cleanedBase}/preauth-connect`;
+  const body = JSON.stringify({
+    origin: input.origin,
+    app: input.app,
+    expected_origin: input.expectedOrigin,
+    code_challenge: input.codeChallenge,
+  });
+
+  try {
+    const response = await fetchJsonWithTimeout<{
+      requestId: string;
+      pollUrl: string;
+      bridgeUrl: string;
+      status?: string;
+    }>(url, bridgeConnectTimeoutMs(input.options ?? {}), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body,
+    });
+    return {
+      requestId: response.requestId,
+      pollUrl: response.pollUrl,
+      bridgeUrl: response.bridgeUrl,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * v0.3.0+ pre-auth poll: `GET /preauth-poll/<requestId>`. Returns
+ * `{status: "pending"}` while waiting; the flat
+ * `ExternalBrowserConnectApproval` JSON (camelCase) when
+ * approved; `{status: "rejected"}` on reject; null on bridge
+ * failure (caller should retry).
+ *
+ * The adapter normalizes the wallet's flat shape into a
+ * `NovaExternalSession`.
+ */
+export interface PreauthPollResult {
+  status: "pending" | "approved" | "rejected";
+  session?: NovaExternalSession;
+  error?: string;
+}
+
+interface PreauthApprovedFlat {
+  requestId: string;
+  status: string;
+  address: string;
+  publicKey: string;
+  network: string;
+  chainId: number;
+  sessionId: string;
+  bridgeUrl: string;
+  walletName: string;
+}
+
+function preauthFlatToSession(flat: PreauthApprovedFlat): NovaExternalSession {
+  return {
+    transport: "desktop-bridge",
+    address: flat.address,
+    publicKey: flat.publicKey,
+    network: flat.network,
+    chainId: flat.chainId,
+    sessionId: flat.sessionId,
+    bridgeUrl: flat.bridgeUrl,
+    walletName: flat.walletName,
+  };
+}
+
+export async function pollPreauthConnect(input: {
+  requestId: string;
+  options?: NovaWalletOptions;
+}): Promise<PreauthPollResult | null> {
+  if (!isBrowser() || isMobileBrowser()) return null;
+
+  const base = bridgeBaseUrl(input.options ?? {})
+    .replace(/\/[0-9a-f]{32,}\/?$/, "")
+    .replace(/\/$/, "");
+  const url = `${base}/preauth-poll/${encodeURIComponent(input.requestId)}`;
+  try {
+    const raw = await fetchJsonWithTimeout<unknown>(
+      url,
+      bridgeConnectTimeoutMs(input.options ?? {}),
+    );
+    if (!raw || typeof raw !== "object") return null;
+    const obj = raw as Record<string, unknown>;
+    const status = obj.status;
+    if (status === "approved") {
+      const flat = obj as unknown as PreauthApprovedFlat;
+      if (
+        typeof flat.address === "string" &&
+        typeof flat.publicKey === "string" &&
+        typeof flat.network === "string" &&
+        typeof flat.chainId === "number" &&
+        typeof flat.sessionId === "string" &&
+        typeof flat.bridgeUrl === "string"
+      ) {
+        return {
+          status: "approved",
+          session: preauthFlatToSession(flat),
+        };
+      }
+      return null;
+    }
+    if (status === "rejected") {
+      return {
+        status: "rejected",
+        error:
+          typeof obj.error === "string"
+            ? (obj.error as string)
+            : "user_cancelled",
+      };
+    }
+    return { status: "pending" };
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "status" in error &&
+      ((error as { status: number }).status === 404 ||
+        (error as { status: number }).status === 410)
+    ) {
+      // Unknown / consumed request id — surface as a single
+      // rejected result so the caller can error out cleanly.
+      return { status: "rejected", error: "request_not_found" };
+    }
+    return null;
+  }
+}
+
+/**
+ * @deprecated since 0.2.0-rc.10. The pre-auth flow no longer
+ * requires a deeplink in the success path. Nova Desk 0.6.0-rc.6+
+ * auto-shows the approval sheet from `POST /preauth-connect` —
+ * `NovaClient.connect()` no longer fires this URL internally. This
+ * export remains for dapps that call it directly; it will be
+ * removed in 0.4.0. When `startPreauthConnect` succeeds the wallet
+ * surfaces the approval sheet via the bridge queue, so firing the
+ * deeplink is redundant and triggers the browser's
+ * external-protocol handler dialog (Chrome on Linux).
+ *
+ * @example
+ * ```ts
+ * // Old (rc.9 and earlier): fire the deeplink after a successful
+ * // pre-auth POST.
+ * const deeplink = buildDesktopOrMobileConnectUrlWithRequest(
+ *   preauth.requestId,
+ *   document.title,
+ * );
+ * window.location.href = deeplink;
+ *
+ * // New (rc.10+): the wallet surfaces the approval sheet
+ * // automatically. Just poll.
+ * const session = await pollPreauthUntilResolved(preauth.requestId);
+ * ```
+ */
+export function buildDesktopOrMobileConnectUrlWithRequest(
+  requestId: string,
+  app: string,
+  options: NovaWalletOptions = {},
+): string {
+  if (typeof console !== "undefined") {
+    console.warn(
+      "[inferenco-wallet-adapter] buildDesktopOrMobileConnectUrlWithRequest is deprecated since 0.2.0-rc.10. " +
+      "When the pre-auth flow succeeds, Nova Desk auto-shows the approval sheet from the POST /preauth-connect queue — " +
+      "no deeplink is needed. This export will be removed in 0.4.0.",
+    );
+  }
+  if (isMobileBrowser()) {
+    // Mobile path: emit the relay URL with the request_id encoded.
+    const base = options.deeplinkBaseUrl ?? DEFAULT_DEEPLINK_BASE_URL;
+    return `${base}${encodeURIComponent(requestId)}`;
+  }
+  const params = new URLSearchParams({
+    request: requestId,
+    app: app || "Nova Desk",
+  });
+  return `${DEFAULT_DESKTOP_LOGIN_URL}?${params.toString()}`;
+}
+
 export async function tryLocalBridgeConnect(options: NovaWalletOptions = {}): Promise<AccountInfo | null> {
   if (!isBrowser() || isMobileBrowser()) return null;
 
@@ -1301,6 +1528,39 @@ function reconnectSigningError(): Error {
 
 function reconnectTransactionError(): Error {
   return new Error("Nova Desk is not reachable for transaction approval. Reconnect the wallet and try again.");
+}
+
+/**
+ * Tell the wallet to drop a `Pending` request that the dapp no longer cares
+ * about (user hit "Cancel" in the dapp UI, dapp navigated, or the request
+ * timed out). Fire-and-forget: a failure here is harmless because the wallet
+ * also lazy-sweeps expired requests on its own.
+ *
+ * Without this, a cancelled dapp request would block the wallet's
+ * "Another Nova Desk ... approval is already pending." guard for the
+ * lifetime of the wallet process.
+ */
+function cancelPendingRequest(
+  requestId: string,
+  session: NovaExternalSession,
+  options: NovaWalletOptions,
+  reason: string
+): void {
+  if (!isBrowser() || !session.bridgeUrl) return;
+  const url = bridgeUrlWithToken(`/cancel/${requestId}`, {
+    ...options,
+    bridgeBaseUrl: session.bridgeUrl
+  });
+  // Don't await — we don't want a network blip to delay the caller.
+  // Fire-and-forget, with best-effort error suppression.
+  void fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+    mode: "cors"
+  }).catch(() => {
+    /* wallet unreachable — the lazy sweep will eventually clear it */
+  });
 }
 
 function normalizeBridgeSignMessageOutput(payload: NovaBridgeMessagePoll): CedraSignMessageOutput {
@@ -1451,15 +1711,25 @@ export async function tryLocalBridgeSignMessage(
     { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
     reconnectSigningError()
   );
-  const payload = await pollSignedResult<NovaBridgeMessagePoll>(
-    "/message-request",
-    requestId,
-    { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
-    reconnectSigningError()
-  );
+  try {
+    const payload = await pollSignedResult<NovaBridgeMessagePoll>(
+      "/message-request",
+      requestId,
+      { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
+      reconnectSigningError()
+    );
 
-  if (payload.status === "approved") return normalizeBridgeSignMessageOutput(payload);
-  throw new Error(payload.error ?? "Nova Desk rejected the signMessage request");
+    if (payload.status === "approved") return normalizeBridgeSignMessageOutput(payload);
+    throw new Error(payload.error ?? "Nova Desk rejected the signMessage request");
+  } catch (error) {
+    cancelPendingRequest(
+      requestId,
+      session,
+      options,
+      error instanceof Error ? error.message : "adapter_error"
+    );
+    throw error;
+  }
 }
 
 export async function tryLocalBridgeSignTransaction(
@@ -1480,15 +1750,25 @@ export async function tryLocalBridgeSignTransaction(
     { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
     reconnectSigningError()
   );
-  const payload = await pollSignedResult<NovaBridgeSignTransactionPoll>(
-    "/sign-transaction-request",
-    requestId,
-    { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
-    reconnectSigningError()
-  );
+  try {
+    const payload = await pollSignedResult<NovaBridgeSignTransactionPoll>(
+      "/sign-transaction-request",
+      requestId,
+      { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
+      reconnectSigningError()
+    );
 
-  if (payload.status === "approved") return normalizeBridgeSignTransactionOutput(payload);
-  throw new Error(payload.error ?? "Nova Desk rejected the signTransaction request");
+    if (payload.status === "approved") return normalizeBridgeSignTransactionOutput(payload);
+    throw new Error(payload.error ?? "Nova Desk rejected the signTransaction request");
+  } catch (error) {
+    cancelPendingRequest(
+      requestId,
+      session,
+      options,
+      error instanceof Error ? error.message : "adapter_error"
+    );
+    throw error;
+  }
 }
 
 export async function tryLocalBridgeSignAndSubmit(
@@ -1509,16 +1789,26 @@ export async function tryLocalBridgeSignAndSubmit(
     { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
     reconnectTransactionError()
   );
-  const payload = await pollSignedResult<NovaBridgeTransactionPoll>(
-    "/transaction-request",
-    requestId,
-    { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
-    reconnectTransactionError()
-  );
+  try {
+    const payload = await pollSignedResult<NovaBridgeTransactionPoll>(
+      "/transaction-request",
+      requestId,
+      { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
+      reconnectTransactionError()
+    );
 
-  if (payload.status === "approved" && typeof payload.hash === "string" && payload.hash.length > 0) {
-    return { hash: payload.hash };
+    if (payload.status === "approved" && typeof payload.hash === "string" && payload.hash.length > 0) {
+      return { hash: payload.hash };
+    }
+
+    throw new Error(payload.error ?? "Nova Desk rejected the transaction request");
+  } catch (error) {
+    cancelPendingRequest(
+      requestId,
+      session,
+      options,
+      error instanceof Error ? error.message : "adapter_error"
+    );
+    throw error;
   }
-
-  throw new Error(payload.error ?? "Nova Desk rejected the transaction request");
 }
