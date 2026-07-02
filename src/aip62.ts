@@ -24,6 +24,7 @@ import {
 } from "./constants";
 import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
 import { buildDeeplinkUrl } from "./deeplink";
+import { isHostedInNovaDesk } from "./hosted";
 import { NovaClient } from "./NovaClient";
 import type { NovaWalletOptions } from "./types";
 
@@ -208,6 +209,18 @@ export function registerNovaWallet(options: NovaWalletOptions = {}): void {
   const shouldRegisterDesktop = desktopRegistration && typeof window !== "undefined" && !isMobileBrowser();
   const shouldRegisterMobileRelay = typeof window !== "undefined" && isMobileBrowser();
   if (!client.hasProvider() && !client.hasExternalSession() && !forceRegistration && !shouldRegisterDesktop && !shouldRegisterMobileRelay) return;
+
+  // v0.2.0-rc.12: if the dapp is already running inside Nova Desk's
+  // embedded browser, the embedded provider (window.cedra /
+  // window.nova / window.aptos, all stamped with isNovaDesk = true)
+  // is already on the page and provides identical functionality
+  // through the same IPC channel. Registering Nova Connect on top
+  // would produce a duplicate entry in the dapp's wallet-selector
+  // modal that routes to the same wallet. `forceRegistration: true`
+  // is the explicit override.
+  if (!forceRegistration && isHostedInNovaDesk()) {
+    return;
+  }
 
   registerWallet(createNovaAIP62Wallet(options));
   registered = true;

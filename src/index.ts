@@ -23,6 +23,7 @@ export * from "./conversion";
 export * from "./NovaClient";
 export * from "./NovaWallet";
 export * from "./aip62";
+export { isHostedInNovaDesk } from "./hosted";
 export * from "./mobileCrypto";
 export * from "./mobileRelay";
 export * from "./mobileSocket";

@@ -5,6 +5,47 @@ All notable changes to `@inferenco/nova-wallet-adapter` will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.12] - 2026-07-02
+
+### Changed (avoid duplicate wallet in dapp's selector when running inside Nova Desk)
+
+`registerNovaWallet()` now skips `registerWallet()` when the dapp is
+already hosted inside Nova Desk's embedded browser. The embedded
+provider (`window.cedra` / `window.nova` / `window.aptos`, all stamped
+with `isNovaDesk: true`) is already on the page and provides identical
+functionality through the same IPC channel. Registering Nova Connect on
+top produced a duplicate entry in the dapp's wallet-selector modal that
+routes to the same wallet.
+
+This is fully backward compatible: external browsers are unaffected
+because the embedded `isNovaDesk` flag is only set inside Nova Desk's
+WebView. Detection is done by reading `window.cedra.isNovaDesk`,
+`window.nova.isNovaDesk`, `window.aptos.isNovaDesk`, or the
+`__novaDeskProviderInjected` sentinel — any of which is sufficient and
+reliable.
+
+### Added (helper for dapps using third-party adapters)
+
+`isHostedInNovaDesk()` is now exported from the package root. Dapps
+that use a wallet adapter other than Nova Connect can use this helper
+to filter the wallet-selector modal:
+
+```ts
+import { isHostedInNovaDesk } from "@inferenco/nova-wallet-adapter";
+
+const wallets = getCedraWallets().cedraWallets.filter(
+  (w) => !(isHostedInNovaDesk() && w.name === "Nova Connect"),
+);
+```
+
+Dapps that use the Nova Connect adapter itself do not need to call
+this — suppression is automatic.
+
+### Override
+
+Dapps that explicitly want both entries (e.g. to compare behavior, or
+for testing) can pass `forceRegistration: true` to `registerNovaWallet()`.
+
 ## [0.2.0-rc.11] - 2026-07-02
 
 ### Fixed (bridge "already pending" guard getting stuck after dapp abort)
