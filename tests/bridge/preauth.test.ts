@@ -17,13 +17,17 @@ describe("bridge pre-auth flow (no-new-tab)", () => {
   });
 
   it("startPreauthConnect posts to /preauth-connect and parses requestId", async () => {
+    // ND-WEB-001 (audit-08): Nova Desk no longer returns
+    // `bridgeUrl` in the preauth start response (the global
+    // token must never leak to a dapp before approval). The
+    // adapter parses `requestId` + `pollUrl` and falls back
+    // to its configured `bridgeBaseUrl` for sign operations.
     const fakeFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({
         requestId: "00000000-0000-0000-0000-000000000001",
         pollUrl: "/preauth-poll/00000000000000000000000000000001",
-        bridgeUrl: "http://127.0.0.1:21984",
         status: "pending",
       }),
       text: async () => "",
@@ -38,6 +42,10 @@ describe("bridge pre-auth flow (no-new-tab)", () => {
     expect(result).not.toBeNull();
     expect(result?.requestId).toBe("00000000-0000-0000-0000-000000000001");
     expect(result?.pollUrl).toBe("/preauth-poll/00000000000000000000000000000001");
+    // The field is absent on modern Nova Desk builds. Direct
+    // API consumers must rely on their configured
+    // `bridgeBaseUrl` for sign operations.
+    expect(result?.bridgeUrl).toBeUndefined();
     expect(fakeFetch).toHaveBeenCalledTimes(1);
     const [url, init] = fakeFetch.mock.calls[0];
     expect(url).toBe("http://127.0.0.1:21984/preauth-connect");
@@ -46,6 +54,34 @@ describe("bridge pre-auth flow (no-new-tab)", () => {
     const body = JSON.parse(init.body);
     expect(body.origin).toBe("https://app.example.com");
     expect(body.app).toBe("MyDapp");
+  });
+
+  it("startPreauthConnect preserves bridgeUrl when present (older wallet)", async () => {
+    // Backwards-compat: pre-ND-WEB-001 wallet builds still
+    // include `bridgeUrl` in the response. The adapter must
+    // parse it verbatim — production code does not depend on
+    // the value (session.bridgeUrl from the approval response
+    // is advisory), but direct API consumers might.
+    const fakeFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        requestId: "00000000-0000-0000-0000-000000000002",
+        pollUrl: "/preauth-poll/00000000000000000000000000000002",
+        bridgeUrl: "http://127.0.0.1:21984/abc123token",
+        status: "pending",
+      }),
+      text: async () => "",
+    });
+    vi.stubGlobal("fetch", fakeFetch);
+
+    const result = await startPreauthConnect({
+      origin: "https://app.example.com",
+      app: "MyDapp",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.bridgeUrl).toBe("http://127.0.0.1:21984/abc123token");
   });
 
   it("startPreauthConnect returns null when the bridge is unreachable", async () => {
@@ -154,7 +190,6 @@ describe("bridge pre-auth flow (no-new-tab)", () => {
       json: async () => ({
         requestId: "00000000-0000-0000-0000-000000000001",
         pollUrl: "/preauth-poll/00000000000000000000000000000001",
-        bridgeUrl: "http://127.0.0.1:21984",
         status: "pending",
       }),
       text: async () => "",

@@ -1260,7 +1260,21 @@ async function pollBridge<T extends { status?: string; error?: string }>(
 export interface PreauthStartResult {
   requestId: string;
   pollUrl: string;
-  bridgeUrl: string;
+  /**
+   * Optional: present on older wallet builds (Nova Desk
+   * < 0.6.0-rc.7), absent on newer builds (audit-08
+   * ND-WEB-001 follow-on). Nova Desk no longer exposes the
+   * process-global bridge URL to a dapp before approval —
+   * the adapter falls back to its configured `bridgeBaseUrl`
+   * for all sign operations via `bridgeUrlWithToken` /
+   * `sessionBridgeBaseUrl` (both of which already treat
+   * `session.bridgeUrl` as advisory).
+   *
+   * Direct API consumers (dapps calling `startPreauthConnect`
+   * themselves) get `undefined` here and must rely on their
+   * configured `bridgeBaseUrl` for sign operations.
+   */
+  bridgeUrl?: string;
 }
 
 export async function startPreauthConnect(input: {

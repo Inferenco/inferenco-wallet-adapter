@@ -5,6 +5,30 @@ All notable changes to `@inferenco/nova-wallet-adapter` will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - audit-08 ND-WEB-001 follow-on
+
+### Changed (Nova Desk no longer returns `bridgeUrl` in preauth response)
+
+`PreauthStartResult.bridgeUrl` is now declared `string | undefined`
+(was `string`). Nova Desk 0.6.0-rc.7+ no longer includes the
+`bridgeUrl` field in the `POST /preauth-connect` response — the
+process-global bridge URL is never exposed to a dapp before
+user approval (audit-08 ND-WEB-001 HIGH finding).
+
+Production behaviour is unchanged: `NovaClient.connect()` does
+not read `preauth.bridgeUrl` — it passes its own `options`
+through to `pollPreauthUntilResolved`, and downstream sign
+operations go through `bridgeUrlWithToken(route, options)` /
+`sessionBridgeBaseUrl(session, options)` which already fall
+back to `options.bridgeBaseUrl` when `session.bridgeUrl` is
+unset.
+
+Direct API consumers (a dapp calling `startPreauthConnect()`
+themselves and reading `.bridgeUrl`) get `undefined` for
+modern Nova Desk builds and the existing string for older
+builds. Backward compatible — no breaking change for code
+that handles the field defensively.
+
 ## [0.2.0-rc.12] - 2026-07-02
 
 ### Changed (avoid duplicate wallet in dapp's selector when running inside Nova Desk)
