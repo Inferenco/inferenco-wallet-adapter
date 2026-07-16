@@ -327,7 +327,7 @@ describe("bridge resume helpers", () => {
       (instance) => instance.name === NOVA_SESSION_CLEARED_MESSAGE_TYPE
     );
     expect(cleared).toBeDefined();
-    cleared.dispatch({ type: NOVA_SESSION_CLEARED_MESSAGE_TYPE });
+    cleared!.dispatch({ type: NOVA_SESSION_CLEARED_MESSAGE_TYPE });
 
     expect(customEventListener).toHaveBeenCalled();
     window.removeEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
