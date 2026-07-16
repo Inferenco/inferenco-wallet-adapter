@@ -38,6 +38,60 @@ describe("bridge/token", () => {
     await expect(ensureBridgeToken()).rejects.toBeInstanceOf(MissingBridgeTokenError);
   });
 
+  it("does_not_emit_unhandled_rejection_when_read_arms_listener", async () => {
+    // Regression: `readBridgeToken()` arms the postMessage listener and
+    // creates a module-level `readyPromise` that rejects at +2 s. The
+    // synchronous throw is caught at every call site, but the
+    // orphaned Promise would previously escape as an unhandled
+    // rejection logged to devtools as
+    //   `Uncaught (in promise) MissingBridgeTokenError`
+    // — confusing dapp devs and tripping Sentry-style monitors.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { pathname: "/" }
+    });
+
+    // Capture BOTH the window-level event (used by browser devtools)
+    // AND any process-level unhandled rejection (used by Node/Vitest).
+    // Either channel is sufficient to detect the regression.
+    const seen: Error[] = [];
+    const onWindowUnhandled = (event: PromiseRejectionEvent) => {
+      if (event.reason instanceof Error) seen.push(event.reason);
+    };
+    const onProcessUnhandled = (reason: unknown) => {
+      if (reason instanceof Error) seen.push(reason);
+    };
+    window.addEventListener("unhandledrejection", onWindowUnhandled);
+    process.on("unhandledRejection", onProcessUnhandled);
+
+    try {
+      expect(() => readBridgeToken()).toThrow(MissingBridgeTokenError);
+      // Wait past the 2 s timeout to give the orphan timer a chance
+      // to fire. If the suppression fallback is missing, `seen` will
+      // contain a `MissingBridgeTokenError` and the test fails.
+      await new Promise((resolve) => setTimeout(resolve, 2400));
+      expect(seen).toEqual([]);
+    } finally {
+      window.removeEventListener("unhandledrejection", onWindowUnhandled);
+      process.off("unhandledRejection", onProcessUnhandled);
+    }
+  });
+
+  it("ensure_bridge_token_still_sees_rejection_after_suppression", async () => {
+    // Counterpart: legitimate `ensureBridgeToken()` consumers must
+    // still observe the `MissingBridgeTokenError` rejection. The
+    // fallback catch only suppresses the unhandled-rejection event;
+    // it does not consume the rejection for awaiting callers.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { pathname: "/" }
+    });
+
+    await expect(ensureBridgeToken()).rejects.toBeInstanceOf(MissingBridgeTokenError);
+  });
+
   it("extracts_from_pathname", () => {
     Object.defineProperty(window, "location", {
       configurable: true,

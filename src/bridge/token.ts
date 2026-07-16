@@ -93,6 +93,16 @@ function installPostMessageListener(ready: BridgeTokenReady): void {
     if (resolvedToken !== null) return;
     // If the path-source already resolved the promise, the listener is
     // a no-op. Otherwise we reject on timeout.
+    //
+    // Suppress the unhandled-rejection event when no consumer has
+    // awaited `ready.promise` yet (the synchronous `readBridgeToken()`
+    // arming path doesn't await; only `ensureBridgeToken()` does). The
+    // rejection is still observable via `ensureBridgeToken()` — this
+    // catch only stops the runtime from logging
+    // `Uncaught (in promise) MissingBridgeTokenError` to the devtools
+    // console. dApps that intentionally await `ensureBridgeToken()`
+    // continue to see the original error type and message.
+    ready.promise.catch(() => {});
     ready.reject(new MissingBridgeTokenError());
   }, RESOLVE_TIMEOUT_MS);
 }

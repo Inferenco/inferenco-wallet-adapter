@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - audit-08 ND-WEB-001 follow-on
 
+### Fixed (orphan Promise rejection logged to devtools as `Uncaught (in promise) MissingBridgeTokenError`)
+
+`installPostMessageListener()` arms a 2 s `setTimeout` that rejects
+the module-level `readyPromise` when the per-session URL token
+never arrives (dapp loaded in an external browser where neither
+`window.location.pathname` nor the wallet's `nova:bridge-token`
+postMessage delivered the token in time). The synchronous
+`readBridgeToken()` call site catches the immediate throw, but
+nothing awaited `readyPromise` — so the 2 s timer fired and the
+runtime logged `Uncaught (in promise) MissingBridgeTokenError`
+to the browser console. Symptom: a confusing devtools error that
+appears unrelated to the actual connect flow and trips
+Sentry-style monitors.
+
+The fix attaches a no-op `.catch(() => {})` to `readyPromise`
+before `ready.reject(...)` so the rejection is "handled" at the
+runtime level. Legitimate consumers that intentionally await
+`ensureBridgeToken()` continue to see the original
+`MissingBridgeTokenError` type and message. Two new regression
+tests in `tests/bridge/token.test.ts`:
+
+  - `does_not_emit_unhandled_rejection_when_read_arms_listener`
+    — captures BOTH the window-level `unhandledrejection` event
+    and the Node-level `unhandledRejection` event; fails if the
+    orphan rejection leaks. Verifies the timer fired (waits 2.4 s)
+    and no `MissingBridgeTokenError` reached either channel.
+  - `ensure_bridge_token_still_sees_rejection_after_suppression`
+    — counterpart: confirms awaiting `ensureBridgeToken()` after
+    the timer fired still rejects with `MissingBridgeTokenError`.
+
+Behaviour change is invisible to dapps that don't await
+`ensureBridgeToken()`. No public-API changes.
+
 ### Changed (Nova Desk no longer returns `bridgeUrl` in preauth response)
 
 `PreauthStartResult.bridgeUrl` is now declared `string | undefined`
