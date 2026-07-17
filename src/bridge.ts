@@ -1063,7 +1063,35 @@ export async function validateExternalSession(
 
     return refreshedSession;
   } catch (error) {
-    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+    // Clear the stored session on either of two specific failure
+    // signals. Other errors (5xx from the bridge, AbortError from
+    // the timeout, JSON parse failures) leave the session in
+    // place — those are typically transient and the user can retry
+    // without going through fresh connect.
+    //
+    //   1. BridgeHttpError(403 | 404): the wallet explicitly told
+    //      us the session is gone (revoked, expired, never existed
+    //      on this wallet instance).
+    //
+    //   2. TypeError: the browser refused to let JS read the
+    //      response (CORS block) or the fetch hit a network failure.
+    //      Indistinguishable from JS, but the recovery is the same.
+    //
+    //      Nova Desk's HTTP bridge intentionally returns 404
+    //      responses without CORS headers (F-03 token gate — see
+    //      `write_404_no_cors` in nova-desk-ui's external_bridge.rs).
+    //      Browsers block reading those responses, which surfaces as
+    //      `TypeError: Failed to fetch` instead of a BridgeHttpError.
+    //      Without this branch, dapps that reload inside Nova Desk's
+    //      embedded browser with a session ID from a previous
+    //      external-browser deeplink flow keep retrying the stale
+    //      session on every page load and emit a confusing
+    //      `Solicitud desde otro origen bloqueada` devtools CORS
+    //      error forever.
+    if (
+      (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) ||
+      error instanceof TypeError
+    ) {
       clearExternalSession();
     }
 

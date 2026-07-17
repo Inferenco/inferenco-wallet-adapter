@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - audit-08 ND-WEB-001 follow-on
 
+### Fixed (stale session in localStorage keeps retrying CORS-blocked 404 in devtools)
+
+`validateExternalSession()` previously only cleared the localStorage
+session when the wallet returned a `BridgeHttpError(403|404)`. But
+Nova Desk's HTTP bridge intentionally returns 404 **without CORS
+headers** for unknown sessions (F-03 token gate; see
+`write_404_no_cors` in `nova-desk-ui/.../external_bridge.rs`). The
+browser enforces CORS, refuses to expose the response body or status
+to JS, and surfaces the failure as `TypeError: Failed to fetch`
+instead of a `BridgeHttpError`. Indistinguishable from a real
+network failure from JS — but the recovery is the same in both cases:
+the stored session is no longer usable, so clear it.
+
+Symptom (reported from nova-ecosystem with adapter 0.2.0-rc.14):
+
+  Solicitud desde otro origen bloqueada: la política de mismo
+  origen impide leer el recurso remoto en
+  http://127.0.0.1:21984/<token>/session/<sessionId>
+  (razón: falta la cabecera CORS 'Access-Control-Allow-Origin').
+  Código de estado: 404.
+
+The session ID was likely from a previous external-browser deeplink
+flow stored under `inferenco:nova-session`. With the dapp reloading
+inside Nova Desk's embedded browser, the validation request fired
+on every page load, the wallet returned 404-no-CORS, the session was
+never cleared, and the same devtools error repeated forever.
+
+Fix: also clear the session on `error instanceof TypeError` in the
+`validateExternalSession` catch. The trade-off is documented: a
+genuine wallet outage now also wipes the session, requiring a fresh
+connect — acceptable because the user couldn't sign anything during
+the outage anyway. Four new regression tests in
+`tests/validate_external_session.test.ts`:
+
+  - `clears_session_when_browser_CORS_blocks_404_from_bridge`
+    — simulates the browser CORS-block via a fetch mock that throws
+    TypeError; asserts the session is wiped from localStorage.
+  - `clears_session_on_real_network_failure_too`
+    — counterpart: same recovery for a real network failure.
+  - `does_not_clear_session_on_explicit_404_response_with_cors`
+    — regression-guard for the original `BridgeHttpError(404)` branch.
+  - `preserves_session_on_successful_validation`
+    — sanity check: 200 response keeps + refreshes the session.
+
+Behaviour change: dapps that previously saw a confusing devtools
+CORS error every page load with a stale session now silently
+re-connect on the first validation failure. No public-API changes.
+
 ### Fixed (orphan Promise rejection logged to devtools as `Uncaught (in promise) MissingBridgeTokenError`)
 
 `installPostMessageListener()` arms a 2 s `setTimeout` that rejects
