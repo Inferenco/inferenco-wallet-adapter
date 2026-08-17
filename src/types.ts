@@ -195,12 +195,34 @@ export interface NovaBridgeSignTransactionPoll {
   };
 }
 
-export interface NovaBridgeTransactionPoll {
-  status?: string;
-  requestId?: string;
-  hash?: string;
+export type NovaTerminalStatus = "pending" | "approved" | "rejected" | "failed";
+
+interface NovaBridgeTransactionPollBase {
+  requestId: string;
+  signature?: unknown;
+  result?: unknown;
+  data?: unknown;
+  args?: unknown;
+  encryptedResult?: unknown;
+  authenticator?: unknown;
+  authenticatorHex?: unknown;
+  authenticator_hex?: unknown;
+  rawTransaction?: unknown;
+  rawTransactionBcsHex?: unknown;
+  raw_transaction_bcs_hex?: unknown;
+  signedTransaction?: unknown;
+  submission?: unknown;
+  submittedTransaction?: unknown;
+  transactionHash?: unknown;
+  txHash?: unknown;
   error?: string;
 }
+
+export type NovaBridgeTransactionPoll =
+  | (NovaBridgeTransactionPollBase & { status: "approved"; hash?: string })
+  | (NovaBridgeTransactionPollBase & { status: "rejected"; hash?: string })
+  | (NovaBridgeTransactionPollBase & { status: "failed"; hash?: string })
+  | (NovaBridgeTransactionPollBase & { status: "pending"; hash?: string });
 
 export interface NovaCallbackMarker {
   requestId: string;
@@ -238,26 +260,32 @@ export interface NovaMobileRequestCreateResponse {
   expiresAt: string;
 }
 
-export interface NovaMobileRequestStatus {
+interface NovaMobileRequestStatusBase {
   requestId: string;
   sessionId: string;
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
-  status: "pending" | "approved" | "rejected" | "expired" | "cancelled";
   callbackUrl: string;
-  encryptedRequest?: string;
-  encryptedResult?: string;
+  encryptedRequest?: string | null;
+  encryptedResult?: string | null;
   requestMetadata?: Record<string, unknown> | null;
   resultMetadata?: Record<string, unknown> | null;
-  errorCode?: string;
-  errorMessage?: string;
-  origin?: string;
-  appName?: string;
-  accountAddress?: string;
-  network?: string;
-  chainId?: number;
-  walletName?: string;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  origin?: string | null;
+  appName?: string | null;
+  accountAddress?: string | null;
+  network?: string | null;
+  chainId?: number | null;
+  walletName?: string | null;
   expiresAt: string;
 }
+
+export type NovaMobileRequestStatus =
+  | (NovaMobileRequestStatusBase & { status: "approved" })
+  | (NovaMobileRequestStatusBase & { status: "rejected" })
+  | (NovaMobileRequestStatusBase & { status: "failed" })
+  | (NovaMobileRequestStatusBase & { status: "pending" })
+  | (NovaMobileRequestStatusBase & { status: "expired" | "cancelled" | "revoked" });
 
 export type NovaTransactionPayload =
   | InputGenerateTransactionPayloadData
@@ -286,6 +314,16 @@ export interface NovaProviderResponse<T> {
   args?: T;
   result?: T;
 }
+
+export type NovaSignAndSubmitProviderResponse =
+  | CedraSignAndSubmitTransactionOutput
+  | {
+      status: "Approved";
+      args: CedraSignAndSubmitTransactionOutput;
+    }
+  | {
+      status: "Rejected";
+    };
 
 export interface NovaSignedTransactionWithAuthenticator {
   authenticator: AccountAuthenticator;
@@ -339,7 +377,7 @@ export interface NovaProvider {
   signAndSubmitTransaction?: (
     transaction: AnyRawTransaction | NovaTransactionPayload,
     options?: unknown
-  ) => Promise<CedraSignAndSubmitTransactionOutput | NovaProviderResponse<CedraSignAndSubmitTransactionOutput>>;
+  ) => Promise<NovaSignAndSubmitProviderResponse>;
   onAccountChange?: (callback: (account: NovaProviderAccount) => void) => Promise<void> | void;
   onNetworkChange?: (callback: (network: string | number | NetworkInfo) => void) => Promise<void> | void;
   submitTransaction?: (

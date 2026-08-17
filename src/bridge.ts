@@ -3,7 +3,12 @@ import {
   Deserializer,
   Network
 } from "@cedra-labs/ts-sdk";
-import { CallbackOriginMismatch, NovaAdapterError } from "./errors.js";
+import {
+  CallbackOriginMismatch,
+  isValidTransactionHash,
+  NovaAdapterError,
+  NovaErrorCode
+} from "./errors.js";
 import { MissingBridgeTokenError } from "./bridge/token.js";
 import type {
   AccountInfo,
@@ -1813,6 +1818,11 @@ export async function tryLocalBridgeSignTransaction(
   }
 }
 
+function hasOnlyKeys(value: object, allowedKeys: readonly string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
 export async function tryLocalBridgeSignAndSubmit(
   input: CedraSignAndSubmitTransactionInput,
   session: NovaExternalSession,
@@ -1839,11 +1849,36 @@ export async function tryLocalBridgeSignAndSubmit(
       reconnectTransactionError()
     );
 
-    if (payload.status === "approved" && typeof payload.hash === "string" && payload.hash.length > 0) {
+    if (payload.requestId !== requestId) {
+      throw new NovaAdapterError(
+        NovaErrorCode.InternalError,
+        "Nova Desk returned a transaction result for a different request"
+      );
+    }
+
+    if (
+      payload.status === "approved" &&
+      hasOnlyKeys(payload, ["status", "requestId", "hash"]) &&
+      isValidTransactionHash(payload.hash)
+    ) {
       return { hash: payload.hash };
     }
 
-    throw new Error(payload.error ?? "Nova Desk rejected the transaction request");
+    if (
+      payload.status === "rejected" &&
+      hasOnlyKeys(payload, ["status", "requestId", "error"]) &&
+      (payload.error === undefined || typeof payload.error === "string")
+    ) {
+      throw new NovaAdapterError(
+        NovaErrorCode.UserRejected,
+        "User rejected the transaction request"
+      );
+    }
+
+    throw new NovaAdapterError(
+      NovaErrorCode.InternalError,
+      "Nova Desk returned an ambiguous transaction result"
+    );
   } catch (error) {
     cancelPendingRequest(
       requestId,

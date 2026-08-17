@@ -26,6 +26,7 @@ import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
 import { buildDeeplinkUrl } from "./deeplink";
 import { isHostedInNovaDesk } from "./hosted";
 import { NovaClient } from "./NovaClient";
+import { NovaAdapterError, NovaErrorCode } from "./errors";
 import type { NovaWalletOptions } from "./types";
 
 /** v0.2.0-rc.8 (Phase 5 UX): extension to CedraFeatures for the
@@ -166,11 +167,18 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
     "cedra:signAndSubmitTransaction": {
       version: "1.1.0",
       signAndSubmitTransaction: async (input: CedraSignAndSubmitTransactionInput) => {
-        const result = await client.signAndSubmitTransaction(input);
-        return {
-          status: UserResponseStatus.APPROVED,
-          args: result
-        };
+        try {
+          const result = await client.signAndSubmitTransaction(input);
+          return {
+            status: UserResponseStatus.APPROVED,
+            args: result
+          };
+        } catch (error) {
+          if (error instanceof NovaAdapterError && error.code === NovaErrorCode.UserRejected) {
+            return { status: UserResponseStatus.REJECTED };
+          }
+          throw error;
+        }
       }
     },
     "cedra:openInMobileApp": {

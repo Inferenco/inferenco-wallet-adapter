@@ -68,7 +68,7 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
 
-    const result = await validateExternalSession({}, {});
+    const result = await validateExternalSession(makeStaleDesktopSession(), {});
     expect(result).toBeNull();
     // Session is wiped so the next page load doesn't retry.
     expect(readExternalSession()).toBeNull();
@@ -86,7 +86,7 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
 
-    const result = await validateExternalSession({}, {});
+    const result = await validateExternalSession(makeStaleDesktopSession(), {});
     expect(result).toBeNull();
     expect(readExternalSession()).toBeNull();
   });
@@ -107,7 +107,7 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
       });
     }) as unknown as typeof fetch;
 
-    const result = await validateExternalSession({}, {});
+    const result = await validateExternalSession(makeStaleDesktopSession(), {});
     expect(result).toBeNull();
     expect(readExternalSession()).toBeNull();
   });
@@ -135,7 +135,7 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
       );
     }) as unknown as typeof fetch;
 
-    const result = await validateExternalSession({}, {});
+    const result = await validateExternalSession(makeStaleDesktopSession(), {});
     expect(result).not.toBeNull();
     expect(readExternalSession()).not.toBeNull();
   });

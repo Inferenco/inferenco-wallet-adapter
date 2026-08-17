@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - audit-08 ND-WEB-001 follow-on
 
+### Fixed (structured transaction rejection handling)
+
+Sign-and-submit now treats only clean, explicit terminal rejection statuses as
+`USER_REJECTED`. Approved results require a non-empty hash, while failed,
+unknown, malformed, nested, or material-bearing rejection results fail closed
+as internal errors. The AIP-62 wrapper returns the exact status-only Rejected
+shape and propagates ambiguous or operational failures.
+
 ### Fixed (stale session in localStorage keeps retrying CORS-blocked 404 in devtools)
 
 `validateExternalSession()` previously only cleared the localStorage

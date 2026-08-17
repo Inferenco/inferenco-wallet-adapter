@@ -46,7 +46,13 @@ import {
   normalizeSignTransactionResult
 } from "./conversion";
 import { DEFAULT_SESSION_LIVENESS_INTERVAL_MS, NOVA_SESSION_CLEARED_MESSAGE_TYPE } from "./constants";
-import { NovaAdapterError, NovaErrorCode, remapNovaError } from "./errors";
+import {
+  isValidTransactionHash,
+  NovaAdapterError,
+  NovaErrorCode,
+  remapNovaError,
+  remapSignAndSubmitError
+} from "./errors";
 import { buildDeeplinkUrl } from "./deeplink";
 import {
   connectViaMobileRelay,
@@ -243,6 +249,59 @@ function unwrap<T>(value: T | { data?: T; args?: T; result?: T }): T {
     if ("result" in value && value.result !== undefined) return value.result;
   }
   return value as T;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) => keys.includes(key));
+}
+
+function normalizeSignAndSubmitProviderResult(
+  value: unknown
+): CedraSignAndSubmitTransactionOutput {
+  if (!isRecord(value)) {
+    throw new NovaAdapterError(
+      NovaErrorCode.InternalError,
+      "Nova provider returned a malformed transaction result"
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, "status")) {
+    if (value.status === "Rejected" && hasExactKeys(value, ["status"])) {
+      throw new NovaAdapterError(
+        NovaErrorCode.UserRejected,
+        "User rejected the transaction request"
+      );
+    }
+
+    if (
+      value.status === "Approved" &&
+      hasExactKeys(value, ["status", "args"]) &&
+      isRecord(value.args) &&
+      hasExactKeys(value.args, ["hash"]) &&
+      isValidTransactionHash(value.args.hash)
+    ) {
+      return { hash: value.args.hash.trim() };
+    }
+
+    throw new NovaAdapterError(
+      NovaErrorCode.InternalError,
+      "Nova provider returned an ambiguous transaction status"
+    );
+  }
+
+  if (hasExactKeys(value, ["hash"]) && isValidTransactionHash(value.hash)) {
+    return { hash: value.hash.trim() };
+  }
+
+  throw new NovaAdapterError(
+    NovaErrorCode.InternalError,
+    "Nova provider returned a malformed transaction result"
+  );
 }
 
 const DESKTOP_BRIDGE_RETRY_WINDOW_MS = 8_000;
@@ -749,12 +808,20 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     try {
       const provider = this.refreshProvider();
       if (provider?.signAndSubmitTransaction) {
-        return unwrap(
-          await provider.signAndSubmitTransaction(
+        let providerResult: unknown;
+        try {
+          providerResult = await provider.signAndSubmitTransaction(
             transaction as AnyRawTransaction | NovaTransactionPayload,
             options
-          )
-        );
+          );
+        } catch (error) {
+          throw new NovaAdapterError(
+            NovaErrorCode.InternalError,
+            "Nova provider signAndSubmitTransaction() failed",
+            error
+          );
+        }
+        return normalizeSignAndSubmitProviderResult(providerResult);
       }
 
       const externalSession = await readValidatedExternalSession(this.options);
@@ -777,7 +844,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         "Nova provider signAndSubmitTransaction() unavailable"
       );
     } catch (error) {
-      remapNovaError(error);
+      remapSignAndSubmitError(error);
     }
   }
 
@@ -785,14 +852,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     transaction: AnyRawTransaction | NovaTransactionPayload,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
-    try {
-      return await this.signAndSubmitTransaction(transaction, options);
-    } catch (error) {
-      if (options !== undefined) {
-        return this.signAndSubmitTransaction(transaction);
-      }
-      remapNovaError(error);
-    }
+    return this.signAndSubmitTransaction(transaction, options);
   }
 
   async subscribe(): Promise<void> {

@@ -31,7 +31,11 @@ import {
 } from "./bridge";
 import { decryptJson, createKeyPair, deriveSharedSecret, encryptJson } from "./mobileCrypto";
 import { watchRelaySocket } from "./mobileSocket";
-import { NovaAdapterError, NovaErrorCode } from "./errors";
+import {
+  isValidTransactionHash,
+  NovaAdapterError,
+  NovaErrorCode
+} from "./errors";
 import { deserializeAnyRawTransaction, ensureBcsToHex } from "./conversion";
 import type {
   NovaExternalSignTransactionInput,
@@ -92,10 +96,10 @@ function launch(url: string): void {
 }
 
 function isFinalStatus(status: string | undefined): boolean {
-  return status === "approved" || status === "rejected" || status === "expired" || status === "cancelled" || status === "revoked";
+  return status === "approved" || status === "rejected" || status === "failed" || status === "expired" || status === "cancelled" || status === "revoked";
 }
 
-function throwForStatus(status: string, errorMessage?: string): never {
+function throwForStatus(status: string, errorMessage?: string | null): never {
   if (status === "rejected") {
     throw new NovaAdapterError(NovaErrorCode.UserRejected, errorMessage ?? "User rejected the request");
   }
@@ -235,6 +239,7 @@ export async function resumeMobileRelaySessionFromCallback(
 
 async function waitForRequestOutcome(
   requestId: string,
+  method: "signMessage" | "signTransaction" | "signAndSubmitTransaction",
   session: NovaExternalSession,
   options: NovaWalletOptions,
   websocketUrl?: string
@@ -279,6 +284,16 @@ async function waitForRequestOutcome(
             }
           }
         );
+        if (
+          status.requestId !== requestId ||
+          status.sessionId !== session.sessionId ||
+          status.method !== method
+        ) {
+          throw new NovaAdapterError(
+            NovaErrorCode.InternalError,
+            "Nova Connect returned a result for a different request"
+          );
+        }
         if (isFinalStatus(status.status)) {
           clearCallbackMarker();
           return status;
@@ -381,6 +396,7 @@ async function startRequest(
   launch(response.walletDeeplinkUrl);
   return waitForRequestOutcome(
     response.requestId,
+    method,
     session,
     options,
     getWebsocketUrl(options)
@@ -420,16 +436,102 @@ export async function signTransactionViaMobileRelay(
   };
 }
 
+const MOBILE_REJECTION_ALLOWED_KEYS = new Set([
+  "requestId",
+  "sessionId",
+  "method",
+  "status",
+  "callbackUrl",
+  "encryptedRequest",
+  "encryptedResult",
+  "requestMetadata",
+  "resultMetadata",
+  "errorCode",
+  "errorMessage",
+  "origin",
+  "appName",
+  "accountAddress",
+  "network",
+  "chainId",
+  "walletName",
+  "expiresAt"
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isCleanRequestMetadata(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (!isRecord(value)) return false;
+  return (
+    Object.keys(value).every((key) => key === "origin" || key === "appName") &&
+    isNullableString(value.origin) &&
+    isNullableString(value.appName)
+  );
+}
+
+function isCleanMobileSignAndSubmitRejection(status: NovaMobileRequestStatus): boolean {
+  if (status.status !== "rejected") return false;
+  const record = status as unknown as Record<string, unknown>;
+  if (!Object.keys(record).every((key) => MOBILE_REJECTION_ALLOWED_KEYS.has(key))) {
+    return false;
+  }
+
+  return (
+    status.encryptedResult == null &&
+    status.resultMetadata == null &&
+    isCleanRequestMetadata(status.requestMetadata) &&
+    isNullableString(status.encryptedRequest) &&
+    isNullableString(status.errorCode) &&
+    isNullableString(status.errorMessage) &&
+    isNullableString(status.origin) &&
+    isNullableString(status.appName) &&
+    isNullableString(status.accountAddress) &&
+    isNullableString(status.network) &&
+    (status.chainId === undefined || status.chainId === null || typeof status.chainId === "number") &&
+    isNullableString(status.walletName) &&
+    typeof status.callbackUrl === "string" &&
+    typeof status.expiresAt === "string"
+  );
+}
+
 export async function signAndSubmitViaMobileRelay(
   input: CedraSignAndSubmitTransactionInput | AnyMobileTransactionLike,
   session: NovaExternalSession,
   options: NovaWalletOptions = {}
 ): Promise<CedraSignAndSubmitTransactionOutput> {
   const status = await startRequest("signAndSubmitTransaction", input, session, options);
-  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
-    throwForStatus(status.status, status.errorMessage);
+  if (isCleanMobileSignAndSubmitRejection(status)) {
+    throw new NovaAdapterError(
+      NovaErrorCode.UserRejected,
+      "User rejected the transaction request"
+    );
   }
-  return decryptJson<CedraSignAndSubmitTransactionOutput>(status.encryptedResult, session.sharedSecret);
+
+  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
+    throw new NovaAdapterError(
+      NovaErrorCode.InternalError,
+      "Nova Connect returned an ambiguous transaction result"
+    );
+  }
+
+  const result = decryptJson<unknown>(status.encryptedResult, session.sharedSecret);
+  if (
+    !isRecord(result) ||
+    Object.keys(result).length !== 1 ||
+    !isValidTransactionHash(result.hash)
+  ) {
+    throw new NovaAdapterError(
+      NovaErrorCode.InternalError,
+      "Nova Connect returned an approved transaction without a valid hash"
+    );
+  }
+  return { hash: result.hash };
 }
 
 type AnyMobileTransactionLike = NovaTransactionPayload | CedraSignAndSubmitTransactionInput;

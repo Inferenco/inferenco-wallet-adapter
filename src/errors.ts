@@ -27,14 +27,25 @@ function extractStatus(error: unknown): string | number | undefined {
   return undefined;
 }
 
+export function isValidTransactionHash(value: unknown): value is string {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : "Unknown Nova wallet error";
+}
+
 export function remapNovaError(error: unknown): never {
   if (error instanceof NovaAdapterError) {
     throw error;
   }
 
   const status = extractStatus(error);
-  const message =
-    error instanceof Error ? error.message : typeof error === "string" ? error : "Unknown Nova wallet error";
+  const message = errorMessage(error);
 
   if (status === "Rejected" || status === 401 || /reject/i.test(message)) {
     throw new NovaAdapterError(NovaErrorCode.UserRejected, message, error);
@@ -53,6 +64,20 @@ export function remapNovaError(error: unknown): never {
   }
 
   throw new NovaAdapterError(NovaErrorCode.InternalError, message, error);
+}
+
+/**
+ * Strict normalizer for sign-and-submit. Only adapter errors that have already
+ * passed transport-specific validation retain their code. HTTP status codes,
+ * provider-shaped thrown values, and human-readable text are never proof of a
+ * user rejection.
+ */
+export function remapSignAndSubmitError(error: unknown): never {
+  if (error instanceof NovaAdapterError) {
+    throw error;
+  }
+
+  throw new NovaAdapterError(NovaErrorCode.InternalError, errorMessage(error), error);
 }
 
 /**
