@@ -255,23 +255,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function snapshotProviderRecord(
+  value: unknown,
+  malformedMessage: string
+): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") return null;
+
+  try {
+    if (Array.isArray(value)) return null;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+
+    const snapshot: Record<string, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") return null;
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) return null;
+      snapshot[key] = descriptor.value;
+    }
+    return snapshot;
+  } catch (error) {
+    throw new NovaAdapterError(NovaErrorCode.InternalError, malformedMessage, error);
+  }
+}
+
 function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {
-  const keys = Object.keys(value);
+  const keys = Reflect.ownKeys(value);
   return keys.length === expected.length && expected.every((key) => keys.includes(key));
 }
 
 function normalizeSignAndSubmitProviderResult(
   value: unknown
 ): CedraSignAndSubmitTransactionOutput {
-  if (!isRecord(value)) {
+  const record = snapshotProviderRecord(
+    value,
+    "Nova provider returned an unreadable transaction result"
+  );
+  if (!record) {
     throw new NovaAdapterError(
       NovaErrorCode.InternalError,
       "Nova provider returned a malformed transaction result"
     );
   }
 
-  if (Object.prototype.hasOwnProperty.call(value, "status")) {
-    if (value.status === "Rejected" && hasExactKeys(value, ["status"])) {
+  if (Object.prototype.hasOwnProperty.call(record, "status")) {
+    if (record.status === "Rejected" && hasExactKeys(record, ["status"])) {
       throw new NovaAdapterError(
         NovaErrorCode.UserRejected,
         "User rejected the transaction request"
@@ -279,13 +307,16 @@ function normalizeSignAndSubmitProviderResult(
     }
 
     if (
-      value.status === "Approved" &&
-      hasExactKeys(value, ["status", "args"]) &&
-      isRecord(value.args) &&
-      hasExactKeys(value.args, ["hash"]) &&
-      isValidTransactionHash(value.args.hash)
+      record.status === "Approved" &&
+      hasExactKeys(record, ["status", "args"])
     ) {
-      return { hash: value.args.hash.trim() };
+      const args = snapshotProviderRecord(
+        record.args,
+        "Nova provider returned unreadable approved transaction arguments"
+      );
+      if (args && hasExactKeys(args, ["hash"]) && isValidTransactionHash(args.hash)) {
+        return { hash: args.hash };
+      }
     }
 
     throw new NovaAdapterError(
@@ -294,8 +325,8 @@ function normalizeSignAndSubmitProviderResult(
     );
   }
 
-  if (hasExactKeys(value, ["hash"]) && isValidTransactionHash(value.hash)) {
-    return { hash: value.hash.trim() };
+  if (hasExactKeys(record, ["hash"]) && isValidTransactionHash(record.hash)) {
+    return { hash: record.hash };
   }
 
   throw new NovaAdapterError(

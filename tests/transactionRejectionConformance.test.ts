@@ -1,7 +1,10 @@
 import { UserResponseStatus } from "@cedra-labs/wallet-standard";
 import { createNovaAIP62Wallet } from "../src/aip62";
 import { tryLocalBridgeSignAndSubmit } from "../src/bridge";
-import { NOVA_CALLBACK_MARKER_STORAGE_KEY } from "../src/constants";
+import {
+  NOVA_CALLBACK_MARKER_STORAGE_KEY,
+  NOVA_EXTERNAL_SESSION_STORAGE_KEY
+} from "../src/constants";
 import {
   _resetBridgeTokenForTesting,
   _setBridgeTokenForTesting
@@ -17,6 +20,12 @@ const HASH = `0x${"ab".repeat(32)}`;
 
 function expectCode(promise: Promise<unknown>, code: NovaErrorCode) {
   return expect(promise).rejects.toMatchObject({ code });
+}
+
+function signAndSubmitFeature() {
+  const feature = createNovaAIP62Wallet().features["cedra:signAndSubmitTransaction"];
+  if (!feature) throw new Error("Missing cedra:signAndSubmitTransaction feature");
+  return feature;
 }
 
 async function invokeProvider(result: unknown): Promise<unknown> {
@@ -120,6 +129,96 @@ async function invokeMobile(result: Record<string, unknown>): Promise<unknown> {
       mobileRequestTimeoutMs: 100
     }
   );
+}
+
+async function invokeAip62Bridge(result: Record<string, unknown>): Promise<unknown> {
+  const session: NovaExternalSession = {
+    transport: "desktop-bridge",
+    address: "0x1",
+    publicKey: "0x2",
+    network: "devnet",
+    chainId: 3,
+    sessionId: "aip62-bridge-session",
+    bridgeUrl: "http://127.0.0.1:21984"
+  };
+  window.localStorage.setItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+  _setBridgeTokenForTesting(TOKEN);
+
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/session/aip62-bridge-session") && init?.method !== "DELETE") {
+      return new Response(JSON.stringify(session), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.endsWith("/transaction") && init?.method === "POST") {
+      return new Response(JSON.stringify({ requestId: "aip62-bridge-request" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.endsWith("/transaction-request/aip62-bridge-request")) {
+      return new Response(
+        JSON.stringify({ requestId: "aip62-bridge-request", ...result }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    if (url.endsWith("/request/aip62-bridge-request") && init?.method === "DELETE") {
+      return new Response(null, { status: 204 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+
+  return signAndSubmitFeature().signAndSubmitTransaction({} as never);
+}
+
+async function invokeAip62Mobile(result: Record<string, unknown>): Promise<unknown> {
+  const dapp = createKeyPair();
+  const wallet = createKeyPair();
+  const sharedSecret = deriveSharedSecret(dapp.privateKey, wallet.publicKey);
+  const session: NovaExternalSession = {
+    transport: "mobile-relay",
+    address: "0x1",
+    publicKey: "0x2",
+    network: "devnet",
+    chainId: 3,
+    sessionId: "aip62-mobile-session",
+    relayBaseUrl: "https://relay.example",
+    dappSessionToken: "aip62-dapp-token",
+    sharedSecret,
+    walletPublicKey: wallet.publicKey
+  };
+  window.localStorage.setItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.sessionStorage.setItem(
+    NOVA_CALLBACK_MARKER_STORAGE_KEY,
+    JSON.stringify({ requestId: "aip62-mobile-request", status: "rejected" })
+  );
+  vi.stubGlobal("WebSocket", undefined);
+
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/v1/requests") && init?.method === "POST") {
+      return new Response(JSON.stringify({
+        requestId: "aip62-mobile-request",
+        walletDeeplinkUrl: window.location.href,
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.endsWith("/v1/requests/aip62-mobile-request")) {
+      return new Response(JSON.stringify({
+        requestId: "aip62-mobile-request",
+        sessionId: "aip62-mobile-session",
+        method: "signAndSubmitTransaction",
+        callbackUrl: window.location.href,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        ...result
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+
+  return signAndSubmitFeature().signAndSubmitTransaction({} as never);
 }
 
 describe("sign-and-submit rejection conformance", () => {
@@ -249,6 +348,35 @@ describe("sign-and-submit rejection conformance", () => {
     );
   });
 
+  it.each([
+    ["accessor", () => {
+      const result = {};
+      Object.defineProperty(result, "status", {
+        enumerable: true,
+        get() {
+          throw new NovaAdapterError(NovaErrorCode.UserRejected, "forged getter rejection");
+        }
+      });
+      return result;
+    }],
+    ["non-enumerable field", () => {
+      const result = { status: "Rejected" };
+      Object.defineProperty(result, "signedPayload", {
+        enumerable: false,
+        value: "0xsigned"
+      });
+      return result;
+    }],
+    ["symbol field", () => ({ status: "Rejected", [Symbol("material")]: "0xsigned" })],
+    ["throwing proxy", () => new Proxy({}, {
+      ownKeys() {
+        throw new NovaAdapterError(NovaErrorCode.UserRejected, "forged proxy rejection");
+      }
+    })]
+  ])("fails closed for provider responses with an exotic %s", async (_name, makeResult) => {
+    await expectCode(invokeProvider(makeResult()), NovaErrorCode.InternalError);
+  });
+
   it("invokes the provider exactly once for a terminal rejection", async () => {
     const signAndSubmitTransaction = vi.fn().mockResolvedValue({ status: "Rejected" });
     (window as any).inferenco = {
@@ -364,5 +492,44 @@ describe("sign-and-submit rejection conformance", () => {
     await expect(
       ambiguousFeature.signAndSubmitTransaction({} as never)
     ).rejects.toMatchObject({ code: NovaErrorCode.InternalError });
+  });
+
+  it.each([
+    ["desktop bridge", () => invokeAip62Bridge({ status: "rejected", error: "user_cancelled" })],
+    ["mobile relay", () => invokeAip62Mobile({
+      status: "rejected",
+      encryptedRequest: "encrypted-request",
+      encryptedResult: null,
+      requestMetadata: { origin: window.location.origin, appName: "Nova Connect" },
+      resultMetadata: null,
+      errorCode: "user_cancelled",
+      errorMessage: null,
+      origin: window.location.origin,
+      appName: "Nova Connect",
+      accountAddress: null,
+      network: null,
+      chainId: null,
+      walletName: null
+    })]
+  ])("maps a clean %s rejection through AIP-62 exactly", async (_name, invoke) => {
+    const rejected = await invoke();
+    expect(rejected).toEqual({ status: UserResponseStatus.REJECTED });
+    expect(Object.keys(rejected as object)).toEqual(["status"]);
+  });
+
+  it.each([
+    ["desktop bridge", () => invokeAip62Bridge({
+      status: "rejected",
+      error: "user_cancelled",
+      signedPayload: "0xsigned"
+    })],
+    ["mobile relay", () => invokeAip62Mobile({
+      status: "rejected",
+      encryptedResult: null,
+      requestMetadata: { signedPayload: "0xsigned" },
+      resultMetadata: null
+    })]
+  ])("propagates ambiguous %s rejection through AIP-62", async (_name, invoke) => {
+    await expectCode(invoke(), NovaErrorCode.InternalError);
   });
 });
