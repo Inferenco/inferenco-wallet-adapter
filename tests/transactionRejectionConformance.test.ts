@@ -1,4 +1,7 @@
-import { UserResponseStatus } from "@cedra-labs/wallet-standard";
+import {
+  UserResponseStatus,
+  type CedraSignAndSubmitTransactionInput
+} from "@cedra-labs/wallet-standard";
 import { createNovaAIP62Wallet } from "../src/aip62";
 import { tryLocalBridgeSignAndSubmit } from "../src/bridge";
 import {
@@ -10,13 +13,27 @@ import {
   _setBridgeTokenForTesting
 } from "../src/bridge/token";
 import { NovaAdapterError, NovaErrorCode } from "../src/errors";
-import { createKeyPair, deriveSharedSecret, encryptJson } from "../src/mobileCrypto";
+import {
+  createKeyPair,
+  decryptJson,
+  deriveSharedSecret,
+  encryptJson
+} from "../src/mobileCrypto";
 import { signAndSubmitViaMobileRelay } from "../src/mobileRelay";
 import { NovaClient } from "../src/NovaClient";
 import type { NovaExternalSession } from "../src/types";
 
 const TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const HASH = `0x${"ab".repeat(32)}`;
+const GENERIC_AIP62_INPUT: CedraSignAndSubmitTransactionInput = {
+  gasUnitPrice: 7,
+  maxGasAmount: 50_000,
+  payload: {
+    function: "0x1::coin::transfer",
+    typeArguments: ["0x1::cedra_coin::CedraCoin"],
+    functionArguments: ["0x2", 42]
+  }
+};
 
 function expectCode(promise: Promise<unknown>, code: NovaErrorCode) {
   return expect(promise).rejects.toMatchObject({ code });
@@ -131,7 +148,11 @@ async function invokeMobile(result: Record<string, unknown>): Promise<unknown> {
   );
 }
 
-async function invokeAip62Bridge(result: Record<string, unknown>): Promise<unknown> {
+async function invokeAip62Bridge(
+  result: Record<string, unknown>,
+  input: CedraSignAndSubmitTransactionInput = GENERIC_AIP62_INPUT,
+  captureInput?: (input: unknown) => void
+): Promise<unknown> {
   const session: NovaExternalSession = {
     transport: "desktop-bridge",
     address: "0x1",
@@ -153,6 +174,10 @@ async function invokeAip62Bridge(result: Record<string, unknown>): Promise<unkno
       });
     }
     if (url.endsWith("/transaction") && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as {
+        transaction?: unknown;
+      };
+      captureInput?.(body.transaction);
       return new Response(JSON.stringify({ requestId: "aip62-bridge-request" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -170,10 +195,14 @@ async function invokeAip62Bridge(result: Record<string, unknown>): Promise<unkno
     throw new Error(`Unexpected fetch: ${url}`);
   });
 
-  return signAndSubmitFeature().signAndSubmitTransaction({} as never);
+  return signAndSubmitFeature().signAndSubmitTransaction(input);
 }
 
-async function invokeAip62Mobile(result: Record<string, unknown>): Promise<unknown> {
+async function invokeAip62Mobile(
+  result: Record<string, unknown>,
+  input: CedraSignAndSubmitTransactionInput = GENERIC_AIP62_INPUT,
+  captureInput?: (input: unknown) => void
+): Promise<unknown> {
   const dapp = createKeyPair();
   const wallet = createKeyPair();
   const sharedSecret = deriveSharedSecret(dapp.privateKey, wallet.publicKey);
@@ -199,6 +228,11 @@ async function invokeAip62Mobile(result: Record<string, unknown>): Promise<unkno
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/v1/requests") && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as {
+        encryptedRequest: string;
+      };
+      captureInput?.(decryptJson(body.encryptedRequest, sharedSecret));
+
       return new Response(JSON.stringify({
         requestId: "aip62-mobile-request",
         walletDeeplinkUrl: window.location.href,
@@ -218,7 +252,7 @@ async function invokeAip62Mobile(result: Record<string, unknown>): Promise<unkno
     throw new Error(`Unexpected fetch: ${url}`);
   });
 
-  return signAndSubmitFeature().signAndSubmitTransaction({} as never);
+  return signAndSubmitFeature().signAndSubmitTransaction(input);
 }
 
 describe("sign-and-submit rejection conformance", () => {
@@ -377,6 +411,35 @@ describe("sign-and-submit rejection conformance", () => {
     await expectCode(invokeProvider(makeResult()), NovaErrorCode.InternalError);
   });
 
+  it("accepts canonical provider records created in another browser realm", async () => {
+    const iframe = document.createElement("iframe");
+    document.body.appendChild(iframe);
+    try {
+      const foreignJson = (
+        iframe.contentWindow as unknown as { JSON?: typeof JSON } | null
+      )?.JSON;
+      if (!foreignJson) throw new Error("Missing iframe JSON realm");
+
+      const approved = foreignJson.parse(JSON.stringify({
+        status: "Approved",
+        args: { hash: HASH }
+      })) as unknown;
+      expect(Object.getPrototypeOf(approved)).not.toBe(Object.prototype);
+      await expect(invokeProvider(approved)).resolves.toEqual({ hash: HASH });
+
+      delete (window as any).inferenco;
+      const rejected = foreignJson.parse(JSON.stringify({
+        status: "Rejected"
+      })) as unknown;
+      await expectCode(
+        invokeProvider(rejected),
+        NovaErrorCode.UserRejected
+      );
+    } finally {
+      iframe.remove();
+    }
+  });
+
   it("invokes the provider exactly once for a terminal rejection", async () => {
     const signAndSubmitTransaction = vi.fn().mockResolvedValue({ status: "Rejected" });
     (window as any).inferenco = {
@@ -471,7 +534,7 @@ describe("sign-and-submit rejection conformance", () => {
     if (!feature) {
       throw new Error("Missing cedra:signAndSubmitTransaction feature");
     }
-    const rejected = await feature.signAndSubmitTransaction({} as never);
+    const rejected = await feature.signAndSubmitTransaction(GENERIC_AIP62_INPUT);
 
     expect(rejected).toEqual({ status: UserResponseStatus.REJECTED });
     expect(Object.keys(rejected)).toEqual(["status"]);
@@ -490,8 +553,68 @@ describe("sign-and-submit rejection conformance", () => {
       throw new Error("Missing cedra:signAndSubmitTransaction feature");
     }
     await expect(
-      ambiguousFeature.signAndSubmitTransaction({} as never)
+      ambiguousFeature.signAndSubmitTransaction(GENERIC_AIP62_INPUT)
     ).rejects.toMatchObject({ code: NovaErrorCode.InternalError });
+  });
+
+  it("forwards a generic AIP-62 transaction unchanged to the injected provider", async () => {
+    const signAndSubmitTransaction = vi.fn().mockResolvedValue({ status: "Rejected" });
+    (window as any).inferenco = {
+      isNovaWallet: true,
+      signAndSubmitTransaction
+    };
+
+    const rejected = await signAndSubmitFeature().signAndSubmitTransaction(
+      GENERIC_AIP62_INPUT
+    );
+
+    expect(rejected).toEqual({ status: UserResponseStatus.REJECTED });
+    expect(signAndSubmitTransaction).toHaveBeenCalledTimes(1);
+    expect(signAndSubmitTransaction.mock.calls[0]?.[0]).toBe(GENERIC_AIP62_INPUT);
+    expect(signAndSubmitTransaction.mock.calls[0]?.[1]).toBeUndefined();
+  });
+
+  it("preserves a generic AIP-62 transaction in the desktop bridge request", async () => {
+    const captureInput = vi.fn();
+    const rejected = await invokeAip62Bridge(
+      { status: "rejected", error: "user_cancelled" },
+      GENERIC_AIP62_INPUT,
+      captureInput
+    );
+
+    expect(rejected).toEqual({ status: UserResponseStatus.REJECTED });
+    expect(captureInput).toHaveBeenCalledOnce();
+    expect(captureInput).toHaveBeenCalledWith(GENERIC_AIP62_INPUT);
+  });
+
+  it("preserves a generic AIP-62 transaction in the encrypted mobile request", async () => {
+    const captureInput = vi.fn();
+    const rejected = await invokeAip62Mobile(
+      {
+        status: "rejected",
+        encryptedRequest: "encrypted-request",
+        encryptedResult: null,
+        requestMetadata: {
+          origin: window.location.origin,
+          appName: "Nova Connect"
+        },
+        resultMetadata: null,
+        errorCode: "user_cancelled",
+        errorMessage: null,
+        origin: window.location.origin,
+        appName: "Nova Connect",
+        accountAddress: null,
+        network: null,
+        chainId: null,
+        walletName: null
+      },
+      GENERIC_AIP62_INPUT,
+      captureInput
+    );
+
+    expect(rejected).toEqual({ status: UserResponseStatus.REJECTED });
+    expect(captureInput).toHaveBeenCalledOnce();
+    expect(captureInput).toHaveBeenCalledWith(GENERIC_AIP62_INPUT);
   });
 
   it.each([

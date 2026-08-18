@@ -264,7 +264,7 @@ function snapshotProviderRecord(
   try {
     if (Array.isArray(value)) return null;
     const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return null;
+    if (prototype !== null && Object.getPrototypeOf(prototype) !== null) return null;
 
     const snapshot: Record<string, unknown> = Object.create(null);
     for (const key of Reflect.ownKeys(value)) {

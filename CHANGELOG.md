@@ -12,10 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Sign-and-submit now treats only clean, explicit terminal rejection statuses as
 `USER_REJECTED`. Approved results require a canonical `0x`-prefixed
 32-byte transaction hash. Failed, unknown, malformed, nested, or
-material-bearing rejection results fail closed
-as internal errors. Provider responses must expose plain own data properties;
-accessors, symbols, hidden fields, non-plain objects, and failed proxy
-introspection also fail closed. The AIP-62 wrapper returns the exact status-only
+material-bearing
+rejection results fail closed as internal errors. Provider responses must expose
+plain own data properties; safe plain records from other browser realms remain
+accepted, while accessors, symbols, hidden fields, non-plain objects, and failed
+proxy introspection fail closed. The AIP-62 wrapper returns the exact status-only
 Rejected shape and propagates ambiguous or operational failures.
 
 ### Fixed (stale session in localStorage keeps retrying CORS-blocked 404 in devtools)
