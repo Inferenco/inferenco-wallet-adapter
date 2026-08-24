@@ -1,13 +1,13 @@
 # Mobile Relay Protocol
 
-This document describes the end-to-end encrypted mobile relay protocol used by `@inferenco/nova-wallet-adapter` for connecting mobile browsers to Nova Wallet via the hosted nova-service relay.
+This document describes the end-to-end encrypted mobile relay protocol used by `@inferenco/infer-wallet-adapter` for connecting mobile browsers to Infer Wallet via the hosted nova-service relay.
 
 ## Overview
 
-When the adapter detects a mobile browser, it uses a hosted relay service (nova-service) to bridge communication between the dApp and the Nova Wallet mobile app. All request and response payloads are end-to-end encrypted &mdash; the relay server never sees plaintext data.
+When the adapter detects a mobile browser, it uses a hosted relay service (nova-service) to bridge communication between the dApp and the Infer Wallet mobile app. All request and response payloads are end-to-end encrypted &mdash; the relay server never sees plaintext data.
 
 ```
-Mobile Browser (dApp)         nova-service (relay)         Nova Wallet App
+Mobile Browser (dApp)         nova-service (relay)         Infer Wallet App
       │                            │                            │
       │◄── E2E Encrypted ────────►│◄── E2E Encrypted ────────►│
       │                            │                            │
@@ -54,14 +54,14 @@ import { sha256 } from "@noble/hashes/sha256";
 const rawSharedSecret = x25519.getSharedSecret(dappPrivateKey, walletPublicKey);
 
 // HKDF: derive a 32-byte encryption key
-const encryptionKey = hkdf(sha256, rawSharedSecret, undefined, "nova-connect-relay", 32);
+const encryptionKey = hkdf(sha256, rawSharedSecret, undefined, "infer-connect-relay", 32);
 ```
 
 **HKDF parameters:**
 - Hash: SHA-256
 - IKM (input keying material): raw X25519 shared secret
 - Salt: `undefined` (empty)
-- Info: `"nova-connect-relay"` (context string)
+- Info: `"infer-connect-relay"` (context string)
 - Output length: 32 bytes
 
 ## Encryption
@@ -157,7 +157,7 @@ Content-Type: application/json
 
 ### Step 2: Launch Deeplink
 
-The adapter opens the `walletDeeplinkUrl` to hand off to the Nova Wallet mobile app:
+The adapter opens the `walletDeeplinkUrl` to hand off to the Infer Wallet mobile app:
 
 ```
 inferenco://connect?pairingId={id}&walletClaimToken={token}&callbackUrl={url}&dappPublicKey={key}
@@ -165,7 +165,7 @@ inferenco://connect?pairingId={id}&walletClaimToken={token}&callbackUrl={url}&da
 
 ### Step 3: Wallet Claims and Approves
 
-In the Nova Wallet app:
+In the Infer Wallet app:
 1. Wallet claims the pairing with its claim token
 2. Wallet generates its own X25519 keypair
 3. Wallet derives the shared secret using `dappPublicKey`
@@ -344,4 +344,4 @@ Mobile browsers often reload the page when returning from a deeplink. The adapte
 | `mobileRequestTimeoutMs` | `180000` | Total request timeout (3 min) |
 | `mobileSocketTimeoutMs` | `15000` | WebSocket wait timeout (15s) |
 
-All defaults can be overridden via `NovaWalletOptions`.
+All defaults can be overridden via `InferWalletOptions`.

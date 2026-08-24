@@ -1,17 +1,33 @@
 import { Buffer } from "node:buffer";
 
-export const NOVA_CONNECT_NAME = "Nova Connect";
-export const NOVA_WALLET_NAME = "Nova Wallet";
-/** @deprecated Use NOVA_CONNECT_NAME instead. */
-export const NOVA_DESK_NAME = NOVA_CONNECT_NAME;
-export const DEFAULT_DESKTOP_WEBSITE_URL = "https://inferenco.com/nova-desk";
-export const DEFAULT_MOBILE_WEBSITE_URL = "https://inferenco.com/nova-wallet";
+export const INFER_CONNECT_NAME = "Infer Connect";
+export const INFER_WALLET_NAME = "Infer Wallet";
+/** v0.3.0 (rebrand): the new desktop app label that the rebranded
+ *  Infer Desk wallet stamps in its callback `walletName` parameter.
+ *  Distinct from `INFER_CONNECT_NAME` (the dapp-facing AIP-62 name) —
+ *  the Rust bridge sends "Infer Desk" as the wallet's self-identification
+ *  string. */
+export const INFER_DESK_APP_NAME = "Infer Desk";
+/** @deprecated Use INFER_CONNECT_NAME instead. */
+export const INFER_DESK_NAME = INFER_CONNECT_NAME;
+/** Legacy walletName alias — read-only for back-compat. Value stays
+ *  "Nova Connect" so previously-stored sessions and cached callback URLs
+ *  with the old name are still accepted during the transition window. */
+export const LEGACY_INFER_CONNECT_NAME = "Nova Connect";
+/** Legacy alias — read-only for back-compat. Value stays "Nova Desk" so
+ *  external code that filters by wallet name still accepts old sessions. */
+export const LEGACY_INFER_DESK_LABEL = "Nova Desk";
+export const DEFAULT_DESKTOP_WEBSITE_URL = "https://inferenco.com/infer-desk";
+export const DEFAULT_MOBILE_WEBSITE_URL = "https://inferenco.com/infer-wallet";
 /** @deprecated Use DEFAULT_DESKTOP_WEBSITE_URL or DEFAULT_MOBILE_WEBSITE_URL instead. */
 export const DEFAULT_WEBSITE_URL = DEFAULT_DESKTOP_WEBSITE_URL;
 export const DEFAULT_DEEPLINK_BASE_URL = "inferenco://connect?callback=";
 export const DEFAULT_DESKTOP_LOGIN_URL = "inferenco://login";
 export const DEFAULT_DESKTOP_BRIDGE_URL = "http://127.0.0.1:21984";
 export const DEFAULT_DEEPLINK_SCHEME = "inferenco";
+// TODO(rebrand): rename to infer-service-... once nova-service repo is rebranded.
+// nova-service is a separate codebase; Cloud Run URL is immutable without redeploying.
+// Remove this TODO in 0.4.0 after nova-service migration completes.
 export const DEFAULT_MOBILE_RELAY_BASE_URL = "https://nova-service-160604102004.europe-west1.run.app";
 export const DEFAULT_MOBILE_WEBSOCKET_URL = "wss://nova-service-160604102004.europe-west1.run.app/v1/ws";
 export const DEFAULT_MOBILE_POLL_INTERVAL_MS = 1000;
@@ -23,23 +39,23 @@ export const DEFAULT_DESKTOP_REGISTRATION = true;
 export const DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS = 1200;
 export const DEFAULT_BRIDGE_POLL_INTERVAL_MS = 250;
 export const DEFAULT_BRIDGE_POLL_TIMEOUT_MS = 120000;
-export const NOVA_PROTOCOL_KEY_STORAGE_KEY = "inferenco:nova-protocol-key";
+export const INFER_PROTOCOL_KEY_STORAGE_KEY = "inferenco:infer-protocol-key";
 export const MISSING_BRIDGE_TOKEN_MESSAGE =
-  "Nova Desk bridge token not available. Open this dapp via Nova Desk (either inside its embedded browser, or via the inferenco:// deeplink).";
+  "Infer Desk bridge token not available. Open this dapp via Infer Desk (either inside its embedded browser, or via the inferenco:// deeplink).";
 /** F-03 (token piece): a per-session token is a 32-byte OsRng value
  * rendered as 64 lowercase hex chars. Used by external-browser URL
  * builders to detect whether a base URL carries the token in its path
  * (so we can preserve the prefix when constructing relative paths). */
 export const BRIDGE_TOKEN_PATH_REGEX = /^[0-9a-f]{64}$/;
-export const NOVA_EXTERNAL_SESSION_STORAGE_KEY = "inferenco:nova-session";
-export const NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY = "inferenco:nova-pending-mobile-pairing";
-export const NOVA_CALLBACK_MARKER_STORAGE_KEY = "inferenco:nova-callback-marker";
+export const INFER_EXTERNAL_SESSION_STORAGE_KEY = "inferenco:infer-session";
+export const INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY = "inferenco:infer-pending-mobile-pairing";
+export const INFER_CALLBACK_MARKER_STORAGE_KEY = "inferenco:infer-callback-marker";
 /** v0.2.0-rc.8: pub/sub channel name used to broadcast a wallet-initiated
  * (or peer-tab-initiated) disconnect to all adapters observing the same
- * origin. Mirror of `NOVA_SESSION_READY_MESSAGE_TYPE` from `bridge.ts` for
+ * origin. Mirror of `INFER_SESSION_READY_MESSAGE_TYPE` from `bridge.ts` for
  * symmetry — the two channels together cover the full session lifecycle. */
-export const NOVA_SESSION_CLEARED_MESSAGE_TYPE = "inferenco:nova-session-cleared";
-/** v0.2.0-rc.8: default value for `NovaWalletOptions.sessionLivenessIntervalMs`.
+export const INFER_SESSION_CLEARED_MESSAGE_TYPE = "inferenco:infer-session-cleared";
+/** v0.2.0-rc.8: default value for `InferWalletOptions.sessionLivenessIntervalMs`.
  * 0 means "no heartbeat"; the dapp must opt in to a positive value to
  * detect wallet-initiated disconnects faster than the next user-initiated
  * `connect()`. Backwards-compatible: existing dapps that don't set the
@@ -53,8 +69,21 @@ export const CALLBACK_SESSION_ID_PARAM = "sessionId";
 export const CALLBACK_BRIDGE_URL_PARAM = "bridgeUrl";
 export const CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM = "protocolPublicKey";
 export const CALLBACK_WALLET_NAME_PARAM = "walletName";
-export const CALLBACK_REQUEST_ID_PARAM = "novaRequestId";
-export const CALLBACK_STATUS_PARAM = "novaStatus";
+export const CALLBACK_REQUEST_ID_PARAM = "inferRequestId";
+export const CALLBACK_STATUS_PARAM = "inferStatus";
+/** Legacy aliases — read-only for one release cycle. */
+export const LEGACY_CALLBACK_REQUEST_ID_PARAM = "novaRequestId";
+export const LEGACY_CALLBACK_STATUS_PARAM = "novaStatus";
+
+/** @deprecated Use INFER_EXTERNAL_SESSION_STORAGE_KEY. Read-only for back-compat. */
+export const LEGACY_NOVA_EXTERNAL_SESSION_STORAGE_KEY = "inferenco:nova-session";
+/** @deprecated Use INFER_PROTOCOL_KEY_STORAGE_KEY. Read-only. */
+export const LEGACY_NOVA_PROTOCOL_KEY_STORAGE_KEY = "inferenco:nova-protocol-key";
+/** @deprecated Use INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY. Read-only. */
+export const LEGACY_NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY = "inferenco:nova-pending-mobile-pairing";
+/** @deprecated Use INFER_CALLBACK_MARKER_STORAGE_KEY. Read-only. */
+export const LEGACY_NOVA_CALLBACK_MARKER_STORAGE_KEY = "inferenco:nova-callback-marker";
+
 /** A3 (PKCE): the dapp keeps the code_verifier here between the deeplink
  * launch and the callback. The sessionStorage is cleared by the
  * callback consumer once the verifier is consumed. */
@@ -62,4 +91,4 @@ export const PKCE_VERIFIER_STORAGE_KEY = "inferenco:pkce-verifier";
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#0a3d91"/><path d="M32 12 40 28 56 32 40 36 32 52 24 36 8 32 24 28Z" fill="#66d9ff"/></svg>`;
 
-export const NOVA_WALLET_ICON = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}` as const;
+export const INFER_WALLET_ICON = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}` as const;

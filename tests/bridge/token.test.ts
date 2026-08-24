@@ -120,7 +120,32 @@ describe("bridge/token", () => {
     });
 
     const tokenPromise = ensureBridgeToken();
-    // Dispatch the postMessage that the wallet's provider script posts.
+    // Dispatch the postMessage that the rebranded Infer Desk provider script posts.
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: "infer:bridge-token", token: SAMPLE_TOKEN }
+      })
+    );
+
+    await expect(tokenPromise).resolves.toBe(SAMPLE_TOKEN);
+    // Cached: subsequent synchronous calls return the same token.
+    expect(readBridgeToken()).toBe(SAMPLE_TOKEN);
+  });
+
+  // v0.3.0 (rebrand): the listener accepts the canonical rebrand postMessage
+  // type (`infer:bridge-token`, shipped by Infer Desk v0.6.0+) and the legacy
+  // type (`nova:bridge-token`, shipped by pre-rebrand Infer Desk builds)
+  // during the transition window. Remove this test in 0.4.0.
+  it("dual_listen_accepts_legacy_nova_bridge_token_postMessage", async () => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { pathname: "/" }
+    });
+
+    const tokenPromise = ensureBridgeToken();
+    // A pre-rebrand Infer Desk build (or older "Nova Desk" build) posts the
+    // legacy type — must still be recognised.
     window.dispatchEvent(
       new MessageEvent("message", {
         data: { type: "nova:bridge-token", token: SAMPLE_TOKEN }
@@ -128,7 +153,6 @@ describe("bridge/token", () => {
     );
 
     await expect(tokenPromise).resolves.toBe(SAMPLE_TOKEN);
-    // Cached: subsequent synchronous calls return the same token.
     expect(readBridgeToken()).toBe(SAMPLE_TOKEN);
   });
 
@@ -157,7 +181,7 @@ describe("bridge/token", () => {
 
     window.dispatchEvent(
       new MessageEvent("message", {
-        data: { type: "nova:bridge-token", token: "not-a-valid-token" }
+        data: { type: "infer:bridge-token", token: "not-a-valid-token" }
       })
     );
 

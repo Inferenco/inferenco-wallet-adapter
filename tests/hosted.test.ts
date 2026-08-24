@@ -1,5 +1,5 @@
 import { getCedraWallets } from "@cedra-labs/wallet-standard";
-import { isHostedInNovaDesk } from "../src/hosted";
+import { isHostedInInferDesk } from "../src/hosted";
 
 // Helper: reset module state between tests so the module-level
 // `registered` boolean in aip62.ts does not leak across cases.
@@ -7,56 +7,78 @@ function resetAdapter() {
   delete (window as any).cedra;
   delete (window as any).nova;
   delete (window as any).aptos;
+  delete (window as any).infer;
   delete (window as any).inferenco;
   delete (window as any).__novaDeskProviderInjected;
+  delete (window as any).__inferDeskProviderInjected;
   window.localStorage.clear();
   vi.resetModules();
   vi.restoreAllMocks();
 }
 
-describe("isHostedInNovaDesk", () => {
+describe("isHostedInInferDesk", () => {
   afterEach(() => {
     resetAdapter();
   });
 
-  it("returns true when window.cedra.isNovaDesk === true", () => {
-    (window as any).cedra = { isNovaDesk: true, name: "Nova Desk" };
-    expect(isHostedInNovaDesk()).toBe(true);
+  it("returns true when window.cedra.isInferDesk === true (canonical rebrand flag)", () => {
+    (window as any).cedra = { isInferDesk: true, name: "Infer Desk" };
+    expect(isHostedInInferDesk()).toBe(true);
   });
 
-  it("returns true when window.nova.isNovaDesk === true", () => {
+  it("returns true when window.cedra.isNovaDesk === true (legacy alias)", () => {
+    (window as any).cedra = { isNovaDesk: true, name: "Nova Desk" };
+    expect(isHostedInInferDesk()).toBe(true);
+  });
+
+  it("returns true when window.infer.isInferDesk === true (new rebrand namespace)", () => {
+    (window as any).infer = { isInferDesk: true, name: "Infer Desk" };
+    expect(isHostedInInferDesk()).toBe(true);
+  });
+
+  it("returns true when window.nova.isInferDesk === true (legacy namespace + rebrand flag)", () => {
+    (window as any).nova = { isInferDesk: true, name: "Infer Desk" };
+    expect(isHostedInInferDesk()).toBe(true);
+  });
+
+  it("returns true when window.nova.isNovaDesk === true (legacy namespace + legacy flag)", () => {
     (window as any).nova = { isNovaDesk: true, name: "Nova Desk" };
-    expect(isHostedInNovaDesk()).toBe(true);
+    expect(isHostedInInferDesk()).toBe(true);
   });
 
   it("returns true when window.aptos.isNovaDesk === true", () => {
     (window as any).aptos = { isNovaDesk: true, name: "Nova Desk" };
-    expect(isHostedInNovaDesk()).toBe(true);
+    expect(isHostedInInferDesk()).toBe(true);
   });
 
   it("returns true when __novaDeskProviderInjected === true", () => {
     (window as any).__novaDeskProviderInjected = true;
-    expect(isHostedInNovaDesk()).toBe(true);
+    expect(isHostedInInferDesk()).toBe(true);
   });
 
-  it("returns false when no Nova Desk signal is present", () => {
-    expect(isHostedInNovaDesk()).toBe(false);
+  it("returns true when __inferDeskProviderInjected === true", () => {
+    (window as any).__inferDeskProviderInjected = true;
+    expect(isHostedInInferDesk()).toBe(true);
   });
 
-  it("returns false when window.cedra is present but isNovaDesk is missing", () => {
+  it("returns false when no Infer Desk signal is present", () => {
+    expect(isHostedInInferDesk()).toBe(false);
+  });
+
+  it("returns false when window.cedra is present but neither flag is set", () => {
     (window as any).cedra = { isNovaWallet: true, name: "Some Other Wallet" };
-    expect(isHostedInNovaDesk()).toBe(false);
+    expect(isHostedInInferDesk()).toBe(false);
   });
 
-  it("returns false when window.cedra.isNovaDesk is a truthy non-true value (strict check)", () => {
-    (window as any).cedra = { isNovaDesk: 1 as unknown as boolean };
+  it("returns false when window.cedra.isInferDesk is a truthy non-true value (strict check)", () => {
+    (window as any).cedra = { isInferDesk: 1 as unknown as boolean };
     // strict `=== true` is intentional: a forged truthy value must
     // not flip the gate. Only the wallet's own sentinel counts.
-    expect(isHostedInNovaDesk()).toBe(false);
+    expect(isHostedInInferDesk()).toBe(false);
   });
 });
 
-describe("registerNovaWallet (v0.2.0-rc.12 in-Nova-Desk suppression)", () => {
+describe("registerInferWallet (v0.2.0-rc.12 in-Nova-Desk suppression)", () => {
   afterEach(() => {
     resetAdapter();
   });
@@ -64,8 +86,8 @@ describe("registerNovaWallet (v0.2.0-rc.12 in-Nova-Desk suppression)", () => {
   it("skips registration when window.cedra.isNovaDesk === true", async () => {
     (window as any).cedra = { isNovaDesk: true, name: "Nova Desk" };
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet } = await import("../src/aip62");
-    registerNovaWallet();
+    const { registerInferWallet } = await import("../src/aip62");
+    registerInferWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before);
   });
@@ -73,8 +95,8 @@ describe("registerNovaWallet (v0.2.0-rc.12 in-Nova-Desk suppression)", () => {
   it("skips registration when window.nova.isNovaDesk === true", async () => {
     (window as any).nova = { isNovaDesk: true, name: "Nova Desk" };
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet } = await import("../src/aip62");
-    registerNovaWallet();
+    const { registerInferWallet } = await import("../src/aip62");
+    registerInferWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before);
   });
@@ -82,8 +104,8 @@ describe("registerNovaWallet (v0.2.0-rc.12 in-Nova-Desk suppression)", () => {
   it("skips registration when window.aptos.isNovaDesk === true", async () => {
     (window as any).aptos = { isNovaDesk: true, name: "Nova Desk" };
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet } = await import("../src/aip62");
-    registerNovaWallet();
+    const { registerInferWallet } = await import("../src/aip62");
+    registerInferWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before);
   });
@@ -91,8 +113,8 @@ describe("registerNovaWallet (v0.2.0-rc.12 in-Nova-Desk suppression)", () => {
   it("skips registration when __novaDeskProviderInjected === true (sentinel fallback)", async () => {
     (window as any).__novaDeskProviderInjected = true;
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet } = await import("../src/aip62");
-    registerNovaWallet();
+    const { registerInferWallet } = await import("../src/aip62");
+    registerInferWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before);
   });
@@ -115,8 +137,8 @@ describe("registerNovaWallet (v0.2.0-rc.12 in-Nova-Desk suppression)", () => {
       }
     };
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet } = await import("../src/aip62");
-    registerNovaWallet();
+    const { registerInferWallet } = await import("../src/aip62");
+    registerInferWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before + 1);
   });
@@ -124,16 +146,16 @@ describe("registerNovaWallet (v0.2.0-rc.12 in-Nova-Desk suppression)", () => {
   it("forceRegistration: true overrides the in-Nova-Desk suppression", async () => {
     (window as any).cedra = { isNovaDesk: true, name: "Nova Desk" };
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet } = await import("../src/aip62");
-    registerNovaWallet({ forceRegistration: true });
+    const { registerInferWallet } = await import("../src/aip62");
+    registerInferWallet({ forceRegistration: true });
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before + 1);
   });
 
   it("regression: registers normally when no Nova Desk signal is present (external browser)", async () => {
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet } = await import("../src/aip62");
-    registerNovaWallet();
+    const { registerInferWallet } = await import("../src/aip62");
+    registerInferWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before + 1);
   });

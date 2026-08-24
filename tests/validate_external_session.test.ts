@@ -6,13 +6,17 @@ import {
   storeExternalSession,
   validateExternalSession
 } from "../src/bridge";
-import type { NovaExternalSession } from "../src/types";
+import {
+  INFER_EXTERNAL_SESSION_STORAGE_KEY,
+  LEGACY_NOVA_EXTERNAL_SESSION_STORAGE_KEY
+} from "../src/constants";
+import type { InferExternalSession } from "../src/types";
 
 const SAMPLE_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const SAMPLE_BRIDGE_URL = `http://127.0.0.1:21984/${SAMPLE_TOKEN}`;
 const SAMPLE_SESSION_ID = "b90ae6fb-b36b-435a-95b4-213381296c77";
 
-function makeStaleDesktopSession(): NovaExternalSession {
+function makeStaleDesktopSession(): InferExternalSession {
   return {
     transport: "desktop-bridge",
     address: "0xabc",
@@ -21,7 +25,7 @@ function makeStaleDesktopSession(): NovaExternalSession {
     chainId: 2,
     sessionId: SAMPLE_SESSION_ID,
     bridgeUrl: SAMPLE_BRIDGE_URL,
-    walletName: "Nova Connect"
+    walletName: "Infer Connect"
   };
 }
 
@@ -126,7 +130,7 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
           chainId: 2,
           sessionId: SAMPLE_SESSION_ID,
           bridgeUrl: SAMPLE_BRIDGE_URL,
-          walletName: "Nova Connect"
+          walletName: "Infer Connect"
         }),
         {
           status: 200,
@@ -138,5 +142,32 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
     const result = await validateExternalSession(makeStaleDesktopSession(), {});
     expect(result).not.toBeNull();
     expect(readExternalSession()).not.toBeNull();
+  });
+
+  // v0.3.0 (rebrand): dual-read storage keys. A previously-installed
+  // 0.2.0-rc.x dapp stored its session under `inferenco:nova-session`;
+  // the new adapter must find that legacy session, migrate it to
+  // `inferenco:infer-session`, and clear the legacy key — all without
+  // a re-connect prompt.
+  it("dual_read_migrates_session_from_legacy_inferenco_nova_session_key", () => {
+    const legacy = makeStaleDesktopSession();
+    window.localStorage.setItem(
+      LEGACY_NOVA_EXTERNAL_SESSION_STORAGE_KEY,
+      JSON.stringify(legacy)
+    );
+
+    const migrated = readExternalSession();
+
+    expect(migrated).not.toBeNull();
+    expect(migrated?.sessionId).toBe(SAMPLE_SESSION_ID);
+    // After a successful read-and-migrate, the legacy key should be
+    // cleared and the primary key populated.
+    expect(window.localStorage.getItem(LEGACY_NOVA_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
+    expect(window.localStorage.getItem(INFER_EXTERNAL_SESSION_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it("dual_read_returns_null_when_neither_storage_key_is_set", () => {
+    window.localStorage.clear();
+    expect(readExternalSession()).toBeNull();
   });
 });

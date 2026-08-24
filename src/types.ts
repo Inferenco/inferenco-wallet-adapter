@@ -20,25 +20,25 @@ import type {
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 
-export type NovaWalletName<T extends string = string> = T & {
+export type InferWalletName<T extends string = string> = T & {
   __brand__: "WalletName";
 };
 
-export enum NovaWalletReadyState {
+export enum InferWalletReadyState {
   Installed = "Installed",
   NotDetected = "NotDetected",
   Loadable = "Loadable",
   Unsupported = "Unsupported"
 }
 
-export interface NovaAccountKeys {
+export interface InferAccountKeys {
   publicKey: string | string[] | null;
   address: string | null;
   authKey: string | null;
   minKeysRequired?: number;
 }
 
-export interface NovaNetworkInfo {
+export interface InferNetworkInfo {
   api?: string;
   chainId?: string;
   name: string | undefined;
@@ -52,7 +52,7 @@ export interface SignMessagePayload {
   nonce: string;
 }
 
-export interface NovaSignMessageResponse {
+export interface InferSignMessageResponse {
   address: string;
   application?: string;
   chainId?: number;
@@ -63,7 +63,7 @@ export interface NovaSignMessageResponse {
   signature: string;
 }
 
-export interface NovaWalletOptions {
+export interface InferWalletOptions {
   deeplinkBaseUrl?: string;
   deeplinkScheme?: string;
   websiteUrl?: string;
@@ -94,9 +94,9 @@ export interface NovaWalletOptions {
    * v0.2.0-rc.8 (Phase 5 UX): opt-in liveness heartbeat for external
    * browsers. When set to a positive number of milliseconds, the
    * adapter periodically issues `GET /<token>/session/<id>` against
-   * the local Nova Desk bridge. On a 403/404 (wallet revoked the
+   * the local Infer Desk bridge. On a 403/404 (wallet revoked the
    * session), the new `"disconnect"` event is emitted on
-   * `NovaClient` / `NovaWallet` / `cedra:onDisconnect` (AIP-62),
+   * `InferClient` / `InferWallet` / `cedra:onDisconnect` (AIP-62),
    * giving dapps sub-second disconnect detection without polling
    * the bridge themselves.
    *
@@ -111,7 +111,7 @@ export interface NovaWalletOptions {
 }
 
 /** v0.2.0-rc.8 (Phase 5 UX): payload-less disconnect event surface,
- * shared by `NovaClient`, `NovaWallet`, and the AIP-62 `cedra:onDisconnect`
+ * shared by `InferClient`, `InferWallet`, and the AIP-62 `cedra:onDisconnect`
  * feature. Fires when either:
  *   (a) the dapp itself called `client.disconnect()`,
  *   (b) the wallet revoked the session from its dashboard,
@@ -120,12 +120,12 @@ export interface NovaWalletOptions {
  *       `GET /<token>/session/<id>`.
  *
  * Subscribing to this event is the dapp's signal to drop any cached
- * account/network state, surface a "Disconnected by Nova Desk" toast,
+ * account/network state, surface a "Disconnected by Infer Desk" toast,
  * and require a fresh `connect()` to resume.
  */
-export type NovaDisconnectEvent = void;
+export type InferDisconnectEvent = void;
 
-export interface NovaExternalSession {
+export interface InferExternalSession {
   transport: "desktop-bridge" | "mobile-relay";
   address: string;
   publicKey: string;
@@ -141,12 +141,12 @@ export interface NovaExternalSession {
   walletName?: string;
 }
 
-export interface NovaBridgeStartResponse {
+export interface InferBridgeStartResponse {
   requestId: string;
   status?: string;
 }
 
-export interface NovaBridgeConnectPoll {
+export interface InferBridgeConnectPoll {
   status?: string;
   requestId?: string;
   address?: string;
@@ -164,7 +164,7 @@ export interface NovaBridgeConnectPoll {
   error?: string;
 }
 
-export interface NovaBridgeMessagePoll {
+export interface InferBridgeMessagePoll {
   status?: string;
   requestId?: string;
   address?: string;
@@ -177,7 +177,7 @@ export interface NovaBridgeMessagePoll {
   error?: string;
 }
 
-export interface NovaBridgeSignTransactionPoll {
+export interface InferBridgeSignTransactionPoll {
   status?: string;
   requestId?: string;
   address?: string;
@@ -195,9 +195,9 @@ export interface NovaBridgeSignTransactionPoll {
   };
 }
 
-export type NovaTerminalStatus = "pending" | "approved" | "rejected" | "failed";
+export type InferTerminalStatus = "pending" | "approved" | "rejected" | "failed";
 
-interface NovaBridgeTransactionPollBase {
+interface InferBridgeTransactionPollBase {
   requestId: string;
   signature?: unknown;
   result?: unknown;
@@ -218,18 +218,18 @@ interface NovaBridgeTransactionPollBase {
   error?: string;
 }
 
-export type NovaBridgeTransactionPoll =
-  | (NovaBridgeTransactionPollBase & { status: "approved"; hash?: string })
-  | (NovaBridgeTransactionPollBase & { status: "rejected"; hash?: string })
-  | (NovaBridgeTransactionPollBase & { status: "failed"; hash?: string })
-  | (NovaBridgeTransactionPollBase & { status: "pending"; hash?: string });
+export type InferBridgeTransactionPoll =
+  | (InferBridgeTransactionPollBase & { status: "approved"; hash?: string })
+  | (InferBridgeTransactionPollBase & { status: "rejected"; hash?: string })
+  | (InferBridgeTransactionPollBase & { status: "failed"; hash?: string })
+  | (InferBridgeTransactionPollBase & { status: "pending"; hash?: string });
 
-export interface NovaCallbackMarker {
+export interface InferCallbackMarker {
   requestId: string;
   status: string;
 }
 
-export interface NovaMobilePairingCreateResponse {
+export interface InferMobilePairingCreateResponse {
   pairingId: string;
   dappPairingToken: string;
   walletDeeplinkUrl: string;
@@ -237,7 +237,7 @@ export interface NovaMobilePairingCreateResponse {
   expiresAt: string;
 }
 
-export interface NovaMobilePairingStatus {
+export interface InferMobilePairingStatus {
   pairingId: string;
   status: "pending" | "claimed" | "approved" | "rejected" | "expired" | "revoked";
   callbackUrl: string;
@@ -254,13 +254,13 @@ export interface NovaMobilePairingStatus {
   errorMessage?: string;
 }
 
-export interface NovaMobileRequestCreateResponse {
+export interface InferMobileRequestCreateResponse {
   requestId: string;
   walletDeeplinkUrl: string;
   expiresAt: string;
 }
 
-interface NovaMobileRequestStatusBase {
+interface InferMobileRequestStatusBase {
   requestId: string;
   sessionId: string;
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
@@ -280,14 +280,14 @@ interface NovaMobileRequestStatusBase {
   expiresAt: string;
 }
 
-export type NovaMobileRequestStatus =
-  | (NovaMobileRequestStatusBase & { status: "approved" })
-  | (NovaMobileRequestStatusBase & { status: "rejected" })
-  | (NovaMobileRequestStatusBase & { status: "failed" })
-  | (NovaMobileRequestStatusBase & { status: "pending" })
-  | (NovaMobileRequestStatusBase & { status: "expired" | "cancelled" | "revoked" });
+export type InferMobileRequestStatus =
+  | (InferMobileRequestStatusBase & { status: "approved" })
+  | (InferMobileRequestStatusBase & { status: "rejected" })
+  | (InferMobileRequestStatusBase & { status: "failed" })
+  | (InferMobileRequestStatusBase & { status: "pending" })
+  | (InferMobileRequestStatusBase & { status: "expired" | "cancelled" | "revoked" });
 
-export type NovaTransactionPayload =
+export type InferTransactionPayload =
   | InputGenerateTransactionPayloadData
   | {
       sender?: AccountAddressInput;
@@ -302,20 +302,20 @@ export interface NormalizedConnectedAccount {
   network?: NetworkInfo | null;
 }
 
-export interface NovaProviderAccount {
+export interface InferProviderAccount {
   address: string;
   publicKey: Uint8Array | string;
   network?: string | number | NetworkInfo;
 }
 
-export interface NovaProviderResponse<T> {
+export interface InferProviderResponse<T> {
   status?: string | number;
   data?: T;
   args?: T;
   result?: T;
 }
 
-export type NovaSignAndSubmitProviderResponse =
+export type InferSignAndSubmitProviderResponse =
   | CedraSignAndSubmitTransactionOutput
   | {
       status: "Approved";
@@ -325,12 +325,12 @@ export type NovaSignAndSubmitProviderResponse =
       status: "Rejected";
     };
 
-export interface NovaSignedTransactionWithAuthenticator {
+export interface InferSignedTransactionWithAuthenticator {
   authenticator: AccountAuthenticator;
   rawTransaction?: Uint8Array | AnyRawTransaction;
 }
 
-export interface NovaRawTransactionSignInput {
+export interface InferRawTransactionSignInput {
   rawTransactionBcsHex: string;
   bcsHex?: string;
   sender?: string;
@@ -339,104 +339,118 @@ export interface NovaRawTransactionSignInput {
   options?: unknown;
 }
 
-export interface NovaExternalAccountInput {
+export interface InferExternalAccountInput {
   address: string;
   publicKey?: string;
 }
 
-export type NovaExternalWalletStandardSignInput = Omit<
+export type InferExternalWalletStandardSignInput = Omit<
   CedraSignTransactionInputV1_1,
   "feePayer" | "secondarySigners" | "sender" | "signerAddress"
 > & {
-  feePayer?: NovaExternalAccountInput;
+  feePayer?: InferExternalAccountInput;
   feePayerAddress?: string;
-  secondarySigners?: NovaExternalAccountInput[];
+  secondarySigners?: InferExternalAccountInput[];
   secondarySignerAddresses?: string[];
   sender?: string;
   signerAddress?: string;
   options?: unknown;
 };
 
-export type NovaExternalSignTransactionInput =
-  | NovaRawTransactionSignInput
-  | NovaExternalWalletStandardSignInput;
+export type InferExternalSignTransactionInput =
+  | InferRawTransactionSignInput
+  | InferExternalWalletStandardSignInput;
 
-export interface NovaProvider {
+export interface InferProvider {
+  /** Canonical brand flag set by Infer Desk (v0.6.0+) / Infer Wallet (post-rebrand). */
+  isInferWallet?: boolean;
+  /**
+   * Legacy brand flag set by pre-0.6.0 Infer Desk (named "Infer Desk") and
+   * pre-rebrand Infer Wallet (named "Nova Wallet"). Still recognised by
+   * `isBrandedInferProvider` during the transition window. Will be removed
+   * in 0.4.0.
+   */
   isNovaWallet?: boolean;
-  connect?: (...args: unknown[]) => Promise<NovaProviderAccount | NovaProviderResponse<NovaProviderAccount>>;
-  account?: () => Promise<NovaProviderAccount | NovaProviderResponse<NovaProviderAccount>>;
-  disconnect?: () => Promise<void | NovaProviderResponse<void>>;
-  network?: () => Promise<string | number | NetworkInfo | NovaProviderResponse<string | number | NetworkInfo>>;
+  connect?: (...args: unknown[]) => Promise<InferProviderAccount | InferProviderResponse<InferProviderAccount>>;
+  account?: () => Promise<InferProviderAccount | InferProviderResponse<InferProviderAccount>>;
+  disconnect?: () => Promise<void | InferProviderResponse<void>>;
+  network?: () => Promise<string | number | NetworkInfo | InferProviderResponse<string | number | NetworkInfo>>;
   signMessage?: (
     input: CedraSignMessageInput | SignMessagePayload
-  ) => Promise<CedraSignMessageOutput | NovaSignMessageResponse | NovaProviderResponse<CedraSignMessageOutput | NovaSignMessageResponse>>;
+  ) => Promise<CedraSignMessageOutput | InferSignMessageResponse | InferProviderResponse<CedraSignMessageOutput | InferSignMessageResponse>>;
   signTransaction?: (
-    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
+    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
     options?: unknown
-  ) => Promise<AccountAuthenticator | Uint8Array | NovaSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1 | NovaProviderResponse<AccountAuthenticator | Uint8Array | NovaSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1>>;
+  ) => Promise<AccountAuthenticator | Uint8Array | InferSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1 | InferProviderResponse<AccountAuthenticator | Uint8Array | InferSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1>>;
   signAndSubmitTransaction?: (
-    transaction: AnyRawTransaction | NovaTransactionPayload,
+    transaction: AnyRawTransaction | InferTransactionPayload,
     options?: unknown
-  ) => Promise<NovaSignAndSubmitProviderResponse>;
-  onAccountChange?: (callback: (account: NovaProviderAccount) => void) => Promise<void> | void;
+  ) => Promise<InferSignAndSubmitProviderResponse>;
+  onAccountChange?: (callback: (account: InferProviderAccount) => void) => Promise<void> | void;
   onNetworkChange?: (callback: (network: string | number | NetworkInfo) => void) => Promise<void> | void;
   submitTransaction?: (
     input: InputSubmitTransactionData
-  ) => Promise<PendingTransactionResponse | NovaProviderResponse<PendingTransactionResponse>>;
+  ) => Promise<PendingTransactionResponse | InferProviderResponse<PendingTransactionResponse>>;
 }
 
-export interface NovaWindow extends Window {
-  inferenco?: NovaProvider;
-  nova?: NovaProvider;
-  cedra?: NovaProvider;
-  aptos?: NovaProvider;
+export interface InferWindow extends Window {
+  inferenco?: InferProvider;
+  /** New rebrand namespace (added in 0.3.0). Identical to `inferenco`. */
+  infer?: InferProvider;
+  /**
+   * Legacy alias namespace (kept during the transition window so older
+   * Infer Desk builds remain detectable). Will be removed in 0.4.0.
+   */
+  nova?: InferProvider;
+  cedra?: InferProvider;
+  aptos?: InferProvider;
 }
 
-export interface NovaWalletAdapterLike {
-  name: NovaWalletName;
+export interface InferWalletAdapterLike {
+  name: InferWalletName;
   url: string;
   icon: string;
-  readyState: NovaWalletReadyState;
+  readyState: InferWalletReadyState;
   connecting: boolean;
   connected: boolean;
-  publicAccount: NovaAccountKeys;
-  network: NovaNetworkInfo;
+  publicAccount: InferAccountKeys;
+  network: InferNetworkInfo;
   connect(): Promise<AccountInfo>;
   account(): Promise<AccountInfo>;
   disconnect(): Promise<void>;
   signAndSubmitTransaction(
-    transaction: NovaTransactionPayload,
+    transaction: InferTransactionPayload,
     options?: InputGenerateTransactionOptions
   ): Promise<CedraSignAndSubmitTransactionOutput>;
   signAndSubmitBCSTransaction(
-    transaction: NovaTransactionPayload,
+    transaction: InferTransactionPayload,
     options?: InputGenerateTransactionOptions
   ): Promise<CedraSignAndSubmitTransactionOutput>;
   signTransaction(
-    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
+    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
     options?: InputGenerateTransactionOptions
-  ): Promise<Uint8Array | NovaSignedTransactionWithAuthenticator>;
+  ): Promise<Uint8Array | InferSignedTransactionWithAuthenticator>;
   signMessage(
     message: CedraSignMessageInput | SignMessagePayload
-  ): Promise<CedraSignMessageOutput | NovaSignMessageResponse>;
+  ): Promise<CedraSignMessageOutput | InferSignMessageResponse>;
   onAccountChange(callback: (account: AccountInfo) => void): Promise<void>;
   onNetworkChange(callback: (network: NetworkInfo) => void): Promise<void>;
   deeplinkProvider(url?: string): string;
 }
 
-export interface NovaWalletLikeResult {
+export interface InferWalletLikeResult {
   account: AccountInfo;
   network: NetworkInfo | null;
   publicKey: AnyPublicKey;
 }
 
-export interface NovaWalletCoreLike {
+export interface InferWalletCoreLike {
   wallets: ReadonlyArray<{ name: string }>;
   connect(walletName: string): Promise<void | string>;
 }
 
-export type NovaSignTransactionResult =
+export type InferSignTransactionResult =
   | AccountAuthenticator
   | Uint8Array
-  | NovaSignedTransactionWithAuthenticator
+  | InferSignedTransactionWithAuthenticator
   | CedraSignTransactionOutputV1_1;

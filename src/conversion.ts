@@ -25,12 +25,12 @@ import type {
 } from "@cedra-labs/wallet-standard";
 import { AccountInfo } from "@cedra-labs/wallet-standard";
 import type {
-  NovaSignMessageResponse,
-  NovaSignTransactionResult,
-  NovaTransactionPayload,
-  NovaProviderAccount
+  InferSignMessageResponse,
+  InferSignTransactionResult,
+  InferTransactionPayload,
+  InferProviderAccount
 } from "./types";
-import { NovaAdapterError, NovaErrorCode } from "./errors";
+import { InferAdapterError, InferErrorCode } from "./errors";
 
 export function toUint8Array(input: string | Uint8Array): Uint8Array {
   if (input instanceof Uint8Array) return input;
@@ -122,9 +122,9 @@ function normalizeRawTransaction(value: unknown, hex?: string): AnyRawTransactio
   return undefined;
 }
 
-export function normalizeSignTransactionResult(result: unknown): NovaSignTransactionResult {
+export function normalizeSignTransactionResult(result: unknown): InferSignTransactionResult {
   if (result instanceof Uint8Array || !result || typeof result !== "object") {
-    return result as NovaSignTransactionResult;
+    return result as InferSignTransactionResult;
   }
 
   const authenticatorHex =
@@ -138,7 +138,7 @@ export function normalizeSignTransactionResult(result: unknown): NovaSignTransac
     authenticatorHex
   );
 
-  if (!authenticator) return result as NovaSignTransactionResult;
+  if (!authenticator) return result as InferSignTransactionResult;
 
   const rawTransaction = normalizeRawTransaction(
     hasRawTransactionField ? (result as { rawTransaction?: unknown }).rawTransaction : undefined,
@@ -149,14 +149,14 @@ export function normalizeSignTransactionResult(result: unknown): NovaSignTransac
       ...(result as Record<string, unknown>),
       authenticator,
       rawTransaction
-    } as NovaSignTransactionResult;
+    } as InferSignTransactionResult;
   }
 
   if (hasAuthenticatorField) {
     return {
       ...(result as Record<string, unknown>),
       authenticator
-    } as NovaSignTransactionResult;
+    } as InferSignTransactionResult;
   }
 
   return authenticator;
@@ -179,7 +179,7 @@ function normalizeProviderPublicKey(publicKey: string | Uint8Array): Ed25519Publ
   return new Ed25519PublicKey(bytes);
 }
 
-export function normalizeProviderAccount(account: NovaProviderAccount): AccountInfo {
+export function normalizeProviderAccount(account: InferProviderAccount): AccountInfo {
   return new AccountInfo({
     address: AccountAddress.from(account.address),
     publicKey: normalizeProviderPublicKey(account.publicKey)
@@ -201,7 +201,7 @@ export function normalizeNetwork(network: string | number | NetworkInfo): Networ
       : network;
 
   if (!rawName) {
-    throw new NovaAdapterError(NovaErrorCode.InvalidNetwork, `Unsupported network value: ${String(network)}`);
+    throw new InferAdapterError(InferErrorCode.InvalidNetwork, `Unsupported network value: ${String(network)}`);
   }
 
   const name =
@@ -225,7 +225,7 @@ export function normalizeNetwork(network: string | number | NetworkInfo): Networ
 }
 
 export function normalizeTransactionPayload(
-  transaction: AnyRawTransaction | NovaTransactionPayload
+  transaction: AnyRawTransaction | InferTransactionPayload
 ): {
   sender?: string;
   data?: InputGenerateTransactionPayloadData;
@@ -252,7 +252,7 @@ export function normalizeTransactionPayload(
 }
 
 export function normalizeSignMessageOutput(
-  output: CedraSignMessageOutput | NovaSignMessageResponse
+  output: CedraSignMessageOutput | InferSignMessageResponse
 ): CedraSignMessageOutput {
   return {
     address: output.address,

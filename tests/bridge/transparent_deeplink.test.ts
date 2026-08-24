@@ -63,7 +63,7 @@ describe("consumeExternalCallbackIfPresent", () => {
     callbackUrl.searchParams.set("chainId", "2");
     callbackUrl.searchParams.set("sessionId", "session-1");
     callbackUrl.searchParams.set("bridgeUrl", "http://127.0.0.1:21984/abc");
-    callbackUrl.searchParams.set("walletName", "Nova Connect");
+    callbackUrl.searchParams.set("walletName", "Infer Connect");
     Object.defineProperty(window, "location", {
       configurable: true,
       writable: true,
@@ -121,7 +121,7 @@ describe("consumeExternalCallbackIfPresent", () => {
           network: "testnet",
           chainId: 2,
           sessionId: "session-1",
-          walletName: "Nova Connect"
+          walletName: "Infer Connect"
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       )
@@ -184,6 +184,86 @@ describe("consumeExternalCallbackIfPresent", () => {
     // mock returns 400, the URL contains /exchange).
     expect(fetchSpy).toHaveBeenCalled();
     expect(String(fetchSpy.mock.calls[0][0])).toContain("/exchange");
+  });
+
+  it("consumes_callback_with_legacy_nova_callback_params", async () => {
+    // v0.3.0 (rebrand): a pre-rebrand Infer Desk build sends the legacy
+    // callback URL params `novaRequestId`/`novaStatus` instead of
+    // `inferRequestId`/`inferStatus`. The dual-read logic must accept
+    // the legacy names during the transition window so a dapp that
+    // was approved in a pre-rebuild session still resumes.
+    const callbackUrl = new URL("https://dapp.example/callback");
+    callbackUrl.searchParams.set("address", "0xabc");
+    callbackUrl.searchParams.set("publicKey", "0xpub");
+    callbackUrl.searchParams.set("network", "testnet");
+    callbackUrl.searchParams.set("chainId", "2");
+    callbackUrl.searchParams.set("sessionId", "session-legacy-1");
+    callbackUrl.searchParams.set("bridgeUrl", "http://127.0.0.1:21984/abc");
+    callbackUrl.searchParams.set("walletName", "Infer Connect");
+    callbackUrl.searchParams.set("novaRequestId", "legacy-req-id");
+    callbackUrl.searchParams.set("novaStatus", "approved");
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: {
+        href: callbackUrl.toString(),
+        origin: "https://dapp.example",
+        pathname: "/callback",
+        search: callbackUrl.search,
+        hash: "",
+        protocol: "https:",
+        host: "dapp.example",
+        hostname: "dapp.example",
+        port: ""
+      }
+    });
+
+    await consumeExternalCallbackIfPresent();
+
+    const stored = readExternalSession();
+    expect(stored).not.toBeNull();
+    expect(stored?.address).toBe("0xabc");
+    expect(stored?.sessionId).toBe("session-legacy-1");
+  });
+
+  it("prefers_canonical_inferRequestId_when_both_legacy_and_canonical_are_present", async () => {
+    // v0.3.0 (rebrand): when both legacy and canonical params are present
+    // (caller retained a stale redirect for some reason), the canonical
+    // rebrand param wins. This keeps behaviour deterministic when a dapp
+    // upgrade races a browser-cached redirect.
+    const callbackUrl = new URL("https://dapp.example/callback");
+    callbackUrl.searchParams.set("address", "0xabc");
+    callbackUrl.searchParams.set("publicKey", "0xpub");
+    callbackUrl.searchParams.set("network", "testnet");
+    callbackUrl.searchParams.set("chainId", "2");
+    callbackUrl.searchParams.set("sessionId", "session-both-1");
+    callbackUrl.searchParams.set("bridgeUrl", "http://127.0.0.1:21984/abc");
+    callbackUrl.searchParams.set("walletName", "Infer Connect");
+    callbackUrl.searchParams.set("novaRequestId", "legacy-id");
+    callbackUrl.searchParams.set("novaStatus", "approved");
+    callbackUrl.searchParams.set("inferRequestId", "canonical-id");
+    callbackUrl.searchParams.set("inferStatus", "approved");
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: {
+        href: callbackUrl.toString(),
+        origin: "https://dapp.example",
+        pathname: "/callback",
+        search: callbackUrl.search,
+        hash: "",
+        protocol: "https:",
+        host: "dapp.example",
+        hostname: "dapp.example",
+        port: ""
+      }
+    });
+
+    await consumeExternalCallbackIfPresent();
+
+    const stored = readExternalSession();
+    expect(stored).not.toBeNull();
+    expect(stored?.sessionId).toBe("session-both-1");
   });
 });
 

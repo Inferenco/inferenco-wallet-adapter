@@ -32,7 +32,7 @@ import { Account, Ed25519PrivateKey } from "@cedra-labs/ts-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { _resetExternalSessionResumeListenersForTesting, clearExternalSession } from "../../src/bridge.js";
-import { NovaClient } from "../../src/NovaClient.js";
+import { InferClient } from "../../src/InferClient.js";
 
 import { browser } from "./_browser_shim.js";
 
@@ -417,7 +417,7 @@ function makeSession(
     chainId: 2,
     sessionId: `session-${Math.random().toString(36).slice(2)}`,
     bridgeUrl: fixture.sessionBridgeUrl(),
-    walletName: "Nova Connect"
+    walletName: "Infer Connect"
   };
 }
 
@@ -461,12 +461,12 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
-  it("preauth_round_trip: NovaClient.connect() end-to-end via POST /preauth-connect + poll", async () => {
+  it("preauth_round_trip: InferClient.connect() end-to-end via POST /preauth-connect + poll", async () => {
     const signer = await makeSigner();
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new NovaClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
     const result = await client.connect();
 
     expect(result.account.address.toString()).toBe(signer.address);
@@ -491,7 +491,7 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new NovaClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
     await client.connect();
 
     fixture.queueSignMessage({
@@ -523,7 +523,7 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new NovaClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
     await client.connect();
 
     const sdk = await import("@cedra-labs/ts-sdk");
@@ -579,7 +579,7 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new NovaClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
     await client.connect();
 
     const fakeHash = "0x" + "ab".repeat(32);
@@ -606,7 +606,7 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new NovaClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
     await client.connect();
 
     await client.disconnect();
@@ -623,7 +623,7 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new NovaClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
     await client.connect();
     expect(client.account?.address.toString()).toBe(signer.address);
 
@@ -637,9 +637,9 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
 
     // Drive a fresh connect. The adapter validates the stored session
     // against the new bridge first; the OLD token is rejected with 404,
-    // `tryResumeNovaWalletConnection` falls through, and the dapp is
+    // `tryResumeInferWalletConnection` falls through, and the dapp is
     // prompted via a fresh preauth round-trip.
-    const client2 = new NovaClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client2 = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
     const newSigner = await makeSigner();
     const newSession = makeSession(newSigner, fixture);
     fixture.approveNextConnect(newSession);

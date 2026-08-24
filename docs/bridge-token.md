@@ -1,6 +1,6 @@
 # Bridge token
 
-Nova Desk's HTTP bridge is the channel external dapps use to request connect / sign-message / sign-transaction / sign-and-submit operations. The bridge binds at:
+Infer Desk's HTTP bridge is the channel external dapps use to request connect / sign-message / sign-transaction / sign-and-submit operations. The bridge binds at:
 
 ```
 http://127.0.0.1:21984/<token>/<route>
@@ -16,16 +16,18 @@ The wallet delivers the token to the dapp's JavaScript via one of two channels:
 
 ### 1. `window.postMessage` (embedded browser)
 
-When the dapp is loaded inside Nova Desk's embedded browser, the wallet injects a provider script that calls:
+When the dapp is loaded inside Infer Desk's embedded browser, the wallet injects a provider script that calls:
 
 ```js
 window.postMessage(
-  { type: "nova:bridge-token", token: "<64-hex>" },
+  { type: "infer:bridge-token", token: "<64-hex>" },
   window.location.origin || "*"
 );
 ```
 
 once at script-injection time. The adapter registers a same-origin `message` listener and resolves its internal promise on the first matching message.
+
+> **v0.3.0 (rebrand):** The canonical postMessage type is now `"infer:bridge-token"`. For one release cycle the adapter also accepts the legacy type `"nova:bridge-token"` so older Infer Desk builds (pre-rebrand) continue to function during the transition window. Dual-listen will be removed in 0.4.0.
 
 ### 2. `bridgeToken` field in the `/connect` response (external browser)
 
@@ -46,9 +48,9 @@ The adapter reads this field, stores it in module-scope memory, and uses it for 
 - The token is read **once at module init**, then cached.
 - Every URL construction (`bridgeUrlWithToken`, `bridgePathWithToken`, `getBridgeBaseUrlWithToken`) re-reads the cached token. On a 404 response from the wallet, the adapter force-refreshes the token and retries **once** (B+ behavior) before falling back to the clear-session reconnect path.
 - The token is **memory-only** — never written to `localStorage`, `sessionStorage`, `cookie`, or `IndexedDB`. Persisting it would leak the previous (now-stale) token across wallet restarts.
-- A dapp that is opened outside Nova Desk fails fast with `MissingBridgeTokenError` after a 2 s timeout, with the message:
+- A dapp that is opened outside Infer Desk fails fast with `MissingBridgeTokenError` after a 2 s timeout, with the message:
 
-  > "Nova Desk bridge token not available. Open this dapp via Nova Desk."
+  > "Infer Desk bridge token not available. Open this dapp via Infer Desk."
 
 ## Exported helpers
 
@@ -67,7 +69,7 @@ The adapter reads this field, stores it in module-scope memory, and uses it for 
 
 **No code change required for typical consumers.** The adapter wires the token automatically; existing dapp code works unchanged.
 
-Dapps on `0.1.x` against a Phase-2 wallet (introduced in commit `870dcbc` of `Inferenco/nova_desk`) see `404` on every call. Upgrade to `0.2.0-rc.2` or later before testing against a Phase-2 wallet build.
+Dapps on `0.1.x` against a Phase-2 wallet (introduced in commit `870dcbc` of `Inferenco/infer_desk`) see `404` on every call. Upgrade to `0.2.0-rc.2` or later before testing against a Phase-2 wallet build.
 
 Dapps that imported `bridgeBaseUrl()` directly still get the unprefixed host:port (back-compat for advanced consumers) — internal callers are rewritten to use `bridgeUrlWithToken()`.
 

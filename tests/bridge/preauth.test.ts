@@ -210,7 +210,7 @@ describe("bridge pre-auth flow (no-new-tab)", () => {
 });
 
 // v0.2.0-rc.10 (no-deeplink primary path): the dapp's
-// NovaClient.connect() must NOT set `window.location.href` to an
+// InferClient.connect() must NOT set `window.location.href` to an
 // `inferenco://` URL when the pre-auth POST succeeds. The wallet
 // auto-shows the approval sheet from the bridge queue, so firing
 // the deeplink triggers Chrome's external-protocol handler dialog.
@@ -236,7 +236,7 @@ describe("connect() does not fire deeplink when preauth succeeds", () => {
     }
   });
 
-  it("NovaClient source does NOT assign window.location.href to a deeplink URL", () => {
+  it("InferClient source does NOT assign window.location.href to a deeplink URL", () => {
     // Document the v0.2.0-rc.10 contract via static analysis: a
     // successful `startPreauthConnect` means the wallet is
     // running. Firing an `inferenco://` deeplink after that point
@@ -249,7 +249,7 @@ describe("connect() does not fire deeplink when preauth succeeds", () => {
     const fs = require("fs");
     const path = require("path");
     const src = fs.readFileSync(
-      path.join(__dirname, "../../src/NovaClient.ts"),
+      path.join(__dirname, "../../src/InferClient.ts"),
       "utf8",
     );
     const lines = src.split("\n");
@@ -259,14 +259,14 @@ describe("connect() does not fire deeplink when preauth succeeds", () => {
         line.includes("buildDesktopOrMobileConnectUrlWithRequest")
       ) {
         throw new Error(
-          "NovaClient.connect() must not assign window.location.href to a buildDesktopOrMobileConnectUrlWithRequest result: " +
+          "InferClient.connect() must not assign window.location.href to a buildDesktopOrMobileConnectUrlWithRequest result: " +
             line,
         );
       }
     }
   });
 
-  it("NovaClient source does NOT call launchDesktopOrMobileConnect inside the preauth success branch", () => {
+  it("InferClient source does NOT call launchDesktopOrMobileConnect inside the preauth success branch", () => {
     // v0.2.0-rc.10: the deeplink fallback (`launchDesktopOrMobileConnect`)
     // fires only when `startPreauthConnect` returns null (wallet
     // not reachable). Inside the success branch (between
@@ -275,7 +275,7 @@ describe("connect() does not fire deeplink when preauth succeeds", () => {
     const fs = require("fs");
     const path = require("path");
     const src = fs.readFileSync(
-      path.join(__dirname, "../../src/NovaClient.ts"),
+      path.join(__dirname, "../../src/InferClient.ts"),
       "utf8",
     );
     // Slice the success branch: between `if (preauth) {` and the

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CallbackOriginMismatch } from "../../src/errors.js";
-import { tryResumeNovaWalletConnection } from "../../src/bridge.js";
-import { NOVA_CONNECT_NAME } from "../../src/constants.js";
+import { tryResumeInferWalletConnection } from "../../src/bridge.js";
+import { INFER_CONNECT_NAME } from "../../src/constants.js";
 
 const GOOD_SESSION = {
   address: "0xabc",
@@ -32,62 +32,62 @@ describe("walletName allowlist via the public resume path", () => {
     // and the helper accepts it (wallet is in the wallet-standard
     // registry). The walletName-allowlist lives inside the private
     // parseExternalSession, which is exercised by every public path.
-    const session = { ...GOOD_SESSION, walletName: NOVA_CONNECT_NAME, transport: "desktop-bridge" as const };
-    expect(session.walletName).toBe(NOVA_CONNECT_NAME);
+    const session = { ...GOOD_SESSION, walletName: INFER_CONNECT_NAME, transport: "desktop-bridge" as const };
+    expect(session.walletName).toBe(INFER_CONNECT_NAME);
   });
 
   it("session_with_unknown_walletName_value_is_the_string_we_compare_against", () => {
     // Same indirect check: the allowlist compares against
-    // NOVA_CONNECT_NAME; an attacker-supplied value fails the check.
+    // INFER_CONNECT_NAME; an attacker-supplied value fails the check.
     const session = {
       ...GOOD_SESSION,
       walletName: "Evil Connect",
       transport: "desktop-bridge" as const
     };
-    expect(session.walletName).not.toBe(NOVA_CONNECT_NAME);
+    expect(session.walletName).not.toBe(INFER_CONNECT_NAME);
   });
 });
 
-describe("tryResumeNovaWalletConnection origin check", () => {
+describe("tryResumeInferWalletConnection origin check", () => {
   it("expectedOrigin_match_succeeds_and_session_is_stored", async () => {
     // Stash a valid session in localStorage so the helper accepts it.
     window.localStorage.setItem(
       "inferenco:nova-session",
-      JSON.stringify({ ...GOOD_SESSION, walletName: NOVA_CONNECT_NAME, transport: "desktop-bridge" })
+      JSON.stringify({ ...GOOD_SESSION, walletName: INFER_CONNECT_NAME, transport: "desktop-bridge" })
     );
 
     const walletCore = {
-      wallets: [{ name: NOVA_CONNECT_NAME }],
+      wallets: [{ name: INFER_CONNECT_NAME }],
       connect: vi.fn().mockResolvedValue(undefined)
     };
 
     // expectedOrigin matches window.location.origin (https://dapp.example).
     // Should not throw CallbackOriginMismatch.
     await expect(
-      tryResumeNovaWalletConnection(walletCore as any, { expectedOrigin: "https://dapp.example" })
+      tryResumeInferWalletConnection(walletCore as any, { expectedOrigin: "https://dapp.example" })
     ).resolves.not.toThrow();
   });
 
   it("expectedOrigin_mismatch_throws_CallbackOriginMismatch_with_expected_and_actual", async () => {
     window.localStorage.setItem(
       "inferenco:nova-session",
-      JSON.stringify({ ...GOOD_SESSION, walletName: NOVA_CONNECT_NAME, transport: "desktop-bridge" })
+      JSON.stringify({ ...GOOD_SESSION, walletName: INFER_CONNECT_NAME, transport: "desktop-bridge" })
     );
 
     const walletCore = {
-      wallets: [{ name: NOVA_CONNECT_NAME }],
+      wallets: [{ name: INFER_CONNECT_NAME }],
       connect: vi.fn().mockResolvedValue(undefined)
     };
 
     // window.location.origin is "https://dapp.example" (from beforeEach).
     // Pass a mismatched expectedOrigin.
     await expect(
-      tryResumeNovaWalletConnection(walletCore as any, { expectedOrigin: "https://attacker.example" })
+      tryResumeInferWalletConnection(walletCore as any, { expectedOrigin: "https://attacker.example" })
     ).rejects.toThrow(CallbackOriginMismatch);
 
     // Verify the error carries the right metadata.
     try {
-      await tryResumeNovaWalletConnection(walletCore as any, { expectedOrigin: "https://attacker.example" });
+      await tryResumeInferWalletConnection(walletCore as any, { expectedOrigin: "https://attacker.example" });
       expect.fail("expected throw");
     } catch (error) {
       expect(error).toBeInstanceOf(CallbackOriginMismatch);
@@ -105,7 +105,7 @@ describe("sessionBridgeBaseUrl ignore session.bridgeUrl when options.bridgeBaseU
     // options.bridgeBaseUrl.
     const session = {
       ...GOOD_SESSION,
-      walletName: NOVA_CONNECT_NAME,
+      walletName: INFER_CONNECT_NAME,
       transport: "desktop-bridge" as const,
       bridgeUrl: "https://attacker.example/bridge"
     };

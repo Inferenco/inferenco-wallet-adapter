@@ -1,5 +1,5 @@
 import { BRIDGE_TOKEN_PATH_REGEX, DEFAULT_DESKTOP_BRIDGE_URL } from "../constants.js";
-import type { NovaWalletOptions } from "../types.js";
+import type { InferWalletOptions } from "../types.js";
 import { MissingBridgeTokenError, readBridgeToken } from "./token.js";
 
 /**
@@ -19,7 +19,7 @@ import { MissingBridgeTokenError, readBridgeToken } from "./token.js";
  * relative path. Internal callers in this package use the
  * `bridgePathWithToken` helper to avoid the pitfall.
  */
-export function getBridgeBaseUrlWithToken(options: NovaWalletOptions = {}): string {
+export function getBridgeBaseUrlWithToken(options: InferWalletOptions = {}): string {
   const base = options.bridgeBaseUrl ?? DEFAULT_DESKTOP_BRIDGE_URL;
   return `${base}/${readBridgeToken()}`;
 }
@@ -57,7 +57,7 @@ export function extractBridgeTokenFromBaseUrl(
  *
  * Token resolution order (rc.7):
  *   1. `readBridgeToken()` (pathname / postMessage). Used inside
- *      Nova Desk's WebKit2GTK webview where the wallet's injected
+ *      Infer Desk's WebKit2GTK webview where the wallet's injected
  *      provider posted the token at startup.
  *   2. Fallback to extracting the token from `options.bridgeBaseUrl`
  *      or the package default `DEFAULT_DESKTOP_BRIDGE_URL`. Used in
@@ -71,7 +71,7 @@ export function extractBridgeTokenFromBaseUrl(
  */
 export function bridgePathWithToken(
   route: string,
-  options: NovaWalletOptions = {}
+  options: InferWalletOptions = {}
 ): string {
   let token: string;
   try {
@@ -97,7 +97,7 @@ export function bridgePathWithToken(
  */
 export function bridgeUrlWithToken(
   route: string,
-  options: NovaWalletOptions = {}
+  options: InferWalletOptions = {}
 ): string {
   const path = bridgePathWithToken(route, options);
   const base = options.bridgeBaseUrl ?? DEFAULT_DESKTOP_BRIDGE_URL;

@@ -25,7 +25,7 @@
 
 import { BRIDGE_TOKEN_PATH_REGEX, MISSING_BRIDGE_TOKEN_MESSAGE, MissingBridgeTokenError } from "./token.js";
 import { bridgeUrlWithToken } from "./url.js";
-import type { NovaWalletOptions } from "../types.js";
+import type { InferWalletOptions } from "../types.js";
 
 const PKCE_CODE_VERIFIER_BYTES = 32;
 
@@ -145,7 +145,7 @@ const EXCHANGE_TIMEOUT_MS = 5000;
 export async function exchangeCodeForSession(input: {
   code: string;
   codeVerifier: string;
-  options?: NovaWalletOptions;
+  options?: InferWalletOptions;
 }): Promise<{
   address: string;
   publicKey: string;
@@ -211,7 +211,7 @@ export async function exchangeCodeForSession(input: {
       throw new PkceVerificationFailed("Wallet response missing address");
     }
     // Verify the token shape on the returned session.
-    if (body.walletName && body.walletName !== "Nova Connect" && body.walletName !== "Nova Desk") {
+    if (body.walletName && body.walletName !== "Infer Connect" && body.walletName !== "Infer Desk" && body.walletName !== "Nova Desk") {
       throw new PkceVerificationFailed(
         `Unexpected walletName in exchange response: ${body.walletName}`
       );

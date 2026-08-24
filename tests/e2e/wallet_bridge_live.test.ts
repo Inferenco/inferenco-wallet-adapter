@@ -54,7 +54,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { _resetBridgeTokenForTesting, _setBridgeTokenForTesting } from "../../src/bridge/token.js";
 import { _resetExternalSessionResumeListenersForTesting, clearExternalSession } from "../../src/bridge.js";
-import { NovaClient } from "../../src/NovaClient.js";
+import { InferClient } from "../../src/InferClient.js";
 
 import { browser } from "./_browser_shim.js";
 
@@ -131,9 +131,9 @@ describe("wallet-bridge live round-trip (audit-08 ND-COMPAT-001 7.3.2)", () => {
   const skipIfNoBridge = SKIP_LIVE ? it.skip : it;
 
   skipIfNoBridge(
-    "connect: NovaClient.connect() against a live wallet bridge",
+    "connect: InferClient.connect() against a live wallet bridge",
     async () => {
-      const client = new NovaClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
+      const client = new InferClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
       const result = await client.connect();
 
       expect(result.account).toBeDefined();
@@ -150,7 +150,7 @@ describe("wallet-bridge live round-trip (audit-08 ND-COMPAT-001 7.3.2)", () => {
   skipIfNoBridge(
     "sign_message: client.signMessage against a live wallet bridge",
     async () => {
-      const client = new NovaClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
+      const client = new InferClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
       await client.connect();
 
       // The Rust approver signs nothing — it returns an all-zero
@@ -171,7 +171,7 @@ describe("wallet-bridge live round-trip (audit-08 ND-COMPAT-001 7.3.2)", () => {
   skipIfNoBridge(
     "sign_transaction: client.signTransaction against a live wallet bridge",
     async () => {
-      const client = new NovaClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
+      const client = new InferClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
       await client.connect();
 
       const sdk = await import("@cedra-labs/ts-sdk");
@@ -213,7 +213,7 @@ describe("wallet-bridge live round-trip (audit-08 ND-COMPAT-001 7.3.2)", () => {
   skipIfNoBridge(
     "sign_and_submit: client.signAndSubmitTransaction against a live wallet bridge",
     async () => {
-      const client = new NovaClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
+      const client = new InferClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
       await client.connect();
 
       const output = await client.signAndSubmitTransaction({
@@ -233,7 +233,7 @@ describe("wallet-bridge live round-trip (audit-08 ND-COMPAT-001 7.3.2)", () => {
   skipIfNoBridge(
     "disconnect: client.disconnect against a live wallet bridge",
     async () => {
-      const client = new NovaClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
+      const client = new InferClient({ bridgeBaseUrl: BRIDGE_BASE_URL });
       await client.connect();
       expect(browser.window.localStorage.getItem("inferenco:nova-session")).not.toBeNull();
 

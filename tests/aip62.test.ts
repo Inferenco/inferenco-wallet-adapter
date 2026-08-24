@@ -9,7 +9,7 @@ import {
   TransactionPayloadEntryFunction
 } from "@cedra-labs/ts-sdk";
 
-describe("registerNovaWallet", () => {
+describe("registerInferWallet", () => {
   afterEach(() => {
     delete (window as any).inferenco;
     window.localStorage.clear();
@@ -19,20 +19,20 @@ describe("registerNovaWallet", () => {
 
   it("does not register when desktop registration is disabled and no provider exists", async () => {
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet } = await import("../src/aip62");
-    registerNovaWallet({ desktopRegistration: false });
+    const { registerInferWallet } = await import("../src/aip62");
+    registerInferWallet({ desktopRegistration: false });
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before);
   });
 
   it("registers on desktop without a provider by default", async () => {
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet, createNovaAIP62Wallet } = await import("../src/aip62");
-    const wallet = createNovaAIP62Wallet();
-    registerNovaWallet();
+    const { registerInferWallet, createInferAIP62Wallet } = await import("../src/aip62");
+    const wallet = createInferAIP62Wallet();
+    registerInferWallet();
     const after = getCedraWallets().cedraWallets.length;
-    expect(wallet.name).toBe("Nova Connect");
-    expect(wallet.url).toBe("https://inferenco.com/nova-desk");
+    expect(wallet.name).toBe("Infer Connect");
+    expect(wallet.url).toBe("https://inferenco.com/infer-desk");
     expect(after).toBe(before + 1);
   });
 
@@ -56,8 +56,8 @@ describe("registerNovaWallet", () => {
     };
 
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet } = await import("../src/aip62");
-    registerNovaWallet();
+    const { registerInferWallet } = await import("../src/aip62");
+    registerInferWallet();
     const after = getCedraWallets().cedraWallets.length;
     expect(after).toBe(before + 1);
   });
@@ -65,12 +65,12 @@ describe("registerNovaWallet", () => {
   it("registers for mobile relay flows", async () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iphone");
     const before = getCedraWallets().cedraWallets.length;
-    const { registerNovaWallet, createNovaAIP62Wallet } = await import("../src/aip62");
-    const wallet = createNovaAIP62Wallet();
-    registerNovaWallet();
+    const { registerInferWallet, createInferAIP62Wallet } = await import("../src/aip62");
+    const wallet = createInferAIP62Wallet();
+    registerInferWallet();
     const after = getCedraWallets().cedraWallets.length;
-    expect(wallet.name).toBe("Nova Connect");
-    expect(wallet.url).toBe("https://inferenco.com/nova-wallet");
+    expect(wallet.name).toBe("Infer Connect");
+    expect(wallet.url).toBe("https://inferenco.com/infer-wallet");
     expect(after).toBe(before + 1);
   });
 
@@ -102,8 +102,8 @@ describe("registerNovaWallet", () => {
       })
     };
 
-    const { createNovaAIP62Wallet } = await import("../src/aip62");
-    const wallet = createNovaAIP62Wallet();
+    const { createInferAIP62Wallet } = await import("../src/aip62");
+    const wallet = createInferAIP62Wallet();
     const response = await wallet.features["cedra:signTransaction"].signTransaction(transaction);
 
     expect(response.status).toBe("Approved");
@@ -122,8 +122,8 @@ describe("registerNovaWallet", () => {
 
   // v0.2.0-rc.8 (Phase 5 UX): cedra:onDisconnect AIP-62 feature
   it("exposes cedra:onDisconnect on the wallet features object", async () => {
-    const { createNovaAIP62Wallet } = await import("../src/aip62");
-    const wallet = createNovaAIP62Wallet();
+    const { createInferAIP62Wallet } = await import("../src/aip62");
+    const wallet = createInferAIP62Wallet();
     const features = wallet.features as unknown as Record<string, unknown>;
     expect(features["cedra:onDisconnect"]).toBeDefined();
     const feature = features["cedra:onDisconnect"] as {
