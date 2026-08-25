@@ -1,7 +1,7 @@
 {
-  "name": "@inferenco/nova-wallet-adapter",
+  "name": "@inferenco/infer-wallet-adapter",
   "version": "0.2.0-rc.16",
-  "description": "Standalone Nova wallet adapter for Cedra dapps",
+  "description": "Standalone Infer wallet adapter for Cedra dapps",
   "license": "Apache-2.0",
   "author": "TOO Spielcrypto and Singularity Shift Ltd",
   "repository": {
@@ -14,14 +14,14 @@
   },
   "keywords": [
     "cedra",
-    "nova",
+    "infer",
     "wallet",
     "adapter",
     "blockchain",
     "aip-62",
     "wallet-standard",
-    "nova-desk",
-    "nova-wallet",
+    "infer-desk",
+    "infer-wallet",
     "cryptocurrency"
   ],
   "publishConfig": {

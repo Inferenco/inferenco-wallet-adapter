@@ -10,7 +10,7 @@ import type {
   CedraSignTransactionInputV1_1,
   CedraSignTransactionOutputV1_1
 } from "@cedra-labs/wallet-standard";
-import type { NovaTransactionPayload } from "./types";
+import type { InferTransactionPayload } from "./types";
 import {
   CALLBACK_REQUEST_ID_PARAM,
   CALLBACK_STATUS_PARAM,
@@ -29,35 +29,41 @@ import {
   storeExternalSession,
   storePendingMobilePairing
 } from "./bridge";
-import { decryptJson, createKeyPair, deriveSharedSecret, encryptJson } from "./mobileCrypto";
+import {
+  decryptJson,
+  createKeyPair,
+  deriveSharedSecret,
+  deriveSharedSecretLegacy,
+  encryptJson
+} from "./mobileCrypto";
 import { watchRelaySocket } from "./mobileSocket";
 import {
   isValidTransactionHash,
-  NovaAdapterError,
-  NovaErrorCode
+  InferAdapterError,
+  InferErrorCode
 } from "./errors";
 import { deserializeAnyRawTransaction, ensureBcsToHex } from "./conversion";
 import type {
-  NovaExternalSignTransactionInput,
-  NovaExternalSession,
-  NovaMobilePairingCreateResponse,
-  NovaMobilePairingStatus,
-  NovaMobileRequestCreateResponse,
-  NovaMobileRequestStatus,
-  NovaWalletOptions
+  InferExternalSignTransactionInput,
+  InferExternalSession,
+  InferMobilePairingCreateResponse,
+  InferMobilePairingStatus,
+  InferMobileRequestCreateResponse,
+  InferMobileRequestStatus,
+  InferWalletOptions
 } from "./types";
 
 function assertBrowser(): void {
   if (typeof window === "undefined") {
-    throw new NovaAdapterError(NovaErrorCode.Unsupported, "Nova Connect mobile relay requires a browser");
+    throw new InferAdapterError(InferErrorCode.Unsupported, "Infer Connect mobile relay requires a browser");
   }
 }
 
-function getRelayBaseUrl(options: NovaWalletOptions): string {
+function getRelayBaseUrl(options: InferWalletOptions): string {
   return options.relayBaseUrl ?? DEFAULT_MOBILE_RELAY_BASE_URL;
 }
 
-function getWebsocketUrl(options: NovaWalletOptions, fallback?: string): string | undefined {
+function getWebsocketUrl(options: InferWalletOptions, fallback?: string): string | undefined {
   if (options.websocketBaseUrl) return options.websocketBaseUrl;
   if (fallback) return fallback;
   const relayBaseUrl = options.relayBaseUrl ?? DEFAULT_MOBILE_RELAY_BASE_URL;
@@ -76,14 +82,14 @@ function callbackUrlWithoutMarkers(): string {
 }
 
 function appName(): string {
-  return typeof document !== "undefined" && document.title ? document.title : "Nova Connect";
+  return typeof document !== "undefined" && document.title ? document.title : "Infer Connect";
 }
 
-function mobilePollInterval(options: NovaWalletOptions): number {
+function mobilePollInterval(options: InferWalletOptions): number {
   return options.mobilePollIntervalMs ?? DEFAULT_MOBILE_POLL_INTERVAL_MS;
 }
 
-function mobileRequestTimeout(options: NovaWalletOptions): number {
+function mobileRequestTimeout(options: InferWalletOptions): number {
   return options.mobileRequestTimeoutMs ?? DEFAULT_MOBILE_REQUEST_TIMEOUT_MS;
 }
 
@@ -101,20 +107,20 @@ function isFinalStatus(status: string | undefined): boolean {
 
 function throwForStatus(status: string, errorMessage?: string | null): never {
   if (status === "rejected") {
-    throw new NovaAdapterError(NovaErrorCode.UserRejected, errorMessage ?? "User rejected the request");
+    throw new InferAdapterError(InferErrorCode.UserRejected, errorMessage ?? "User rejected the request");
   }
   if (status === "expired" || status === "cancelled" || status === "revoked") {
-    throw new NovaAdapterError(NovaErrorCode.ConnectionTimeout, errorMessage ?? "Nova Connect request expired");
+    throw new InferAdapterError(InferErrorCode.ConnectionTimeout, errorMessage ?? "Infer Connect request expired");
   }
-  throw new NovaAdapterError(NovaErrorCode.InternalError, errorMessage ?? "Nova Connect request failed");
+  throw new InferAdapterError(InferErrorCode.InternalError, errorMessage ?? "Infer Connect request failed");
 }
 
 async function waitForPairingOutcome(
   pairingId: string,
   dappPairingToken: string,
-  options: NovaWalletOptions,
+  options: InferWalletOptions,
   websocketUrl?: string
-): Promise<NovaMobilePairingStatus> {
+): Promise<InferMobilePairingStatus> {
   const relayBaseUrl = getRelayBaseUrl(options);
   const deadline = Date.now() + mobileRequestTimeout(options);
   let socketSignal = false;
@@ -139,7 +145,7 @@ async function waitForPairingOutcome(
       storeCallbackSession();
       const marker = readCallbackMarker();
       if (socketSignal || marker?.requestId === pairingId || !websocketUrl) {
-        const status = await fetchJsonWithTimeout<NovaMobilePairingStatus>(
+        const status = await fetchJsonWithTimeout<InferMobilePairingStatus>(
           `${buildRelayUrl(relayBaseUrl, `/v1/pairings/${pairingId}`)}?dappPairingToken=${encodeURIComponent(dappPairingToken)}`,
           mobileRequestTimeout(options)
         );
@@ -156,14 +162,14 @@ async function waitForPairingOutcome(
     socket?.close();
   }
 
-  throw new NovaAdapterError(NovaErrorCode.ConnectionTimeout, "Timed out waiting for Nova Wallet approval");
+  throw new InferAdapterError(InferErrorCode.ConnectionTimeout, "Timed out waiting for Infer Wallet approval");
 }
 
 function sessionFromApprovedPairing(
-  pairing: NovaMobilePairingStatus,
+  pairing: InferMobilePairingStatus,
   relayBaseUrl: string,
   privateKey: string
-): NovaExternalSession {
+): InferExternalSession {
   if (
     pairing.status !== "approved" ||
     !pairing.encryptedResult ||
@@ -174,14 +180,33 @@ function sessionFromApprovedPairing(
     throwForStatus(pairing.status, pairing.errorMessage);
   }
 
-  const sharedSecret = deriveSharedSecret(privateKey, pairing.walletPublicKey);
-  const result = decryptJson<{
+  // v0.3.0 (rebrand): dual-derive the AEAD key. The canonical rebrand
+  // info string is `"infer-connect-relay"`. nova-service (the mobile
+  // relay backend) is still on the legacy `"nova-connect-relay"` info
+  // until its separate rebrand completes, so we try the canonical key
+  // first and fall back to the legacy key on decrypt failure. This
+  // lets dapps connect to either backend during the transition window.
+  let sharedSecret: string;
+  let result: {
     address: string;
     publicKey: string;
     network: string;
     chainId: number;
     walletName?: string;
-  }>(pairing.encryptedResult, sharedSecret);
+  };
+  try {
+    sharedSecret = deriveSharedSecret(privateKey, pairing.walletPublicKey);
+    result = decryptJson(pairing.encryptedResult, sharedSecret);
+  } catch (canonicalError) {
+    try {
+      sharedSecret = deriveSharedSecretLegacy(privateKey, pairing.walletPublicKey);
+      result = decryptJson(pairing.encryptedResult, sharedSecret);
+    } catch (legacyError) {
+      // Both fail — surface the canonical rebrand error (most likely
+      // the actual cause: token expired, wrong public key, etc).
+      throw canonicalError;
+    }
+  }
 
   return {
     transport: "mobile-relay",
@@ -199,8 +224,8 @@ function sessionFromApprovedPairing(
 }
 
 export async function resumeMobileRelaySessionFromCallback(
-  options: NovaWalletOptions = {}
-): Promise<NovaExternalSession | null> {
+  options: InferWalletOptions = {}
+): Promise<InferExternalSession | null> {
   assertBrowser();
   const marker = readCallbackMarker();
   const pendingPairing = readPendingMobilePairing();
@@ -209,7 +234,7 @@ export async function resumeMobileRelaySessionFromCallback(
     return null;
   }
 
-  const pairing = await fetchJsonWithTimeout<NovaMobilePairingStatus>(
+  const pairing = await fetchJsonWithTimeout<InferMobilePairingStatus>(
     `${buildRelayUrl(pendingPairing.relayBaseUrl, `/v1/pairings/${pendingPairing.pairingId}`)}?dappPairingToken=${encodeURIComponent(pendingPairing.dappPairingToken)}`,
     mobileRequestTimeout(options)
   );
@@ -240,10 +265,10 @@ export async function resumeMobileRelaySessionFromCallback(
 async function waitForRequestOutcome(
   requestId: string,
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction",
-  session: NovaExternalSession,
-  options: NovaWalletOptions,
+  session: InferExternalSession,
+  options: InferWalletOptions,
   websocketUrl?: string
-): Promise<NovaMobileRequestStatus> {
+): Promise<InferMobileRequestStatus> {
   const relayBaseUrl = getRelayBaseUrl(options);
   const deadline = Date.now() + mobileRequestTimeout(options);
   let socketSignal = false;
@@ -275,11 +300,17 @@ async function waitForRequestOutcome(
       storeCallbackSession();
       const marker = readCallbackMarker();
       if (socketSignal || marker?.requestId === requestId || !websocketUrl) {
-        const status = await fetchJsonWithTimeout<NovaMobileRequestStatus>(
+        const status = await fetchJsonWithTimeout<InferMobileRequestStatus>(
           buildRelayUrl(relayBaseUrl, `/v1/requests/${requestId}`),
           mobileRequestTimeout(options),
           {
             headers: {
+              // v0.3.0 (rebrand): canonical session-token header for the
+              // rebranded relay. nova-service (mobile relay backend) currently
+              // recognises the legacy header; the canonical name is the
+              // post-rebrand contract. Send BOTH during the transition; remove
+              // the legacy one in 0.4.0.
+              "x-infer-session-token": session.dappSessionToken ?? "",
               "x-nova-session-token": session.dappSessionToken ?? ""
             }
           }
@@ -289,9 +320,9 @@ async function waitForRequestOutcome(
           status.sessionId !== session.sessionId ||
           status.method !== method
         ) {
-          throw new NovaAdapterError(
-            NovaErrorCode.InternalError,
-            "Nova Connect returned a result for a different request"
+          throw new InferAdapterError(
+            InferErrorCode.InternalError,
+            "Infer Connect returned a result for a different request"
           );
         }
         if (isFinalStatus(status.status)) {
@@ -307,14 +338,14 @@ async function waitForRequestOutcome(
     socket?.close();
   }
 
-  throw new NovaAdapterError(NovaErrorCode.ConnectionTimeout, "Timed out waiting for Nova Wallet approval");
+  throw new InferAdapterError(InferErrorCode.ConnectionTimeout, "Timed out waiting for Infer Wallet approval");
 }
 
-export async function connectViaMobileRelay(options: NovaWalletOptions = {}): Promise<NovaExternalSession> {
+export async function connectViaMobileRelay(options: InferWalletOptions = {}): Promise<InferExternalSession> {
   assertBrowser();
   const relayBaseUrl = getRelayBaseUrl(options);
   const keyPair = createKeyPair();
-  const response = await fetchJsonWithTimeout<NovaMobilePairingCreateResponse>(
+  const response = await fetchJsonWithTimeout<InferMobilePairingCreateResponse>(
     buildRelayUrl(relayBaseUrl, "/v1/pairings"),
     mobileRequestTimeout(options),
     {
@@ -363,15 +394,15 @@ export async function connectViaMobileRelay(options: NovaWalletOptions = {}): Pr
 async function startRequest(
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction",
   payload: unknown,
-  session: NovaExternalSession,
-  options: NovaWalletOptions
-): Promise<NovaMobileRequestStatus> {
+  session: InferExternalSession,
+  options: InferWalletOptions
+): Promise<InferMobileRequestStatus> {
   if (!session.dappSessionToken || !session.sharedSecret) {
-    throw new NovaAdapterError(NovaErrorCode.Unauthorized, "Missing Nova Connect mobile relay session state");
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Missing Infer Connect mobile relay session state");
   }
 
   const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
-  const response = await fetchJsonWithTimeout<NovaMobileRequestCreateResponse>(
+  const response = await fetchJsonWithTimeout<InferMobileRequestCreateResponse>(
     buildRelayUrl(relayBaseUrl, "/v1/requests"),
     mobileRequestTimeout(options),
     {
@@ -405,8 +436,8 @@ async function startRequest(
 
 export async function signMessageViaMobileRelay(
   input: CedraSignMessageInput,
-  session: NovaExternalSession,
-  options: NovaWalletOptions = {}
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
 ): Promise<CedraSignMessageOutput> {
   const status = await startRequest("signMessage", input, session, options);
   if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
@@ -416,9 +447,9 @@ export async function signMessageViaMobileRelay(
 }
 
 export async function signTransactionViaMobileRelay(
-  input: CedraSignTransactionInputV1_1 | NovaExternalSignTransactionInput,
-  session: NovaExternalSession,
-  options: NovaWalletOptions = {}
+  input: CedraSignTransactionInputV1_1 | InferExternalSignTransactionInput,
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string }> {
   const status = await startRequest("signTransaction", input, session, options);
   if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
@@ -475,7 +506,7 @@ function isCleanRequestMetadata(value: unknown): boolean {
   );
 }
 
-function isCleanMobileSignAndSubmitRejection(status: NovaMobileRequestStatus): boolean {
+function isCleanMobileSignAndSubmitRejection(status: InferMobileRequestStatus): boolean {
   if (status.status !== "rejected") return false;
   const record = status as unknown as Record<string, unknown>;
   if (!Object.keys(record).every((key) => MOBILE_REJECTION_ALLOWED_KEYS.has(key))) {
@@ -502,21 +533,21 @@ function isCleanMobileSignAndSubmitRejection(status: NovaMobileRequestStatus): b
 
 export async function signAndSubmitViaMobileRelay(
   input: CedraSignAndSubmitTransactionInput | AnyMobileTransactionLike,
-  session: NovaExternalSession,
-  options: NovaWalletOptions = {}
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
 ): Promise<CedraSignAndSubmitTransactionOutput> {
   const status = await startRequest("signAndSubmitTransaction", input, session, options);
   if (isCleanMobileSignAndSubmitRejection(status)) {
-    throw new NovaAdapterError(
-      NovaErrorCode.UserRejected,
+    throw new InferAdapterError(
+      InferErrorCode.UserRejected,
       "User rejected the transaction request"
     );
   }
 
   if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
-    throw new NovaAdapterError(
-      NovaErrorCode.InternalError,
-      "Nova Connect returned an ambiguous transaction result"
+    throw new InferAdapterError(
+      InferErrorCode.InternalError,
+      "Infer Connect returned an ambiguous transaction result"
     );
   }
 
@@ -526,19 +557,19 @@ export async function signAndSubmitViaMobileRelay(
     Object.keys(result).length !== 1 ||
     !isValidTransactionHash(result.hash)
   ) {
-    throw new NovaAdapterError(
-      NovaErrorCode.InternalError,
-      "Nova Connect returned an approved transaction without a valid hash"
+    throw new InferAdapterError(
+      InferErrorCode.InternalError,
+      "Infer Connect returned an approved transaction without a valid hash"
     );
   }
   return { hash: result.hash };
 }
 
-type AnyMobileTransactionLike = NovaTransactionPayload | CedraSignAndSubmitTransactionInput;
+type AnyMobileTransactionLike = InferTransactionPayload | CedraSignAndSubmitTransactionInput;
 
 export async function revokeMobileRelaySession(
-  session: NovaExternalSession,
-  options: NovaWalletOptions = {}
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
 ): Promise<void> {
   const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
   if (!session.dappSessionToken) return;
@@ -548,6 +579,11 @@ export async function revokeMobileRelaySession(
     {
       method: "DELETE",
       headers: {
+        // v0.3.0 (rebrand): dual-write both the canonical
+        // `x-infer-session-token` and the legacy `x-nova-session-token` header
+        // during the transition window (see also `pollMobileRequestStatus`
+        // above). Remove the legacy one in 0.4.0.
+        "x-infer-session-token": session.dappSessionToken,
         "x-nova-session-token": session.dappSessionToken
       }
     }

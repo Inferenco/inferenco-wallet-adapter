@@ -20,10 +20,10 @@ export {
   readBridgeToken
 } from "./bridge/index-public.js";
 export * from "./conversion";
-export * from "./NovaClient";
-export * from "./NovaWallet";
+export * from "./InferClient";
+export * from "./InferWallet";
 export * from "./aip62";
-export { isHostedInNovaDesk } from "./hosted";
+export { isHostedInInferDesk } from "./hosted";
 export * from "./mobileCrypto";
 export * from "./mobileRelay";
 export * from "./mobileSocket";

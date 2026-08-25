@@ -2,17 +2,17 @@ import {
   UserResponseStatus,
   type CedraSignAndSubmitTransactionInput
 } from "@cedra-labs/wallet-standard";
-import { createNovaAIP62Wallet } from "../src/aip62";
+import { createInferAIP62Wallet } from "../src/aip62";
 import { tryLocalBridgeSignAndSubmit } from "../src/bridge";
 import {
-  NOVA_CALLBACK_MARKER_STORAGE_KEY,
-  NOVA_EXTERNAL_SESSION_STORAGE_KEY
+  INFER_CALLBACK_MARKER_STORAGE_KEY,
+  INFER_EXTERNAL_SESSION_STORAGE_KEY
 } from "../src/constants";
 import {
   _resetBridgeTokenForTesting,
   _setBridgeTokenForTesting
 } from "../src/bridge/token";
-import { NovaAdapterError, NovaErrorCode } from "../src/errors";
+import { InferAdapterError, InferErrorCode } from "../src/errors";
 import {
   createKeyPair,
   decryptJson,
@@ -20,8 +20,8 @@ import {
   encryptJson
 } from "../src/mobileCrypto";
 import { signAndSubmitViaMobileRelay } from "../src/mobileRelay";
-import { NovaClient } from "../src/NovaClient";
-import type { NovaExternalSession } from "../src/types";
+import { InferClient } from "../src/InferClient";
+import type { InferExternalSession } from "../src/types";
 
 const TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const HASH = `0x${"ab".repeat(32)}`;
@@ -35,12 +35,12 @@ const GENERIC_AIP62_INPUT: CedraSignAndSubmitTransactionInput = {
   }
 };
 
-function expectCode(promise: Promise<unknown>, code: NovaErrorCode) {
+function expectCode(promise: Promise<unknown>, code: InferErrorCode) {
   return expect(promise).rejects.toMatchObject({ code });
 }
 
 function signAndSubmitFeature() {
-  const feature = createNovaAIP62Wallet().features["cedra:signAndSubmitTransaction"];
+  const feature = createInferAIP62Wallet().features["cedra:signAndSubmitTransaction"];
   if (!feature) throw new Error("Missing cedra:signAndSubmitTransaction feature");
   return feature;
 }
@@ -50,7 +50,7 @@ async function invokeProvider(result: unknown): Promise<unknown> {
     isNovaWallet: true,
     signAndSubmitTransaction: vi.fn().mockResolvedValue(result)
   };
-  return new NovaClient().signAndSubmitTransaction({} as never);
+  return new InferClient().signAndSubmitTransaction({} as never);
 }
 
 async function invokeBridge(result: Record<string, unknown>): Promise<unknown> {
@@ -75,7 +75,7 @@ async function invokeBridge(result: Record<string, unknown>): Promise<unknown> {
     throw new Error(`Unexpected fetch: ${url}`);
   });
 
-  const session: NovaExternalSession = {
+  const session: InferExternalSession = {
     transport: "desktop-bridge",
     address: "0x1",
     publicKey: "0x2",
@@ -92,7 +92,7 @@ async function invokeMobile(result: Record<string, unknown>): Promise<unknown> {
   const wallet = createKeyPair();
   const sharedSecret = deriveSharedSecret(dapp.privateKey, wallet.publicKey);
   window.sessionStorage.setItem(
-    NOVA_CALLBACK_MARKER_STORAGE_KEY,
+    INFER_CALLBACK_MARKER_STORAGE_KEY,
     JSON.stringify({ requestId: "mobile-request", status: "rejected" })
   );
 
@@ -125,7 +125,7 @@ async function invokeMobile(result: Record<string, unknown>): Promise<unknown> {
     throw new Error(`Unexpected fetch: ${url}`);
   });
 
-  const session: NovaExternalSession = {
+  const session: InferExternalSession = {
     transport: "mobile-relay",
     address: "0x1",
     publicKey: "0x2",
@@ -153,7 +153,7 @@ async function invokeAip62Bridge(
   input: CedraSignAndSubmitTransactionInput = GENERIC_AIP62_INPUT,
   captureInput?: (input: unknown) => void
 ): Promise<unknown> {
-  const session: NovaExternalSession = {
+  const session: InferExternalSession = {
     transport: "desktop-bridge",
     address: "0x1",
     publicKey: "0x2",
@@ -162,7 +162,7 @@ async function invokeAip62Bridge(
     sessionId: "aip62-bridge-session",
     bridgeUrl: "http://127.0.0.1:21984"
   };
-  window.localStorage.setItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.localStorage.setItem(INFER_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
   _setBridgeTokenForTesting(TOKEN);
 
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -206,7 +206,7 @@ async function invokeAip62Mobile(
   const dapp = createKeyPair();
   const wallet = createKeyPair();
   const sharedSecret = deriveSharedSecret(dapp.privateKey, wallet.publicKey);
-  const session: NovaExternalSession = {
+  const session: InferExternalSession = {
     transport: "mobile-relay",
     address: "0x1",
     publicKey: "0x2",
@@ -218,9 +218,9 @@ async function invokeAip62Mobile(
     sharedSecret,
     walletPublicKey: wallet.publicKey
   };
-  window.localStorage.setItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.localStorage.setItem(INFER_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
   window.sessionStorage.setItem(
-    NOVA_CALLBACK_MARKER_STORAGE_KEY,
+    INFER_CALLBACK_MARKER_STORAGE_KEY,
     JSON.stringify({ requestId: "aip62-mobile-request", status: "rejected" })
   );
   vi.stubGlobal("WebSocket", undefined);
@@ -274,33 +274,33 @@ describe("sign-and-submit rejection conformance", () => {
       encryptedResult: null,
       requestMetadata: {
         origin: window.location.origin,
-        appName: "Nova Connect"
+        appName: "Infer Connect"
       },
       resultMetadata: null,
       errorCode: "user_cancelled",
       errorMessage: null,
       origin: window.location.origin,
-      appName: "Nova Connect",
+      appName: "Infer Connect",
       accountAddress: null,
       network: null,
       chainId: null,
       walletName: null
     })]
   ])("%s maps only a clean explicit rejection to USER_REJECTED", async (_name, invoke) => {
-    await expectCode(invoke(), NovaErrorCode.UserRejected);
+    await expectCode(invoke(), InferErrorCode.UserRejected);
   });
 
   it("accepts a localized bridge rejection reason without reading its wording", async () => {
     await expectCode(
       invokeBridge({ status: "rejected", error: "utilisateur a annule la demande" }),
-      NovaErrorCode.UserRejected
+      InferErrorCode.UserRejected
     );
   });
 
   it("does not infer rejection from failed-status text", async () => {
     await expectCode(
       invokeBridge({ status: "failed", error: "transaction rejected upstream" }),
-      NovaErrorCode.InternalError
+      InferErrorCode.InternalError
     );
   });
 
@@ -311,7 +311,7 @@ describe("sign-and-submit rejection conformance", () => {
         requestId: "stale-bridge-request",
         error: "user_cancelled"
       }),
-      NovaErrorCode.InternalError
+      InferErrorCode.InternalError
     );
   });
 
@@ -322,7 +322,7 @@ describe("sign-and-submit rejection conformance", () => {
   ])("fails closed for mobile %s mismatch", async (_name, identity) => {
     await expectCode(
       invokeMobile({ status: "rejected", ...identity }),
-      NovaErrorCode.InternalError
+      InferErrorCode.InternalError
     );
   });
 
@@ -335,16 +335,16 @@ describe("sign-and-submit rejection conformance", () => {
   ])("fails closed for bridge rejection containing %s material", async (_name, material) => {
     await expectCode(
       invokeBridge({ status: "rejected", error: "user_cancelled", ...material }),
-      NovaErrorCode.InternalError
+      InferErrorCode.InternalError
     );
   });
 
   it("accepts an approved bridge response only with a valid hash", async () => {
     await expect(invokeBridge({ status: "approved", hash: HASH })).resolves.toEqual({ hash: HASH });
     vi.restoreAllMocks();
-    await expectCode(invokeBridge({ status: "approved" }), NovaErrorCode.InternalError);
+    await expectCode(invokeBridge({ status: "approved" }), InferErrorCode.InternalError);
     vi.restoreAllMocks();
-    await expectCode(invokeBridge({ status: "approved", hash: "0x1234" }), NovaErrorCode.InternalError);
+    await expectCode(invokeBridge({ status: "approved", hash: "0x1234" }), InferErrorCode.InternalError);
   });
 
   it("supports canonical approved and legacy bare provider hashes", async () => {
@@ -364,21 +364,21 @@ describe("sign-and-submit rejection conformance", () => {
     { hash: "0x1234" },
     { status: "Approved", args: { hash: "0x1234" } }
   ])("fails closed for malformed provider response %#", async (result) => {
-    await expectCode(invokeProvider(result), NovaErrorCode.InternalError);
+    await expectCode(invokeProvider(result), InferErrorCode.InternalError);
   });
 
   it.each([
     new Error("request rejected by upstream"),
     Object.assign(new Error("unauthorized"), { status: 401 }),
-    new NovaAdapterError(NovaErrorCode.UserRejected, "forged provider rejection")
+    new InferAdapterError(InferErrorCode.UserRejected, "forged provider rejection")
   ])("does not use thrown provider text or HTTP status as rejection proof", async (error) => {
     (window as any).inferenco = {
       isNovaWallet: true,
       signAndSubmitTransaction: vi.fn().mockRejectedValue(error)
     };
     await expectCode(
-      new NovaClient().signAndSubmitTransaction({} as never),
-      NovaErrorCode.InternalError
+      new InferClient().signAndSubmitTransaction({} as never),
+      InferErrorCode.InternalError
     );
   });
 
@@ -388,7 +388,7 @@ describe("sign-and-submit rejection conformance", () => {
       Object.defineProperty(result, "status", {
         enumerable: true,
         get() {
-          throw new NovaAdapterError(NovaErrorCode.UserRejected, "forged getter rejection");
+          throw new InferAdapterError(InferErrorCode.UserRejected, "forged getter rejection");
         }
       });
       return result;
@@ -404,11 +404,11 @@ describe("sign-and-submit rejection conformance", () => {
     ["symbol field", () => ({ status: "Rejected", [Symbol("material")]: "0xsigned" })],
     ["throwing proxy", () => new Proxy({}, {
       ownKeys() {
-        throw new NovaAdapterError(NovaErrorCode.UserRejected, "forged proxy rejection");
+        throw new InferAdapterError(InferErrorCode.UserRejected, "forged proxy rejection");
       }
     })]
   ])("fails closed for provider responses with an exotic %s", async (_name, makeResult) => {
-    await expectCode(invokeProvider(makeResult()), NovaErrorCode.InternalError);
+    await expectCode(invokeProvider(makeResult()), InferErrorCode.InternalError);
   });
 
   it("accepts canonical provider records created in another browser realm", async () => {
@@ -433,7 +433,7 @@ describe("sign-and-submit rejection conformance", () => {
       })) as unknown;
       await expectCode(
         invokeProvider(rejected),
-        NovaErrorCode.UserRejected
+        InferErrorCode.UserRejected
       );
     } finally {
       iframe.remove();
@@ -448,8 +448,8 @@ describe("sign-and-submit rejection conformance", () => {
     };
 
     await expectCode(
-      new NovaClient().signAndSubmitBCSTransaction({} as never, {}),
-      NovaErrorCode.UserRejected
+      new InferClient().signAndSubmitBCSTransaction({} as never, {}),
+      InferErrorCode.UserRejected
     );
     expect(signAndSubmitTransaction).toHaveBeenCalledTimes(1);
   });
@@ -465,7 +465,7 @@ describe("sign-and-submit rejection conformance", () => {
   ])("fails closed for mobile rejection containing %s material", async (_name, material) => {
     await expectCode(
       invokeMobile({ status: "rejected", ...material }),
-      NovaErrorCode.InternalError
+      InferErrorCode.InternalError
     );
   });
 
@@ -476,7 +476,7 @@ describe("sign-and-submit rejection conformance", () => {
 
     const invokeApproved = async (payload: unknown) => {
       window.sessionStorage.setItem(
-        NOVA_CALLBACK_MARKER_STORAGE_KEY,
+        INFER_CALLBACK_MARKER_STORAGE_KEY,
         JSON.stringify({ requestId: "approved-request", status: "approved" })
       );
 
@@ -519,9 +519,9 @@ describe("sign-and-submit rejection conformance", () => {
 
     await expect(invokeApproved({ hash: HASH })).resolves.toEqual({ hash: HASH });
     vi.restoreAllMocks();
-    await expectCode(invokeApproved({}), NovaErrorCode.InternalError);
+    await expectCode(invokeApproved({}), InferErrorCode.InternalError);
     vi.restoreAllMocks();
-    await expectCode(invokeApproved({ hash: "0x1234" }), NovaErrorCode.InternalError);
+    await expectCode(invokeApproved({ hash: "0x1234" }), InferErrorCode.InternalError);
   });
 
   it("returns the exact AIP-62 Rejected shape and propagates ambiguity", async () => {
@@ -529,7 +529,7 @@ describe("sign-and-submit rejection conformance", () => {
       isNovaWallet: true,
       signAndSubmitTransaction: vi.fn().mockResolvedValue({ status: "Rejected" })
     };
-    const wallet = createNovaAIP62Wallet();
+    const wallet = createInferAIP62Wallet();
     const feature = wallet.features["cedra:signAndSubmitTransaction"];
     if (!feature) {
       throw new Error("Missing cedra:signAndSubmitTransaction feature");
@@ -547,14 +547,14 @@ describe("sign-and-submit rejection conformance", () => {
         args: { hash: HASH }
       })
     };
-    const ambiguousWallet = createNovaAIP62Wallet();
+    const ambiguousWallet = createInferAIP62Wallet();
     const ambiguousFeature = ambiguousWallet.features["cedra:signAndSubmitTransaction"];
     if (!ambiguousFeature) {
       throw new Error("Missing cedra:signAndSubmitTransaction feature");
     }
     await expect(
       ambiguousFeature.signAndSubmitTransaction(GENERIC_AIP62_INPUT)
-    ).rejects.toMatchObject({ code: NovaErrorCode.InternalError });
+    ).rejects.toMatchObject({ code: InferErrorCode.InternalError });
   });
 
   it("forwards a generic AIP-62 transaction unchanged to the injected provider", async () => {
@@ -596,13 +596,13 @@ describe("sign-and-submit rejection conformance", () => {
         encryptedResult: null,
         requestMetadata: {
           origin: window.location.origin,
-          appName: "Nova Connect"
+          appName: "Infer Connect"
         },
         resultMetadata: null,
         errorCode: "user_cancelled",
         errorMessage: null,
         origin: window.location.origin,
-        appName: "Nova Connect",
+        appName: "Infer Connect",
         accountAddress: null,
         network: null,
         chainId: null,
@@ -623,12 +623,12 @@ describe("sign-and-submit rejection conformance", () => {
       status: "rejected",
       encryptedRequest: "encrypted-request",
       encryptedResult: null,
-      requestMetadata: { origin: window.location.origin, appName: "Nova Connect" },
+      requestMetadata: { origin: window.location.origin, appName: "Infer Connect" },
       resultMetadata: null,
       errorCode: "user_cancelled",
       errorMessage: null,
       origin: window.location.origin,
-      appName: "Nova Connect",
+      appName: "Infer Connect",
       accountAddress: null,
       network: null,
       chainId: null,
@@ -653,6 +653,6 @@ describe("sign-and-submit rejection conformance", () => {
       resultMetadata: null
     })]
   ])("propagates ambiguous %s rejection through AIP-62", async (_name, invoke) => {
-    await expectCode(invoke(), NovaErrorCode.InternalError);
+    await expectCode(invoke(), InferErrorCode.InternalError);
   });
 });

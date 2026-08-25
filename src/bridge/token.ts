@@ -5,9 +5,13 @@
  * The token is regenerated at every wallet startup and is delivered to the
  * dapp's JavaScript via two channels:
  *
- *   1. `window.postMessage({ type: "nova:bridge-token", token: "<64-hex>" })`
+ *   1. `window.postMessage({ type: "infer:bridge-token", token: "<64-hex>" })`
  *      — fires once at provider script injection when the dapp is loaded
- *      inside the wallet's embedded browser.
+ *      inside the wallet's embedded browser. The rebranded Infer Desk (v0.6.0+)
+ *      is the canonical producer. The legacy type `"nova:bridge-token"` is also
+ *      accepted during the transition window so older Infer Desk (pre-rebrand)
+ *      builds remain compatible; the legacy listener arm is slated for removal
+ *      in 0.4.0.
  *
  *   2. `bridgeToken` field in the `GET /<token>/connect` response body —
  *      the only channel available to an external browser (the wallet's
@@ -37,7 +41,10 @@ export class MissingBridgeTokenError extends Error {
 }
 
 const RESOLVE_TIMEOUT_MS = 2000;
-const POSTMESSAGE_TYPE = "nova:bridge-token";
+// v0.6.0+ (rebrand) — canonical postMessage type from the rebranded Infer Desk.
+const POSTMESSAGE_TYPE = "infer:bridge-token";
+// Legacy alias — accepted during the transition window (remove in 0.4.0).
+const LEGACY_POSTMESSAGE_TYPE = "nova:bridge-token";
 
 interface BridgeTokenReady {
   resolve(value: string): void;
@@ -80,7 +87,11 @@ function installPostMessageListener(ready: BridgeTokenReady): void {
   const onMessage = (event: MessageEvent) => {
     const data = event.data;
     if (!data || typeof data !== "object") return;
-    if ((data as { type?: unknown }).type !== POSTMESSAGE_TYPE) return;
+    // Dual-listen: accept both the canonical rebrand postMessage type
+    // (`infer:bridge-token`) and the legacy type (`nova:bridge-token`).
+    // Remove the legacy arm in 0.4.0.
+    const type = (data as { type?: unknown }).type;
+    if (type !== POSTMESSAGE_TYPE && type !== LEGACY_POSTMESSAGE_TYPE) return;
     const token = (data as { token?: unknown }).token;
     if (typeof token !== "string" || !BRIDGE_TOKEN_PATH_REGEX.test(token)) return;
     resolvedToken = token;
@@ -157,10 +168,11 @@ export function readBridgeToken(): string {
  * Order of resolution:
  *   1. Cached token from a previous call.
  *   2. `window.location.pathname` first segment — used when the dapp
- *      is loaded inside Nova Desk's embedded browser.
- *   3. `window.postMessage({type:"nova:bridge-token", token})` — the
+ *      is loaded inside Infer Desk's embedded browser.
+ *   3. `window.postMessage({type:"infer:bridge-token", token})` — the
  *      wallet's embedded provider script posts this once at
- *      script-injection time.
+ *      script-injection time. The legacy type `"nova:bridge-token"` is
+ *      also accepted during the transition window.
  *
  * There is intentionally **no** HTTP discovery fallback. The wallet's
  * HTTP bridge is protected by the per-session URL token (F-03); the

@@ -12,67 +12,67 @@ import type {
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
-  NOVA_CONNECT_NAME,
-  NOVA_DESK_NAME,
+  INFER_CONNECT_NAME,
+  INFER_DESK_NAME,
   DEFAULT_DESKTOP_WEBSITE_URL,
   DEFAULT_MOBILE_WEBSITE_URL,
-  NOVA_WALLET_ICON,
-  NOVA_WALLET_NAME
+  INFER_WALLET_ICON,
+  INFER_WALLET_NAME
 } from "./constants";
 import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
 import { buildDeeplinkUrl } from "./deeplink";
 import { detectProvider } from "./provider";
-import { NovaClient } from "./NovaClient";
+import { InferClient } from "./InferClient";
 import {
-  NovaAccountKeys,
-  NovaNetworkInfo,
-  NovaWalletAdapterLike,
-  NovaWalletName,
-  NovaWalletReadyState,
-  NovaSignMessageResponse,
-  NovaSignedTransactionWithAuthenticator,
-  NovaTransactionPayload,
-  NovaWalletOptions
+  InferAccountKeys,
+  InferNetworkInfo,
+  InferWalletAdapterLike,
+  InferWalletName,
+  InferWalletReadyState,
+  InferSignMessageResponse,
+  InferSignedTransactionWithAuthenticator,
+  InferTransactionPayload,
+  InferWalletOptions
 } from "./types";
 
-type NovaWalletEvents = {
+type InferWalletEvents = {
   accountChange: [string];
-  networkChange: [NovaNetworkInfo];
+  networkChange: [InferNetworkInfo];
   /**
-   * v0.2.0-rc.8 (Phase 5 UX): mirror of `NovaClient`'s
-   * `"disconnect"` event. Fires when Nova Connect revokes the
+   * v0.2.0-rc.8 (Phase 5 UX): mirror of `InferClient`'s
+   * `"disconnect"` event. Fires when Infer Connect revokes the
    * dapp's session (either from the wallet's own UI, or via the
    * opt-in liveness heartbeat), or when the dapp itself calls
    * `disconnect()`. Subscribers should drop cached state and
-   * surface a "Reconnect to Nova Connect" affordance.
+   * surface a "Reconnect to Infer Connect" affordance.
    */
   disconnect: [];
 };
 
-export class NovaWallet
-  extends EventEmitter<NovaWalletEvents>
-  implements NovaWalletAdapterLike
+export class InferWallet
+  extends EventEmitter<InferWalletEvents>
+  implements InferWalletAdapterLike
 {
-  readonly name = NOVA_CONNECT_NAME as NovaWalletName<"Nova Connect">;
+  readonly name = INFER_CONNECT_NAME as InferWalletName<"Infer Connect">;
   readonly url: string;
-  readonly icon = NOVA_WALLET_ICON;
+  readonly icon = INFER_WALLET_ICON;
 
-  private readonly client: NovaClient;
+  private readonly client: InferClient;
   private cachedAccount: AccountInfo | null = null;
   private cachedNetwork: NetworkInfo | null = null;
   private isConnecting = false;
 
-  constructor(private readonly options: NovaWalletOptions = {}) {
+  constructor(private readonly options: InferWalletOptions = {}) {
     super();
     this.url = options.websiteUrl ?? (isMobileBrowser() ? DEFAULT_MOBILE_WEBSITE_URL : DEFAULT_DESKTOP_WEBSITE_URL);
-    this.client = new NovaClient(options);
+    this.client = new InferClient(options);
   }
 
-  get readyState(): NovaWalletReadyState {
-    if (typeof window === "undefined") return NovaWalletReadyState.Unsupported;
+  get readyState(): InferWalletReadyState {
+    if (typeof window === "undefined") return InferWalletReadyState.Unsupported;
     return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser()
-      ? NovaWalletReadyState.Installed
-      : NovaWalletReadyState.NotDetected;
+      ? InferWalletReadyState.Installed
+      : InferWalletReadyState.NotDetected;
   }
 
   get connecting(): boolean {
@@ -83,7 +83,7 @@ export class NovaWallet
     return !!this.cachedAccount;
   }
 
-  get publicAccount(): NovaAccountKeys {
+  get publicAccount(): InferAccountKeys {
     return {
       publicKey: this.cachedAccount?.publicKey.toString() ?? null,
       address: this.cachedAccount?.address.toString() ?? null,
@@ -91,7 +91,7 @@ export class NovaWallet
     };
   }
 
-  get network(): NovaNetworkInfo {
+  get network(): InferNetworkInfo {
     return {
       api: this.cachedNetwork?.url,
       chainId: this.cachedNetwork?.chainId?.toString(),
@@ -124,27 +124,27 @@ export class NovaWallet
   }
 
   async signAndSubmitTransaction(
-    transaction: NovaTransactionPayload,
+    transaction: InferTransactionPayload,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     return this.client.signAndSubmitTransaction(transaction, options);
   }
 
   async signAndSubmitBCSTransaction(
-    transaction: NovaTransactionPayload,
+    transaction: InferTransactionPayload,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     return this.client.signAndSubmitBCSTransaction(transaction, options);
   }
 
   async signTransaction(
-    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
+    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
     options?: unknown
-  ): Promise<Uint8Array | NovaSignedTransactionWithAuthenticator> {
+  ): Promise<Uint8Array | InferSignedTransactionWithAuthenticator> {
     const result = await this.client.signTransaction(transaction, options);
     if (result instanceof Uint8Array) return result;
     if (result && typeof result === "object" && "authenticator" in result) {
-      return result as NovaSignedTransactionWithAuthenticator;
+      return result as InferSignedTransactionWithAuthenticator;
     }
     return {
       authenticator: result as AccountAuthenticator
@@ -153,7 +153,7 @@ export class NovaWallet
 
   async signMessage(
     message: CedraSignMessageInput
-  ): Promise<CedraSignMessageOutput | NovaSignMessageResponse> {
+  ): Promise<CedraSignMessageOutput | InferSignMessageResponse> {
     return this.client.signMessage(message);
   }
 
@@ -187,10 +187,10 @@ export class NovaWallet
    * (b) the dapp itself called `disconnect()`,
    * (c) a peer tab cleared `inferenco:nova-session` in localStorage,
    * (d) the embedded provider was pushed a disconnect via
-   *     `__novaDeskHostUpdate` (Nova Desk wallet's webview).
+   *     `__inferDeskHostUpdate` (Infer Desk wallet's webview).
    *
    * Subscribers should drop cached account/network state, surface
-   * a "Reconnect to Nova Connect" affordance, and avoid making
+   * a "Reconnect to Infer Connect" affordance, and avoid making
    * signing requests until a fresh `connect()` resolves.
    */
   async onDisconnect(callback: () => void): Promise<void> {

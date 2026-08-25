@@ -124,7 +124,7 @@ describe("bridge/url", () => {
     // the function falls back to MissingBridgeTokenError cleanly.)
     _resetBridgeTokenForTesting();
     expect(() => bridgePathWithToken("/connect")).toThrow(
-      /Nova Desk bridge token not available/
+      /Infer Desk bridge token not available/
     );
   });
 

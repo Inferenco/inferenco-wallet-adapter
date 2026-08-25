@@ -1,7 +1,7 @@
 /**
  * Browser environment shims for running the adapter in vitest node mode.
  *
- * The adapter (`src/bridge.ts`, `src/NovaClient.ts`, etc.) gates on
+ * The adapter (`src/bridge.ts`, `src/InferClient.ts`, etc.) gates on
  * `typeof window !== "undefined"` and reaches into window-scoped
  * globals: `window.localStorage`, `window.location`, `window.setTimeout`,
  * `window.dispatchEvent(new CustomEvent(...))`, `BroadcastChannel`,

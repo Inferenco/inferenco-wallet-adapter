@@ -1,20 +1,20 @@
 # Configuration
 
-All configuration is passed through the `NovaWalletOptions` interface. Every field is optional &mdash; the adapter works out of the box with sensible defaults.
+All configuration is passed through the `InferWalletOptions` interface. Every field is optional &mdash; the adapter works out of the box with sensible defaults.
 
 ## Usage
 
 ```typescript
-import { NovaWallet } from "@inferenco/nova-wallet-adapter";
+import { InferWallet } from "@inferenco/infer-wallet-adapter";
 
-const wallet = new NovaWallet({
+const wallet = new InferWallet({
   bridgeBaseUrl: "http://127.0.0.1:21984",
   detectAliases: false,
   bridgePollTimeoutMs: 60000,
 });
 ```
 
-The same options are accepted by `NovaClient`, `registerNovaWallet`, and `createNovaAIP62Wallet`.
+The same options are accepted by `InferClient`, `registerInferWallet`, and `createInferAIP62Wallet`.
 
 ---
 
@@ -30,7 +30,7 @@ The same options are accepted by `NovaClient`, `registerNovaWallet`, and `create
 Base URL for deeplink generation. The adapter appends the current page URL as the callback parameter.
 
 ```typescript
-new NovaWallet({
+new InferWallet({
   deeplinkBaseUrl: "myapp://connect?callback=",
 });
 ```
@@ -45,7 +45,7 @@ new NovaWallet({
 URI scheme used for deeplinks. Used when constructing deeplink URLs for mobile relay pairing.
 
 ```typescript
-new NovaWallet({
+new InferWallet({
   deeplinkScheme: "inferenco",
 });
 ```
@@ -55,7 +55,7 @@ new NovaWallet({
 | | |
 |-|-|
 | **Type** | `string` |
-| **Default** | Desktop: `"https://inferenco.com/nova-desk"`; Mobile: `"https://inferenco.com/nova-wallet"` |
+| **Default** | Desktop: `"https://inferenco.com/infer-desk"`; Mobile: `"https://inferenco.com/infer-wallet"` |
 
 The URL exposed as the wallet's website in the adapter metadata.
 
@@ -70,12 +70,12 @@ The URL exposed as the wallet's website in the adapter metadata.
 | **Type** | `boolean` |
 | **Default** | `false` |
 
-When `true`, `registerNovaWallet()` registers the wallet even if no injected provider is detected. This enables deeplink-based connection flows for dApps that want Nova to appear in wallet selection UIs without requiring the extension.
+When `true`, `registerInferWallet()` registers the wallet even if no injected provider is detected. This enables deeplink-based connection flows for dApps that want Infer Connect to appear in wallet selection UIs without requiring the extension.
 
 ```typescript
-import { registerNovaWallet } from "@inferenco/nova-wallet-adapter/aip62";
+import { registerInferWallet } from "@inferenco/infer-wallet-adapter/aip62";
 
-registerNovaWallet({
+registerInferWallet({
   forceRegistration: true,
 });
 ```
@@ -98,12 +98,12 @@ Set to `false` to only register when a provider is explicitly detected.
 | **Type** | `boolean` |
 | **Default** | `true` |
 
-When `true`, the adapter checks `window.cedra` and `window.aptos` for Nova-branded providers (those with `isNovaWallet === true`). When `false`, only `window.inferenco` and `window.nova` are checked.
+When `true`, the adapter checks `window.cedra` and `window.aptos` for Infer-branded providers (those with `isInferWallet === true`, or the legacy `isNovaWallet === true` for pre-rebrand wallets). When `false`, only `window.inferenco`, `window.infer`, and `window.nova` are checked.
 
 Disable this if your dApp has its own handling for `window.cedra` / `window.aptos` and you want to avoid conflicts.
 
 ```typescript
-new NovaWallet({
+new InferWallet({
   detectAliases: false, // Only check window.inferenco and window.nova
 });
 ```
@@ -124,7 +124,7 @@ Force the adapter to use a specific network regardless of what the provider repo
 ```typescript
 import { Network } from "@cedra-labs/ts-sdk";
 
-new NovaWallet({
+new InferWallet({
   networkOverride: Network.TESTNET,
 });
 ```
@@ -139,16 +139,16 @@ new NovaWallet({
 Custom fullnode URL for SDK operations like transaction building and submission. When set, the adapter uses this URL instead of the SDK's default for the detected network.
 
 ```typescript
-new NovaWallet({
+new InferWallet({
   fullnodeUrl: "https://fullnode.testnet.cedralabs.com/v1",
 });
 ```
 
 ---
 
-## Nova Desk (Desktop Bridge)
+## Infer Desk (Desktop Bridge)
 
-These options configure the local HTTP bridge to the Nova Desk desktop application.
+These options configure the local HTTP bridge to the Infer Desk desktop application.
 
 ### `bridgeBaseUrl`
 
@@ -157,10 +157,10 @@ These options configure the local HTTP bridge to the Nova Desk desktop applicati
 | **Type** | `string` |
 | **Default** | `"http://127.0.0.1:21984"` |
 
-Base URL for the desktop bridge. Change this if Nova Desk is configured to run on a different port.
+Base URL for the desktop bridge. Change this if Infer Desk is configured to run on a different port.
 
 ```typescript
-new NovaWallet({
+new InferWallet({
   bridgeBaseUrl: "http://127.0.0.1:9999",
 });
 ```
@@ -172,9 +172,9 @@ new NovaWallet({
 | **Type** | `number` |
 | **Default** | `1200` |
 
-Timeout in milliseconds for the initial bridge connection probe. If the bridge doesn't respond within this time, the adapter considers Nova Desk as not running and falls back to the next transport.
+Timeout in milliseconds for the initial bridge connection probe. If the bridge doesn't respond within this time, the adapter considers Infer Desk as not running and falls back to the next transport.
 
-Keep this short to avoid blocking the user when Nova Desk is not installed.
+Keep this short to avoid blocking the user when Infer Desk is not installed.
 
 ### `bridgePollIntervalMs`
 
@@ -192,10 +192,10 @@ Interval in milliseconds between poll requests to the bridge while waiting for u
 | **Type** | `number` |
 | **Default** | `120000` (2 minutes) |
 
-Maximum time in milliseconds to wait for the user to approve or reject a request in Nova Desk. After this timeout, the adapter throws a `ConnectionTimeout` error.
+Maximum time in milliseconds to wait for the user to approve or reject a request in Infer Desk. After this timeout, the adapter throws a `ConnectionTimeout` error.
 
 ```typescript
-new NovaWallet({
+new InferWallet({
   bridgePollTimeoutMs: 60000, // 1 minute timeout
 });
 ```
@@ -209,10 +209,10 @@ new NovaWallet({
 
 When set to a positive number of milliseconds, the adapter periodically
 validates the current external session by issuing `GET /<token>/session/<id>`
-against the Nova Desk bridge (the same endpoint that
+against the Infer Desk bridge (the same endpoint that
 `validateExternalSession` uses during the next user-initiated
 `connect()`/`getAccount()`). On a 403/404 (wallet revoked the session)
-the new `"disconnect"` event fires on `NovaClient`, `NovaWallet`, and
+the new `"disconnect"` event fires on `InferClient`, `InferWallet`, and
 the AIP-62 `cedra:onDisconnect` feature.
 
 Recommended values: `15_000` – `60_000`. Cost: 1 HTTP call per dapp
@@ -221,16 +221,16 @@ keep the existing lazy fallback (detection on next user-initiated
 `connect()` / `getAccount()`).
 
 ```typescript
-new NovaWallet({
+new InferWallet({
   sessionLivenessIntervalMs: 30_000, // poll every 30 s
 });
 ```
 
 ---
 
-## Nova Wallet (Mobile Relay)
+## Infer Wallet (Mobile Relay)
 
-These options configure the nova-service relay used for connecting to the Nova Wallet mobile app.
+These options configure the nova-service relay used for connecting to the Infer Wallet mobile app.
 
 ### `relayBaseUrl`
 
@@ -242,7 +242,7 @@ These options configure the nova-service relay used for connecting to the Nova W
 Base URL for the nova-service relay REST API. Override for self-hosted relay deployments or local development.
 
 ```typescript
-new NovaWallet({
+new InferWallet({
   relayBaseUrl: "https://relay.your-domain.com",
 });
 ```
@@ -257,7 +257,7 @@ new NovaWallet({
 WebSocket URL for real-time relay notifications. Must match the relay deployment.
 
 ```typescript
-new NovaWallet({
+new InferWallet({
   websocketBaseUrl: "wss://relay.your-domain.com/v1/ws",
 });
 ```
@@ -269,7 +269,7 @@ new NovaWallet({
 | **Type** | `number` |
 | **Default** | `1000` (1 second) |
 
-Interval in milliseconds between poll requests to nova-service while waiting for the user to approve in Nova Wallet. Used when WebSocket notifications are unavailable or time out.
+Interval in milliseconds between poll requests to nova-service while waiting for the user to approve in Infer Wallet. Used when WebSocket notifications are unavailable or time out.
 
 ### `mobileRequestTimeoutMs`
 
@@ -278,7 +278,7 @@ Interval in milliseconds between poll requests to nova-service while waiting for
 | **Type** | `number` |
 | **Default** | `180000` (3 minutes) |
 
-Maximum time in milliseconds to wait for the user to approve or reject a request in Nova Wallet. Longer than the Nova Desk timeout to account for app switching delays on mobile.
+Maximum time in milliseconds to wait for the user to approve or reject a request in Infer Wallet. Longer than the Infer Desk timeout to account for app switching delays on mobile.
 
 ### `mobileSocketTimeoutMs`
 
@@ -296,7 +296,7 @@ Time in milliseconds to wait for a WebSocket response from nova-service before s
 ### Minimal (defaults)
 
 ```typescript
-const wallet = new NovaWallet();
+const wallet = new InferWallet();
 ```
 
 ### Testnet with Force Registration
@@ -304,7 +304,7 @@ const wallet = new NovaWallet();
 ```typescript
 import { Network } from "@cedra-labs/ts-sdk";
 
-const wallet = new NovaWallet({
+const wallet = new InferWallet({
   networkOverride: Network.TESTNET,
   forceRegistration: true,
   fullnodeUrl: "https://fullnode.testnet.cedralabs.com/v1",
@@ -314,7 +314,7 @@ const wallet = new NovaWallet({
 ### Self-Hosted Relay
 
 ```typescript
-const wallet = new NovaWallet({
+const wallet = new InferWallet({
   relayBaseUrl: "https://relay.your-domain.com",
   websocketBaseUrl: "wss://relay.your-domain.com/v1/ws",
 });
@@ -323,7 +323,7 @@ const wallet = new NovaWallet({
 ### Custom Bridge Port
 
 ```typescript
-const wallet = new NovaWallet({
+const wallet = new InferWallet({
   bridgeBaseUrl: "http://127.0.0.1:9999",
   bridgePollTimeoutMs: 60000,
 });
@@ -332,7 +332,7 @@ const wallet = new NovaWallet({
 ### Extension-Only (No Aliases)
 
 ```typescript
-const wallet = new NovaWallet({
+const wallet = new InferWallet({
   detectAliases: false,
   desktopRegistration: false,
 });

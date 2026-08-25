@@ -1,9 +1,41 @@
 # Changelog
 
-All notable changes to `@inferenco/nova-wallet-adapter` will be documented in this file.
+All notable changes to `@inferenco/infer-wallet-adapter` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Rebrand: Nova → Infer
+
+**This is a breaking release.** The package has been renamed to align with the Infer Desk desktop wallet rebrand (Infer Desk v0.6.0+).
+
+**Breaking changes:**
+- Package name: `@inferenco/nova-wallet-adapter` → `@inferenco/infer-wallet-adapter`
+- Wallet display name: `Nova Connect` → `Infer Connect`
+- All public TypeScript identifiers renamed from `Nova*` to `Infer*` (e.g. `InferWallet`, `InferClient`, `InferAdapterError`, `registerInferWallet`, `tryResumeInferWalletConnection`)
+- File names: `src/NovaClient.ts` → `src/InferClient.ts`, `src/NovaWallet.ts` → `src/InferWallet.ts`
+- localStorage keys: `inferenco:nova-*` → `inferenco:infer-*` (auto-migration on next connect via dual-read)
+- PostMessage type: `nova:bridge-token` → `infer:bridge-token` (dual-listen for one release cycle)
+- HTTP header: `x-nova-session-token` → `x-infer-session-token` (dual-write during transition)
+- HKDF info: `nova-connect-relay` → `infer-connect-relay` (dual-derive with fall-back on decrypt failure)
+- Callback URL params: `novaRequestId`/`novaStatus` → `inferRequestId`/`inferStatus` (dual-read during transition)
+- Detection: `window.nova` and the `isNovaDesk` / `isNovaWallet` legacy flags still recognised for one release cycle; remove in 0.4.0
+
+**Migration:**
+```typescript
+// Before (legacy 0.2.0-rc.16 imports)
+import { InferWallet, InferClient, registerNovaWallet, NovaAdapterError }
+  from "@inferenco/nova-wallet-adapter";
+
+// After (0.3.0 — current)
+import { InferWallet, InferClient, registerInferWallet, InferAdapterError }
+  from "@inferenco/infer-wallet-adapter";
+```
+
+**Pending external rebrand (out of scope; dual-supported for one release cycle):**
+- `nova-service` mobile relay backend (separate repo, separate deployment) — its URL (`https://nova-service-160604102004.europe-west1.run.app`), wire contracts (`x-nova-session-token` HTTP header, `nova-connect-relay` HKDF info, `novaRequestId`/`novaStatus` callback params), and HKDF info are still on the legacy names. Remove the dual-support code in 0.4.0 once `nova-service` is rebranded to `infer-service`.
 
 ## [Unreleased] - audit-08 ND-WEB-001 follow-on
 
@@ -23,7 +55,7 @@ Rejected shape and propagates ambiguous or operational failures.
 
 `validateExternalSession()` previously only cleared the localStorage
 session when the wallet returned a `BridgeHttpError(403|404)`. But
-Nova Desk's HTTP bridge intentionally returns 404 **without CORS
+Infer Desk's HTTP bridge intentionally returns 404 **without CORS
 headers** for unknown sessions (F-03 token gate; see
 `write_404_no_cors` in `nova-desk-ui/.../external_bridge.rs`). The
 browser enforces CORS, refuses to expose the response body or status
@@ -42,7 +74,7 @@ Symptom (reported from nova-ecosystem with adapter 0.2.0-rc.14):
 
 The session ID was likely from a previous external-browser deeplink
 flow stored under `inferenco:nova-session`. With the dapp reloading
-inside Nova Desk's embedded browser, the validation request fired
+inside Infer Desk's embedded browser, the validation request fired
 on every page load, the wallet returned 404-no-CORS, the session was
 never cleared, and the same devtools error repeated forever.
 
@@ -100,15 +132,15 @@ tests in `tests/bridge/token.test.ts`:
 Behaviour change is invisible to dapps that don't await
 `ensureBridgeToken()`. No public-API changes.
 
-### Changed (Nova Desk no longer returns `bridgeUrl` in preauth response)
+### Changed (Infer Desk no longer returns `bridgeUrl` in preauth response)
 
 `PreauthStartResult.bridgeUrl` is now declared `string | undefined`
-(was `string`). Nova Desk 0.6.0-rc.7+ no longer includes the
+(was `string`). Infer Desk 0.6.0-rc.7+ no longer includes the
 `bridgeUrl` field in the `POST /preauth-connect` response — the
 process-global bridge URL is never exposed to a dapp before
 user approval (audit-08 ND-WEB-001 HIGH finding).
 
-Production behaviour is unchanged: `NovaClient.connect()` does
+Production behaviour is unchanged: `InferClient.connect()` does
 not read `preauth.bridgeUrl` — it passes its own `options`
 through to `pollPreauthUntilResolved`, and downstream sign
 operations go through `bridgeUrlWithToken(route, options)` /
@@ -118,24 +150,24 @@ unset.
 
 Direct API consumers (a dapp calling `startPreauthConnect()`
 themselves and reading `.bridgeUrl`) get `undefined` for
-modern Nova Desk builds and the existing string for older
+modern Infer Desk builds and the existing string for older
 builds. Backward compatible — no breaking change for code
 that handles the field defensively.
 
 ## [0.2.0-rc.12] - 2026-07-02
 
-### Changed (avoid duplicate wallet in dapp's selector when running inside Nova Desk)
+### Changed (avoid duplicate wallet in dapp's selector when running inside Infer Desk)
 
-`registerNovaWallet()` now skips `registerWallet()` when the dapp is
-already hosted inside Nova Desk's embedded browser. The embedded
+`registerInferWallet()` now skips `registerWallet()` when the dapp is
+already hosted inside Infer Desk's embedded browser. The embedded
 provider (`window.cedra` / `window.nova` / `window.aptos`, all stamped
 with `isNovaDesk: true`) is already on the page and provides identical
-functionality through the same IPC channel. Registering Nova Connect on
+functionality through the same IPC channel. Registering Infer Connect on
 top produced a duplicate entry in the dapp's wallet-selector modal that
 routes to the same wallet.
 
 This is fully backward compatible: external browsers are unaffected
-because the embedded `isNovaDesk` flag is only set inside Nova Desk's
+because the embedded `isNovaDesk` flag is only set inside Infer Desk's
 WebView. Detection is done by reading `window.cedra.isNovaDesk`,
 `window.nova.isNovaDesk`, `window.aptos.isNovaDesk`, or the
 `__novaDeskProviderInjected` sentinel — any of which is sufficient and
@@ -143,25 +175,25 @@ reliable.
 
 ### Added (helper for dapps using third-party adapters)
 
-`isHostedInNovaDesk()` is now exported from the package root. Dapps
-that use a wallet adapter other than Nova Connect can use this helper
+`isHostedInInferDesk()` is now exported from the package root. Dapps
+that use a wallet adapter other than Infer Connect can use this helper
 to filter the wallet-selector modal:
 
 ```ts
-import { isHostedInNovaDesk } from "@inferenco/nova-wallet-adapter";
+import { isHostedInInferDesk } from "@inferenco/infer-wallet-adapter";
 
 const wallets = getCedraWallets().cedraWallets.filter(
-  (w) => !(isHostedInNovaDesk() && w.name === "Nova Connect"),
+  (w) => !(isHostedInInferDesk() && w.name === "Infer Connect"),
 );
 ```
 
-Dapps that use the Nova Connect adapter itself do not need to call
+Dapps that use the Infer Connect adapter itself do not need to call
 this — suppression is automatic.
 
 ### Override
 
 Dapps that explicitly want both entries (e.g. to compare behavior, or
-for testing) can pass `forceRegistration: true` to `registerNovaWallet()`.
+for testing) can pass `forceRegistration: true` to `registerInferWallet()`.
 
 ## [0.2.0-rc.11] - 2026-07-02
 
@@ -169,14 +201,14 @@ for testing) can pass `forceRegistration: true` to `registerNovaWallet()`.
 
 When a dapp cancelled or aborted a `signMessage` / `signTransaction` /
 `signAndSubmit` request before the wallet could transition the state out of
-`Pending`, the wallet's "Another Nova Desk ... approval is already pending."
+`Pending`, the wallet's "Another Infer Desk ... approval is already pending."
 guard would block every subsequent request — including after
 disconnect/reconnect, until the wallet process restarted. Root cause:
 the per-request maps were never cleared when the dapp side aborted, and
 session-revoke only cleaned the session/connect maps, not the per-request
 maps.
 
-Requires Nova Desk `v0.6.0-rc.6+` (the new `POST /cancel/<id>` endpoint
+Requires Infer Desk `v0.6.0-rc.6+` (the new `POST /cancel/<id>` endpoint
 and the session-revoke cleanup are wallet-side changes that ship with
 the next wallet release; the adapter just consumes them).
 
@@ -214,7 +246,7 @@ the next wallet release; the adapter just consumes them).
 - **`buildDesktopOrMobileConnectUrlWithRequest`** is now marked
   `@deprecated since 0.2.0-rc.10` with a console warning. The
   pre-auth flow no longer needs the deeplink in the success path —
-  `NovaClient.connect()` no longer fires it. Kept exported for
+  `InferClient.connect()` no longer fires it. Kept exported for
   dapps that call it directly. Will be removed in `0.4.0`.
 
 ## [0.2.0-rc.8] - 2026-07-01
@@ -222,17 +254,17 @@ the next wallet release; the adapter just consumes them).
 ### Added (Phase 5 UX — wallet-initiated disconnect notification)
 
 First-class `disconnect` event across all three adapter surfaces so dapps learn
-when Nova Connect revokes their session (or when they themselves revoke it) —
+when Infer Connect revokes their session (or when they themselves revoke it) —
 without polling `GET /<token>/session/<id>` from the dapp side.
 
-- **`NovaClient.on("disconnect", cb)`** — payload-less event emitted when the
+- **`InferClient.on("disconnect", cb)`** — payload-less event emitted when the
   adapter loses its session. Subscribers should drop cached account/network
   state and route the user back through the connect flow.
-- **`NovaWallet.onDisconnect(cb)`** — mirror of `NovaClient`'s event for the
+- **`InferWallet.onDisconnect(cb)`** — mirror of `InferClient`'s event for the
   plugin-style adapter. Also re-emitted as `wallet.emit("disconnect")`.
 - **`cedra:onDisconnect`** AIP-62 feature — `wallet.features["cedra:onDisconnect"].onDisconnect(cb)`
   for wallet-standard consumers. Modeled after `cedra:onAccountChange`.
-- **`NovaWalletOptions.sessionLivenessIntervalMs?: number`** — opt-in
+- **`InferWalletOptions.sessionLivenessIntervalMs?: number`** — opt-in
   liveness heartbeat (default `0` = disabled, backwards-compatible). When
   set to a positive integer the adapter schedules
   `setInterval(readValidatedExternalSession, intervalMs)`; a 403/404
@@ -248,10 +280,10 @@ without polling `GET /<token>/session/<id>` from the dapp side.
   `inferenco:nova-session-cleared`, and the corresponding `BroadcastChannel`
   messages. Peer tabs learn about a disconnect in the same tick.
 - **New `inferenco:nova-session-cleared` BroadcastChannel / CustomEvent**
-  string constant (`NOVA_SESSION_CLEARED_MESSAGE_TYPE`) imported from
+  string constant (`INFER_SESSION_CLEARED_MESSAGE_TYPE`) imported from
   `constants.ts`. Exported for dapps that want to listen on `window`
   directly without going through the typed adapter surface.
-- **`NovaClient.disconnect()` now emits `"disconnect"` locally** and
+- **`InferClient.disconnect()` now emits `"disconnect"` locally** and
   notifies peer tabs (via the new clear channel) before clearing state.
   Parity with the wallet-revoked path. Reset of the
   `disconnectEmitted` guard happens at the next successful
@@ -260,19 +292,19 @@ without polling `GET /<token>/session/<id>` from the dapp side.
 ### Public-API additions
 
 ```typescript
-// NovaClient (event emitter, payload-less)
+// InferClient (event emitter, payload-less)
 client.on("disconnect", () => {
   // Drop cached state, route user back through connect()
 });
 
-// NovaWallet (plugin adapter)
+// InferWallet (plugin adapter)
 await wallet.onDisconnect(() => { /* ... */ });
 
 // AIP-62 (wallet-standard)
 await wallet.features["cedra:onDisconnect"].onDisconnect(() => { /* ... */ });
 
 // Opt-in liveness heartbeat
-new NovaClient({ sessionLivenessIntervalMs: 30_000 });
+new InferClient({ sessionLivenessIntervalMs: 30_000 });
 ```
 
 ### Backwards compatibility
@@ -281,7 +313,7 @@ new NovaClient({ sessionLivenessIntervalMs: 30_000 });
   set `sessionLivenessIntervalMs` see identical behaviour to `0.2.0-rc.7`
   (lazy disconnect detection on the next user-initiated `connect()` /
   `getAccount()`).
-- The `provider.disconnect` path inside Nova Desk's embedded webview is
+- The `provider.disconnect` path inside Infer Desk's embedded webview is
   unchanged. The new event covers cross-tab and cross-process cases only.
 
 ### Tests
@@ -297,7 +329,7 @@ new NovaClient({ sessionLivenessIntervalMs: 30_000 });
 
 ### Paired release
 
-- **Nova Desk release tag `v0.6.0-rc.2`** (force-update of `v0.6.0-rc.1`,
+- **Infer Desk release tag `v0.6.0-rc.2`** (force-update of `v0.6.0-rc.1`,
   which was never released to anyone). Companion change on the wallet
   side: `disconnect_connected_app` now pushes
   `__novaDeskHostUpdate({action:"disconnect", connected:false, …})` via
@@ -315,12 +347,12 @@ new NovaClient({ sessionLivenessIntervalMs: 30_000 });
 
 ### Fixed (external-dapp-connect)
 
-Restores the end-to-end "Connect Nova Connect" flow when the dapp loads
-in a regular web browser (not inside Nova Desk's WebKit2GTK webview).
+Restores the end-to-end "Connect Infer Connect" flow when the dapp loads
+in a regular web browser (not inside Infer Desk's WebKit2GTK webview).
 
 Companion to the wallet's F-07b self-heal registration change.
 
-- **`NovaClient.connect()` now consumes the callback URL params first.**
+- **`InferClient.connect()` now consumes the callback URL params first.**
   When the wallet fires `xdg-open <redirect>?address=...&sessionId=...`
   after the user approves, the browser navigates back to the dapp with
   the callback params in the URL. Before rc.7, `connect()` would re-fire
@@ -342,7 +374,7 @@ Companion to the wallet's F-07b self-heal registration change.
 
 - **`bridgePathWithToken` falls back to `options.bridgeBaseUrl`'s token.**
   In an external browser the postMessage delivery channel never fires
-  (it's only set up inside Nova Desk's embedded webview). The token
+  (it's only set up inside Infer Desk's embedded webview). The token
   was delivered via the wallet's redirect callback URL's `bridgeUrl=`
   parameter. When `readBridgeToken()` throws, the function now extracts
   the token from the configured base URL. This makes `signMessage`,
@@ -363,8 +395,8 @@ Companion to the wallet's F-07b self-heal registration change.
 
 ### Paired release
 
-- **Nova Desk release tag `v0.6.0-rc.1`** (commits `3a6b585`..
-  `dd84f04` on `Inferenco/nova_desk::fix/audit-06-2026`). Notable
+- **Infer Desk release tag `v0.6.0-rc.1`** (commits `3a6b585`..
+  `dd84f04` on `Inferenco/infer_desk::fix/audit-06-2026`). Notable
   changes on the wallet side for this RC pair:
   - `inferenco://` protocol auto-registers the wrapper script and
     `.desktop` entry on every launch — no more stale handler from
@@ -391,13 +423,13 @@ No code changes to the runtime behavior. The bug was purely in the public API su
 
 ### Fixed (transparent deeplink fallback)
 
-- **`tryLocalBridgeConnect` no longer throws `MissingBridgeTokenError` synchronously.** When the dapp is in an external browser and the per-session URL token is not available, the function used to throw at the `bridgePathWithToken` call site (before the existing deeplink fallback at `NovaClient.connect` could fire). It now catches the throw and returns `null`, allowing the existing deeplink flow to take over: the OS hands off to Nova Desk, the user approves, the browser returns to the dapp's callback URL, and `tryResumeNovaWalletConnection` (which the dapp's `useEffect` already calls) consumes the session. **No dapp code change required.**
+- **`tryLocalBridgeConnect` no longer throws `MissingBridgeTokenError` synchronously.** When the dapp is in an external browser and the per-session URL token is not available, the function used to throw at the `bridgePathWithToken` call site (before the existing deeplink fallback at `InferClient.connect` could fire). It now catches the throw and returns `null`, allowing the existing deeplink flow to take over: the OS hands off to Infer Desk, the user approves, the browser returns to the dapp's callback URL, and `tryResumeInferWalletConnection` (which the dapp's `useEffect` already calls) consumes the session. **No dapp code change required.**
 
-- **`tryResumeNovaWalletConnection` now auto-consumes the URL callback** before reading from `localStorage`. The new `consumeExternalCallbackIfPresent(options)` helper detects either the legacy `?address=...&sessionId=...` bundle or the PKCE `?code=...` query param, stores the resulting session in `localStorage`, and the rest of the resume flow picks it up. This is the second half of the transparent deeplink path: the dapp's `useEffect` runs `tryResumeNovaWalletConnection` on every page load, so the callback consumption is automatic.
+- **`tryResumeInferWalletConnection` now auto-consumes the URL callback** before reading from `localStorage`. The new `consumeExternalCallbackIfPresent(options)` helper detects either the legacy `?address=...&sessionId=...` bundle or the PKCE `?code=...` query param, stores the resulting session in `localStorage`, and the rest of the resume flow picks it up. This is the second half of the transparent deeplink path: the dapp's `useEffect` runs `tryResumeInferWalletConnection` on every page load, so the callback consumption is automatic.
 
 ### Backwards compatibility
 
-- The dapp dev's contract is unchanged: call `walletCore.connect('Nova Connect')`. In the embedded browser, this works directly. In an external browser, the adapter fires the `inferenco://` deeplink internally and the user comes back connected. No new exports are required and no opt-in is needed.
+- The dapp dev's contract is unchanged: call `walletCore.connect('Infer Connect')`. In the embedded browser, this works directly. In an external browser, the adapter fires the `inferenco://` deeplink internally and the user comes back connected. No new exports are required and no opt-in is needed.
 - The `MissingBridgeTokenError` exception is no longer thrown to the dapp for the no-token case (the deeplink fallback catches it). It is still exported and can still be thrown by direct callers of `readBridgeToken` / `ensureBridgeToken` if they bypass the `walletCore.connect` path.
 - `consumeExternalCallbackIfPresent(options)` is exported for dapps that want to call it directly (e.g. in a SPA route that handles the callback URL), but the standard useEffect path does not need to call it explicitly.
 
@@ -415,9 +447,9 @@ No code changes to the runtime behavior. The bug was purely in the public API su
 
 ### Added (deeplink hardening, non-breaking)
 
-- **Tier 1: Origin check.** `tryResumeNovaWalletConnection(walletCore, { expectedOrigin })` — when `expectedOrigin` is set, the adapter verifies the callback URL's `window.location.origin` matches and throws `CallbackOriginMismatch` on mismatch. Dapps that don't pass `expectedOrigin` see identical behavior to `0.2.0-rc.3`.
+- **Tier 1: Origin check.** `tryResumeInferWalletConnection(walletCore, { expectedOrigin })` — when `expectedOrigin` is set, the adapter verifies the callback URL's `window.location.origin` matches and throws `CallbackOriginMismatch` on mismatch. Dapps that don't pass `expectedOrigin` see identical behavior to `0.2.0-rc.3`.
 
-- **Tier 1 (cont.):** `parseExternalSession` now rejects any session whose `walletName` is not `"Nova Connect"`. Defends against attacker-controlled `walletName` substitution in the callback URL.
+- **Tier 1 (cont.):** `parseExternalSession` now rejects any session whose `walletName` is not `"Infer Connect"`. Defends against attacker-controlled `walletName` substitution in the callback URL.
 
 - **Tier 1 (cont.):** `sessionBridgeBaseUrl` ignores `session.bridgeUrl` when the dapp's `options.bridgeBaseUrl` is configured. Defends against attacker-controlled bridge substitution.
 
@@ -444,9 +476,9 @@ All new behaviors are opt-in. Existing dapps that don't pass `expectedOrigin`, `
 - **Restore public export surface.** `0.2.0-rc.2` was published
   with a mis-edited `src/index.ts` that dropped the wildcard
   re-export from `./bridge`, which in turn dropped
-  `tryResumeNovaWalletConnection` and other existing helpers
+  `tryResumeInferWalletConnection` and other existing helpers
   from the package. Vite rejected dapp imports with
-  `does not provide an export named: 'tryResumeNovaWalletConnection'`.
+  `does not provide an export named: 'tryResumeInferWalletConnection'`.
   Restored `export * from "./bridge";` alongside the new
   `export { ... } from "./bridge/index-public.js";` filter.
   Test-only token helpers (`_resetBridgeTokenForTesting`,
@@ -469,12 +501,12 @@ All new behaviors are opt-in. Existing dapps that don't pass `expectedOrigin`, `
      `MissingBridgeTokenError`).
   2. The dapp calls `launchDesktopOrMobileConnect(options)`,
      which fires the `inferenco://` deeplink. The OS hands
-     off to Nova Desk.
-  3. Nova Desk shows the approval sheet, the user approves,
-     and Nova Desk redirects the browser back to the dapp
+     off to Infer Desk.
+  3. Infer Desk shows the approval sheet, the user approves,
+     and Infer Desk redirects the browser back to the dapp
      with the session in the callback URL.
   4. The dapp's existing `installExternalSessionResumeListeners()`
-     + `tryResumeNovaWalletConnection` flow picks up the
+     + `tryResumeInferWalletConnection` flow picks up the
      callback and stores the session.
   5. Subsequent bridge calls use the new session normally.
   This is the same flow the deeplink has always used; nothing
@@ -484,9 +516,9 @@ All new behaviors are opt-in. Existing dapps that don't pass `expectedOrigin`, `
 
 - **Error message tightened.** `MISSING_BRIDGE_TOKEN_MESSAGE`
   now explicitly tells the dapp user to open the dapp via
-  Nova Desk (either inside its embedded browser or via the
+  Infer Desk (either inside its embedded browser or via the
   `inferenco://` deeplink), instead of a generic "open this
-  dapp via Nova Desk" hint.
+  dapp via Infer Desk" hint.
 
 ### Test totals
 
@@ -502,7 +534,7 @@ deeplink flow is already covered by existing tests in
 > `0.2.0-rc.2` shipped the bridge-token feature but a mis-edit
 > to `src/index.ts` dropped the wildcard re-export from `./bridge`,
 > breaking the public API. Vite rejected dapp imports with
-> `does not provide an export named: 'tryResumeNovaWalletConnection'`.
+> `does not provide an export named: 'tryResumeInferWalletConnection'`.
 > **Upgrade directly to `0.2.0-rc.3` or later.**
 
 ## [0.2.0-rc.1] - 2026-06-27
@@ -510,7 +542,7 @@ deeplink flow is already covered by existing tests in
 > **WARNING — broken release. Do not use.**
 >
 > This version was published to npm **before** the wallet-side bridge
-> token delivery was complete. Nova Desk ≥ Phase 2 binds the HTTP
+> token delivery was complete. Infer Desk ≥ Phase 2 binds the HTTP
 > bridge at `http://127.0.0.1:21984/<token>/<route>` and rejects
 > unprefixed requests with `404` (no CORS). `0.2.0-rc.1` did not
 > know about the token, so every `connect`, `signMessage`,
@@ -524,36 +556,36 @@ deeplink flow is already covered by existing tests in
 
 ### Added
 
-- **Core adapter** &mdash; `NovaWallet` plugin adapter class for plugin-style dApp integrations
-- **AIP-62 bridge** &mdash; `createNovaAIP62Wallet()` and `registerNovaWallet()` for wallet-standard integration
-- **Auto-registration** &mdash; `@inferenco/nova-wallet-adapter/auto-register` side-effect entry point
-- **NovaClient** &mdash; Shared core client powering both adapter surfaces
-- **Nova Desk support** &mdash; Local HTTP bridge to Nova Desk desktop application at `localhost:21984`
+- **Core adapter** &mdash; `InferWallet` plugin adapter class for plugin-style dApp integrations
+- **AIP-62 bridge** &mdash; `createInferAIP62Wallet()` and `registerInferWallet()` for wallet-standard integration
+- **Auto-registration** &mdash; `@inferenco/infer-wallet-adapter/auto-register` side-effect entry point
+- **InferClient** &mdash; Shared core client powering both adapter surfaces
+- **Infer Desk support** &mdash; Local HTTP bridge to Infer Desk desktop application at `localhost:21984`
   - Connect, sign message, sign transaction, sign-and-submit endpoints
   - Poll-based request/response flow
   - Session persistence and validation
   - Session revocation
-- **Nova Wallet support** &mdash; End-to-end encrypted connection to Nova Wallet via nova-service relay
+- **Infer Wallet support** &mdash; End-to-end encrypted connection to Infer Wallet via nova-service relay
   - X25519 ECDH key exchange
   - XChaCha20-Poly1305 authenticated encryption
   - HKDF-SHA256 key derivation
   - REST API + WebSocket real-time notifications
-  - Deeplink handoff to Nova Wallet mobile app
+  - Deeplink handoff to Infer Wallet mobile app
   - Pairing persistence across page reloads
 - **Injected provider detection** &mdash; `window.inferenco`, `window.nova`, branded `window.cedra`/`window.aptos`
 - **Deeplink support** &mdash; `inferenco://` URI scheme for desktop and mobile handoff
 - **Session management** &mdash; localStorage-based session persistence with bridge validation
-- **Error handling** &mdash; `NovaAdapterError` with typed `NovaErrorCode` enum and automatic remapping
+- **Error handling** &mdash; `InferAdapterError` with typed `InferErrorCode` enum and automatic remapping
 - **Conversion helpers** &mdash; Account, network, transaction, and message normalization
-- **WalletCore resume helper** &mdash; `tryResumeNovaWalletConnection()` for Cedra WalletCore integration
-- **Configurable options** &mdash; All URLs, timeouts, and behavior flags customizable via `NovaWalletOptions`
+- **WalletCore resume helper** &mdash; `tryResumeInferWalletConnection()` for Cedra WalletCore integration
+- **Configurable options** &mdash; All URLs, timeouts, and behavior flags customizable via `InferWalletOptions`
 - **Dual module output** &mdash; ESM and CommonJS builds with TypeScript declarations
 - **Unit tests** &mdash; Provider detection, bridge session management, mobile crypto round-trip, AIP-62 registration
 
 ### Notes
 
-- Public wallet name is `"Nova Connect"` (`NOVA_CONNECT_NAME`)
-- `NOVA_DESK_NAME` exported as deprecated alias for backward compatibility
+- Public wallet name is `"Infer Connect"` (`INFER_CONNECT_NAME`)
+- `INFER_DESK_NAME` exported as deprecated alias for backward compatibility
 - Default hosted relay: `https://nova-service-160604102004.europe-west1.run.app`
 - Default desktop bridge: `http://127.0.0.1:21984`
 
@@ -561,8 +593,8 @@ deeplink flow is already covered by existing tests in
 
 ### Changed
 
-- `NovaClient.connect()` no longer fires the `inferenco://` deeplink in the
-  pre-auth success branch. Nova Desk 0.6.0-rc.6+ auto-shows the approval
+- `InferClient.connect()` no longer fires the `inferenco://` deeplink in the
+  pre-auth success branch. Infer Desk 0.6.0-rc.6+ auto-shows the approval
   sheet from the `POST /preauth-connect` queue — firing the deeplink
   triggers the browser's external-protocol handler dialog (Chrome on
   Linux) and is redundant. The dapp simply polls `GET /preauth-poll/<uuid>`
@@ -588,16 +620,16 @@ deeplink flow is already covered by existing tests in
 108 → 112 (+4 new tests):
 - `tests/bridge/preauth.test.ts`:
   - `buildDesktopOrMobileConnectUrlWithRequest emits a deprecation warning`
-  - `NovaClient source does NOT assign window.location.href to a deeplink URL`
-  - `NovaClient source does NOT call launchDesktopOrMobileConnect inside the preauth success branch`
+  - `InferClient source does NOT assign window.location.href to a deeplink URL`
+  - `InferClient source does NOT call launchDesktopOrMobileConnect inside the preauth success branch`
   - `buildDesktopOrMobileConnectUrlWithRequest still produces the legacy URL shape for callers that need it`
 
 ### Migration
 
-For dapps currently using `@inferenco/nova-wallet-adapter < 0.2.0-rc.10`:
+For dapps currently using `@inferenco/infer-wallet-adapter < 0.2.0-rc.10`:
 
 - **Adapter 0.2.0-rc.10 + wallet 0.6.0-rc.6+ (primary path):** no code
-  changes required. The dapp's `NovaClient.connect()` works against the
+  changes required. The dapp's `InferClient.connect()` works against the
   new wallet without a deeplink firing.
 
 - **Adapter 0.2.0-rc.10 + wallet < 0.6.0-rc.6:** `startPreauthConnect`

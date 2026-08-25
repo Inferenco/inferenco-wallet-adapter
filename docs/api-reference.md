@@ -1,35 +1,35 @@
 # API Reference
 
-Complete type and method documentation for `@inferenco/nova-wallet-adapter`.
+Complete type and method documentation for `@inferenco/infer-wallet-adapter`.
 
 ## Table of Contents
 
 - [Classes](#classes)
-  - [NovaWallet](#novawallet)
-  - [NovaClient](#novaclient)
-  - [NovaAdapterError](#novaadaptererror)
+  - [InferWallet](#novawallet)
+  - [InferClient](#novaclient)
+  - [InferAdapterError](#novaadaptererror)
 - [Functions](#functions)
-  - [registerNovaWallet](#registernovawallet)
-  - [createNovaAIP62Wallet](#createnovaaip62wallet)
-  - [tryResumeNovaWalletConnection](#tryresumenovawalletconnection)
-  - [remapNovaError](#remapnovaerror)
-  - [detectNovaProvider](#detectnovaprovider)
+  - [registerInferWallet](#registernovawallet)
+  - [createInferAIP62Wallet](#createnovaaip62wallet)
+  - [tryResumeInferWalletConnection](#tryresumenovawalletconnection)
+  - [remapInferError](#remapnovaerror)
+  - [detectProvider](#detectprovider)
 - [Enums](#enums)
-  - [NovaErrorCode](#novaerrorcode)
-  - [NovaWalletReadyState](#novawalletreadystate)
+  - [InferErrorCode](#novaerrorcode)
+  - [InferWalletReadyState](#novawalletreadystate)
 - [Interfaces](#interfaces)
-  - [NovaWalletOptions](#novawalletoptions)
-  - [NovaExternalSession](#novaexternalsession)
-  - [NovaProvider](#novaprovider)
-  - [NovaAccountKeys](#novaaccountkeys)
-  - [NovaNetworkInfo](#novanetworkinfo)
+  - [InferWalletOptions](#novawalletoptions)
+  - [InferExternalSession](#novaexternalsession)
+  - [InferProvider](#novaprovider)
+  - [InferAccountKeys](#novaaccountkeys)
+  - [InferNetworkInfo](#novanetworkinfo)
   - [SignMessagePayload](#signmessagepayload)
-  - [NovaSignMessageResponse](#novasignmessageresponse)
-  - [NovaWindow](#novawindow)
+  - [InferSignMessageResponse](#novasignmessageresponse)
+  - [InferWindow](#novawindow)
 - [Type Aliases](#type-aliases)
-  - [NovaTransactionPayload](#novatransactionpayload)
-  - [NovaSignTransactionResult](#novasigntransactionresult)
-  - [NovaWalletName](#novawalletname)
+  - [InferTransactionPayload](#novatransactionpayload)
+  - [InferSignTransactionResult](#novasigntransactionresult)
+  - [InferWalletName](#novawalletname)
 - [Constants](#constants)
 - [Bridge & Session Utilities](#bridge--session-utilities)
 - [Conversion Helpers](#conversion-helpers)
@@ -39,44 +39,44 @@ Complete type and method documentation for `@inferenco/nova-wallet-adapter`.
 
 ## Classes
 
-### `NovaWallet`
+### `InferWallet`
 
 Plugin-style adapter class. Extends `EventEmitter<{ accountChange, networkChange }>`.
 
 ```typescript
-import { NovaWallet } from "@inferenco/nova-wallet-adapter";
+import { InferWallet } from "@inferenco/infer-wallet-adapter";
 
-const wallet = new NovaWallet(options?: NovaWalletOptions);
+const wallet = new InferWallet(options?: InferWalletOptions);
 ```
 
 #### Constructor
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `options` | `NovaWalletOptions` | `{}` | Configuration options |
+| `options` | `InferWalletOptions` | `{}` | Configuration options |
 
 #### Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `name` | `NovaWalletName` | `"Nova Connect"` |
+| `name` | `InferWalletName` | `"Infer Connect"` |
 | `url` | `string` | Wallet website URL |
 | `icon` | `string` | Base64-encoded SVG icon |
-| `readyState` | `NovaWalletReadyState` | Current detection state |
+| `readyState` | `InferWalletReadyState` | Current detection state |
 | `connecting` | `boolean` | `true` during connection attempt |
 | `connected` | `boolean` | `true` when connected |
-| `publicAccount` | `NovaAccountKeys` | Cached account keys |
-| `network` | `NovaNetworkInfo` | Cached network info |
+| `publicAccount` | `InferAccountKeys` | Cached account keys |
+| `network` | `InferNetworkInfo` | Cached network info |
 
 #### Methods
 
 ##### `connect(): Promise<AccountInfo>`
 
-Initiates a connection to Nova Wallet. Tries injected provider first, then desktop bridge or mobile relay, using deeplinks for app handoff as needed.
+Initiates a connection to Infer Wallet. Tries injected provider first, then desktop bridge or mobile relay, using deeplinks for app handoff as needed.
 
 **Returns:** `AccountInfo` with `address` and `publicKey`.
 
-**Throws:** `NovaAdapterError` on failure.
+**Throws:** `InferAdapterError` on failure.
 
 ```typescript
 const account = await wallet.connect();
@@ -89,13 +89,13 @@ Fetches the current connected account.
 
 **Returns:** `AccountInfo`
 
-**Throws:** `NovaAdapterError` if not connected.
+**Throws:** `InferAdapterError` if not connected.
 
 ##### `disconnect(): Promise<void>`
 
 Disconnects from the wallet and clears any stored session.
 
-##### `signMessage(message: CedraSignMessageInput | SignMessagePayload): Promise<CedraSignMessageOutput | NovaSignMessageResponse>`
+##### `signMessage(message: CedraSignMessageInput | SignMessagePayload): Promise<CedraSignMessageOutput | InferSignMessageResponse>`
 
 Signs an arbitrary message.
 
@@ -109,7 +109,7 @@ Signs an arbitrary message.
 
 ```typescript
 const response = await wallet.signMessage({
-  message: "Hello Nova!",
+  message: "Hello Infer!",
   nonce: "unique-nonce",
 });
 ```
@@ -122,7 +122,7 @@ Signs a transaction without submitting it.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `transaction` | `AnyRawTransaction \| NovaTransactionPayload \| CedraSignTransactionInputV1_1` | Transaction to sign |
+| `transaction` | `AnyRawTransaction \| InferTransactionPayload \| CedraSignTransactionInputV1_1` | Transaction to sign |
 | `options` | `InputGenerateTransactionOptions` | Optional transaction options |
 
 Prebuilt SDK transactions are serialized for external signing. Wallet-standard v1.1
@@ -138,7 +138,7 @@ Signs and submits a transaction in one step. Falls back to local submission via 
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `transaction` | `NovaTransactionPayload` | Transaction payload |
+| `transaction` | `InferTransactionPayload` | Transaction payload |
 | `options` | `InputGenerateTransactionOptions` | Optional transaction options |
 
 ```typescript
@@ -169,12 +169,12 @@ Subscribes to network change events.
 Subscribes to wallet-initiated disconnects (and to peer-tab-initiated
 self disconnects). The callback receives no payload — drop cached state
 and route the user back through the connect flow. Available only when
-Nova Connect is the active wallet; the underlying detection is opt-in
-(see `NovaWalletOptions.sessionLivenessIntervalMs`).
+Infer Connect is the active wallet; the underlying detection is opt-in
+(see `InferWalletOptions.sessionLivenessIntervalMs`).
 
 ##### `deeplinkProvider(url?: string): string`
 
-Generates a deeplink URL for launching Nova Desk or Nova Wallet.
+Generates a deeplink URL for launching Infer Desk or Infer Wallet.
 
 **Parameters:**
 
@@ -184,14 +184,14 @@ Generates a deeplink URL for launching Nova Desk or Nova Wallet.
 
 ---
 
-### `NovaClient`
+### `InferClient`
 
 Core client powering both adapter surfaces. Extends `EventEmitter<{ accountChange, networkChange, disconnect }>`.
 
 ```typescript
-import { NovaClient } from "@inferenco/nova-wallet-adapter";
+import { InferClient } from "@inferenco/infer-wallet-adapter";
 
-const client = new NovaClient(options?: NovaWalletOptions);
+const client = new InferClient(options?: InferWalletOptions);
 ```
 
 #### Properties
@@ -221,13 +221,13 @@ Fetch current network from provider or stored session.
 
 ##### `signMessage(input: CedraSignMessageInput): Promise<CedraSignMessageOutput>`
 
-Sign a message via the active transport (provider, Nova Desk bridge, or Nova Wallet relay).
+Sign a message via the active transport (provider, Infer Desk bridge, or Infer Wallet relay).
 
 ##### `signMessageAndVerify(input: CedraSignMessageInput): Promise<boolean>`
 
 Sign a message and verify the signature locally using the connected public key.
 
-##### `signTransaction(transaction, options?): Promise<NovaSignTransactionResult>`
+##### `signTransaction(transaction, options?): Promise<InferSignTransactionResult>`
 
 Sign a transaction.
 
@@ -239,7 +239,7 @@ Sign and submit a transaction.
 
 Sign and submit with retry for BCS payloads.
 
-##### `refreshProvider(): NovaProvider | undefined`
+##### `refreshProvider(): InferProvider | undefined`
 
 Re-detect the injected provider.
 
@@ -257,13 +257,13 @@ Subscribe to provider change events (account/network).
 
 ---
 
-### `NovaAdapterError`
+### `InferAdapterError`
 
 Custom error class for all adapter errors.
 
 ```typescript
-class NovaAdapterError extends Error {
-  readonly code: NovaErrorCode;
+class InferAdapterError extends Error {
+  readonly code: InferErrorCode;
   readonly cause?: unknown;
 }
 ```
@@ -272,23 +272,23 @@ class NovaAdapterError extends Error {
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `code` | `NovaErrorCode` | Typed error code |
+| `code` | `InferErrorCode` | Typed error code |
 | `message` | `string` | Human-readable error message |
 | `cause` | `unknown` | Original error (if remapped) |
-| `name` | `string` | Always `"NovaAdapterError"` |
+| `name` | `string` | Always `"InferAdapterError"` |
 
 ---
 
 ## Functions
 
-### `registerNovaWallet(options?)`
+### `registerInferWallet(options?)`
 
-Registers Nova as an AIP-62 wallet-standard wallet via Cedra's `registerWallet()`.
+Registers Infer Connect as an AIP-62 wallet-standard wallet via Cedra's `registerWallet()`.
 
 ```typescript
-import { registerNovaWallet } from "@inferenco/nova-wallet-adapter/aip62";
+import { registerInferWallet } from "@inferenco/infer-wallet-adapter/aip62";
 
-registerNovaWallet({ forceRegistration: true });
+registerInferWallet({ forceRegistration: true });
 ```
 
 **Registration conditions** (registers if any are true):
@@ -300,14 +300,14 @@ registerNovaWallet({ forceRegistration: true });
 
 Prevents duplicate registration automatically.
 
-### `createNovaAIP62Wallet(options?)`
+### `createInferAIP62Wallet(options?)`
 
 Creates a `CedraWallet` object implementing AIP-62 wallet-standard features.
 
 ```typescript
-import { createNovaAIP62Wallet } from "@inferenco/nova-wallet-adapter/aip62";
+import { createInferAIP62Wallet } from "@inferenco/infer-wallet-adapter/aip62";
 
-const wallet = createNovaAIP62Wallet();
+const wallet = createInferAIP62Wallet();
 ```
 
 **Implemented features:**
@@ -325,38 +325,38 @@ const wallet = createNovaAIP62Wallet();
 - `cedra:signAndSubmitTransaction` (v1.1.0)
 - `cedra:openInMobileApp` (v1.0.0)
 
-### `tryResumeNovaWalletConnection(walletCore, options?)`
+### `tryResumeInferWalletConnection(walletCore, options?)`
 
 Helper for dApps using Cedra `WalletCore`. Resumes pending mobile callback state and reconnects through stored sessions.
 
 ```typescript
-import { tryResumeNovaWalletConnection } from "@inferenco/nova-wallet-adapter";
+import { tryResumeInferWalletConnection } from "@inferenco/infer-wallet-adapter";
 
-await tryResumeNovaWalletConnection(walletCore);
+await tryResumeInferWalletConnection(walletCore);
 ```
 
-### `remapNovaError(error: unknown): never`
+### `remapInferError(error: unknown): never`
 
-Converts any error into a `NovaAdapterError` with the appropriate error code. Always throws.
+Converts any error into a `InferAdapterError` with the appropriate error code. Always throws.
 
 ```typescript
 try {
   await riskyOperation();
 } catch (error) {
-  remapNovaError(error); // throws NovaAdapterError
+  remapInferError(error); // throws InferAdapterError
 }
 ```
 
-### `detectNovaProvider(detectAliases?)`
+### `detectProvider(detectAliases?)`
 
-Detects an injected Nova provider on the window object.
+Detects an injected Infer provider on the window object.
 
 ```typescript
-import { detectNovaProvider } from "@inferenco/nova-wallet-adapter";
+import { detectProvider } from "@inferenco/infer-wallet-adapter";
 
-const provider = detectNovaProvider(true); // true = check aliases
+const provider = detectProvider(true); // true = check aliases
 if (provider) {
-  console.log("Nova provider found");
+  console.log("Infer provider found");
 }
 ```
 
@@ -364,10 +364,10 @@ if (provider) {
 
 ## Enums
 
-### `NovaErrorCode`
+### `InferErrorCode`
 
 ```typescript
-enum NovaErrorCode {
+enum InferErrorCode {
   UserRejected    = "USER_REJECTED",
   Unauthorized    = "UNAUTHORIZED",
   Unsupported     = "UNSUPPORTED",
@@ -379,10 +379,10 @@ enum NovaErrorCode {
 }
 ```
 
-### `NovaWalletReadyState`
+### `InferWalletReadyState`
 
 ```typescript
-enum NovaWalletReadyState {
+enum InferWalletReadyState {
   Installed   = "Installed",     // Provider found or session stored
   NotDetected = "NotDetected",   // No provider, no session
   Loadable    = "Loadable",      // Can be loaded (deeplink capable)
@@ -394,12 +394,12 @@ enum NovaWalletReadyState {
 
 ## Interfaces
 
-### `NovaWalletOptions`
+### `InferWalletOptions`
 
 Configuration for all adapter constructors. All fields are optional.
 
 ```typescript
-interface NovaWalletOptions {
+interface InferWalletOptions {
   deeplinkBaseUrl?: string;
   deeplinkScheme?: string;
   websiteUrl?: string;
@@ -422,12 +422,12 @@ interface NovaWalletOptions {
 
 See [Configuration](configuration.md) for detailed descriptions.
 
-### `NovaExternalSession`
+### `InferExternalSession`
 
 Stored session state in `localStorage`.
 
 ```typescript
-interface NovaExternalSession {
+interface InferExternalSession {
   transport: "desktop-bridge" | "mobile-relay";
   address: string;
   publicKey: string;
@@ -444,30 +444,30 @@ interface NovaExternalSession {
 }
 ```
 
-### `NovaProvider`
+### `InferProvider`
 
-Interface for injected Nova wallet providers on the window object.
+Interface for injected Infer wallet providers on the window object.
 
 ```typescript
-interface NovaProvider {
+interface InferProvider {
   isNovaWallet?: boolean;
-  connect?(...args: unknown[]): Promise<NovaProviderAccount | NovaProviderResponse<NovaProviderAccount>>;
-  account?(): Promise<NovaProviderAccount | NovaProviderResponse<NovaProviderAccount>>;
-  disconnect?(): Promise<void | NovaProviderResponse<void>>;
-  network?(): Promise<string | number | NetworkInfo | NovaProviderResponse<...>>;
-  signMessage?(input): Promise<CedraSignMessageOutput | NovaSignMessageResponse | NovaProviderResponse<...>>;
+  connect?(...args: unknown[]): Promise<InferProviderAccount | InferProviderResponse<InferProviderAccount>>;
+  account?(): Promise<InferProviderAccount | InferProviderResponse<InferProviderAccount>>;
+  disconnect?(): Promise<void | InferProviderResponse<void>>;
+  network?(): Promise<string | number | NetworkInfo | InferProviderResponse<...>>;
+  signMessage?(input): Promise<CedraSignMessageOutput | InferSignMessageResponse | InferProviderResponse<...>>;
   signTransaction?(transaction, options?): Promise<...>;
   signAndSubmitTransaction?(transaction, options?): Promise<...>;
   onAccountChange?(callback): Promise<void> | void;
   onNetworkChange?(callback): Promise<void> | void;
-  submitTransaction?(input): Promise<PendingTransactionResponse | NovaProviderResponse<...>>;
+  submitTransaction?(input): Promise<PendingTransactionResponse | InferProviderResponse<...>>;
 }
 ```
 
-### `NovaAccountKeys`
+### `InferAccountKeys`
 
 ```typescript
-interface NovaAccountKeys {
+interface InferAccountKeys {
   publicKey: string | string[] | null;
   address: string | null;
   authKey: string | null;
@@ -475,10 +475,10 @@ interface NovaAccountKeys {
 }
 ```
 
-### `NovaNetworkInfo`
+### `InferNetworkInfo`
 
 ```typescript
-interface NovaNetworkInfo {
+interface InferNetworkInfo {
   api?: string;
   chainId?: string;
   name: string | undefined;
@@ -499,12 +499,12 @@ interface SignMessagePayload {
 }
 ```
 
-### `NovaSignMessageResponse`
+### `InferSignMessageResponse`
 
 Message signing response format.
 
 ```typescript
-interface NovaSignMessageResponse {
+interface InferSignMessageResponse {
   address: string;
   application?: string;
   chainId?: number;
@@ -516,16 +516,16 @@ interface NovaSignMessageResponse {
 }
 ```
 
-### `NovaWindow`
+### `InferWindow`
 
-Extended Window interface with Nova provider slots.
+Extended Window interface with Infer provider slots.
 
 ```typescript
-interface NovaWindow extends Window {
-  inferenco?: NovaProvider;
-  nova?: NovaProvider;
-  cedra?: NovaProvider;
-  aptos?: NovaProvider;
+interface InferWindow extends Window {
+  inferenco?: InferProvider;
+  nova?: InferProvider;
+  cedra?: InferProvider;
+  aptos?: InferProvider;
 }
 ```
 
@@ -533,12 +533,12 @@ interface NovaWindow extends Window {
 
 ## Type Aliases
 
-### `NovaTransactionPayload`
+### `InferTransactionPayload`
 
 Accepted transaction payload formats.
 
 ```typescript
-type NovaTransactionPayload =
+type InferTransactionPayload =
   | InputGenerateTransactionPayloadData
   | {
       sender?: AccountAddressInput;
@@ -548,24 +548,24 @@ type NovaTransactionPayload =
     };
 ```
 
-### `NovaSignTransactionResult`
+### `InferSignTransactionResult`
 
 Possible return types from `signTransaction`.
 
 ```typescript
-type NovaSignTransactionResult =
+type InferSignTransactionResult =
   | AccountAuthenticator
   | Uint8Array
   | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array | AnyRawTransaction }
   | CedraSignTransactionOutputV1_1;
 ```
 
-### `NovaWalletName`
+### `InferWalletName`
 
 Branded string type for wallet names.
 
 ```typescript
-type NovaWalletName<T extends string = string> = T & { __brand__: "WalletName" };
+type InferWalletName<T extends string = string> = T & { __brand__: "WalletName" };
 ```
 
 ---
@@ -574,12 +574,12 @@ type NovaWalletName<T extends string = string> = T & { __brand__: "WalletName" }
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `NOVA_CONNECT_NAME` | `"Nova Connect"` | Public wallet display name |
-| `NOVA_WALLET_NAME` | `"Nova Wallet"` | Internal wallet name |
-| `NOVA_DESK_NAME` | `"Nova Connect"` | Deprecated alias for `NOVA_CONNECT_NAME` |
-| `DEFAULT_DESKTOP_WEBSITE_URL` | `"https://inferenco.com/nova-desk"` | Default desktop website URL |
-| `DEFAULT_MOBILE_WEBSITE_URL` | `"https://inferenco.com/nova-wallet"` | Default mobile website URL |
-| `DEFAULT_WEBSITE_URL` | `"https://inferenco.com/nova-desk"` | Deprecated desktop website URL alias |
+| `INFER_CONNECT_NAME` | `"Infer Connect"` | Public wallet display name |
+| `INFER_WALLET_NAME` | `"Infer Wallet"` | Internal wallet name |
+| `INFER_DESK_NAME` | `"Infer Connect"` | Deprecated alias for `INFER_CONNECT_NAME` |
+| `DEFAULT_DESKTOP_WEBSITE_URL` | `"https://inferenco.com/infer-desk"` | Default desktop website URL |
+| `DEFAULT_MOBILE_WEBSITE_URL` | `"https://inferenco.com/infer-wallet"` | Default mobile website URL |
+| `DEFAULT_WEBSITE_URL` | `"https://inferenco.com/infer-desk"` | Deprecated desktop website URL alias |
 | `DEFAULT_DEEPLINK_BASE_URL` | `"inferenco://connect?callback="` | Deeplink base |
 | `DEFAULT_DESKTOP_LOGIN_URL` | `"inferenco://login"` | Desktop login deeplink |
 | `DEFAULT_DESKTOP_BRIDGE_URL` | `"http://127.0.0.1:21984"` | Local bridge URL |
@@ -595,16 +595,16 @@ type NovaWalletName<T extends string = string> = T & { __brand__: "WalletName" }
 | `DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS` | `1200` | Bridge connect timeout |
 | `DEFAULT_BRIDGE_POLL_INTERVAL_MS` | `250` | Bridge poll interval |
 | `DEFAULT_BRIDGE_POLL_TIMEOUT_MS` | `120000` | Bridge poll timeout (2 min) |
-| `NOVA_WALLET_ICON` | `data:image/svg+xml;base64,...` | Base64 SVG icon |
+| `INFER_WALLET_ICON` | `data:image/svg+xml;base64,...` | Base64 SVG icon |
 
 ### Storage Keys
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `NOVA_EXTERNAL_SESSION_STORAGE_KEY` | `"inferenco:nova-session"` | Session storage |
-| `NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY` | `"inferenco:nova-pending-mobile-pairing"` | Pending pairing |
-| `NOVA_CALLBACK_MARKER_STORAGE_KEY` | `"inferenco:nova-callback-marker"` | Callback markers |
-| `NOVA_PROTOCOL_KEY_STORAGE_KEY` | `"inferenco:nova-protocol-key"` | Protocol key |
+| `INFER_EXTERNAL_SESSION_STORAGE_KEY` | `"inferenco:nova-session"` | Session storage |
+| `INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY` | `"inferenco:nova-pending-mobile-pairing"` | Pending pairing |
+| `INFER_CALLBACK_MARKER_STORAGE_KEY` | `"inferenco:nova-callback-marker"` | Callback markers |
+| `INFER_PROTOCOL_KEY_STORAGE_KEY` | `"inferenco:nova-protocol-key"` | Protocol key |
 
 ---
 

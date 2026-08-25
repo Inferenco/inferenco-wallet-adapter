@@ -6,8 +6,8 @@ import {
 import {
   CallbackOriginMismatch,
   isValidTransactionHash,
-  NovaAdapterError,
-  NovaErrorCode
+  InferAdapterError,
+  InferErrorCode
 } from "./errors.js";
 import { MissingBridgeTokenError } from "./bridge/token.js";
 import type {
@@ -20,16 +20,16 @@ import type {
   CedraSignTransactionOutputV1_1
 } from "@cedra-labs/wallet-standard";
 import type {
-  NovaBridgeConnectPoll,
-  NovaCallbackMarker,
-  NovaBridgeMessagePoll,
-  NovaBridgeSignTransactionPoll,
-  NovaBridgeStartResponse,
-  NovaBridgeTransactionPoll,
-  NovaExternalSession,
-  NovaExternalSignTransactionInput,
-  NovaWalletCoreLike,
-  NovaWalletOptions
+  InferBridgeConnectPoll,
+  InferCallbackMarker,
+  InferBridgeMessagePoll,
+  InferBridgeSignTransactionPoll,
+  InferBridgeStartResponse,
+  InferBridgeTransactionPoll,
+  InferExternalSession,
+  InferExternalSignTransactionInput,
+  InferWalletCoreLike,
+  InferWalletOptions
 } from "./types";
 import {
   CALLBACK_ADDRESS_PARAM,
@@ -49,12 +49,21 @@ import {
   DEFAULT_DESKTOP_LOGIN_URL,
   DEFAULT_DEEPLINK_BASE_URL,
   DEFAULT_SESSION_LIVENESS_INTERVAL_MS,
-  NOVA_CALLBACK_MARKER_STORAGE_KEY,
-  NOVA_SESSION_CLEARED_MESSAGE_TYPE,
-  NOVA_EXTERNAL_SESSION_STORAGE_KEY,
-  NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY,
-  NOVA_CONNECT_NAME,
-  NOVA_PROTOCOL_KEY_STORAGE_KEY,
+  INFER_CALLBACK_MARKER_STORAGE_KEY,
+  INFER_SESSION_CLEARED_MESSAGE_TYPE,
+  INFER_EXTERNAL_SESSION_STORAGE_KEY,
+  INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY,
+  INFER_CONNECT_NAME,
+  INFER_DESK_APP_NAME,
+  INFER_PROTOCOL_KEY_STORAGE_KEY,
+  LEGACY_CALLBACK_REQUEST_ID_PARAM,
+  LEGACY_CALLBACK_STATUS_PARAM,
+  LEGACY_INFER_CONNECT_NAME,
+  LEGACY_INFER_DESK_LABEL,
+  LEGACY_NOVA_EXTERNAL_SESSION_STORAGE_KEY,
+  LEGACY_NOVA_PROTOCOL_KEY_STORAGE_KEY,
+  LEGACY_NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY,
+  LEGACY_NOVA_CALLBACK_MARKER_STORAGE_KEY,
   PKCE_VERIFIER_STORAGE_KEY
 } from "./constants";
 import { BRIDGE_TOKEN_PATH_REGEX } from "./bridge/token.js";
@@ -62,7 +71,7 @@ import { forceRefreshBridgeToken } from "./bridge/token.js";
 import { bridgePathWithToken, bridgeUrlWithToken, getBridgeBaseUrlWithToken } from "./bridge/url.js";
 import { deserializeAnyRawTransaction, ensureBcsToHex, normalizeProviderAccount } from "./conversion";
 
-type NovaPendingMobilePairing = {
+type InferPendingMobilePairing = {
   pairingId: string;
   dappPairingToken: string;
   privateKey: string;
@@ -71,25 +80,31 @@ type NovaPendingMobilePairing = {
   expiresAt: string;
 };
 
-const LEGACY_NOVA_DESK_LABEL = "Nova Desk";
-const NOVA_SESSION_READY_MESSAGE_TYPE = "inferenco:nova-session-ready";
-const NOVA_CALLBACK_OVERLAY_ID = "inferenco-nova-callback-overlay";
+// v0.3.0 (rebrand): the canonical pub/sub channel is renamed to
+// `inferenco:infer-session-ready`. We keep the legacy string on the wire
+// during the transition window so identical sessions created by older Infer
+// Desk builds (which still post to `inferenco:nova-session-ready`) are still
+// observed by the same listener. Both channel names share the listener; the
+// legacy one is slated for removal in 0.4.0.
+const INFER_SESSION_READY_MESSAGE_TYPE = "inferenco:infer-session-ready";
+const LEGACY_INFER_SESSION_READY_MESSAGE_TYPE = "inferenco:nova-session-ready";
+const INFER_CALLBACK_OVERLAY_ID = "inferenco-infer-callback-overlay";
 
-type NovaSessionReadyPayload = {
-  type: typeof NOVA_SESSION_READY_MESSAGE_TYPE;
-  session?: NovaExternalSession;
+type InferSessionReadyPayload = {
+  type: typeof INFER_SESSION_READY_MESSAGE_TYPE;
+  session?: InferExternalSession;
 };
 
-type NovaSessionClearedPayload = {
-  type: typeof NOVA_SESSION_CLEARED_MESSAGE_TYPE;
+type InferSessionClearedPayload = {
+  type: typeof INFER_SESSION_CLEARED_MESSAGE_TYPE;
 };
 
 let sessionResumeListenersInstalled = false;
 let sessionReadyChannel: BroadcastChannel | null | undefined;
 let sessionClearedChannel: BroadcastChannel | null | undefined;
-const pendingExternalSessionWaiters = new Set<(session: NovaExternalSession) => void>();
+const pendingExternalSessionWaiters = new Set<(session: InferExternalSession) => void>();
 /** v0.2.0-rc.8 (Phase 5 UX): wakeup set for any caller awaiting the
- * next external-session *clear* event. Used by NovaClient's storage-event
+ * next external-session *clear* event. Used by InferClient's storage-event
  * fallback path so internal callers can serialize against the
  * same-tab-disconnect case. */
 const pendingExternalDisconnectWaiters = new Set<() => void>();
@@ -105,6 +120,81 @@ function isBrowser(): boolean {
   return typeof window !== "undefined";
 }
 
+/**
+ * v0.3.0 (rebrand): dual-read localStorage helpers.
+ *
+ * Each helper reads the primary (rebranded) storage key first; if
+ * it is missing, falls back to the legacy `inferenco:nova-*` key.
+ * On a successful read from the legacy key, the helper writes the
+ * data to the primary key (eager migration) and removes the legacy
+ * key so subsequent reads find the primary only. Writes always go to
+ * the primary key — no dual-write.
+ *
+ * The legacy read paths will be removed in 0.4.0 once every active
+ * wallet version writes to the primary keys.
+ */
+function dualReadItem(
+  store: Storage,
+  primaryKey: string,
+  legacyKey: string
+): string | null {
+  const primary = store.getItem(primaryKey);
+  if (primary !== null) return primary;
+  const legacy = store.getItem(legacyKey);
+  if (legacy === null) return null;
+  try {
+    store.setItem(primaryKey, legacy);
+    store.removeItem(legacyKey);
+  } catch {
+    /* ignore — best-effort migration */
+  }
+  return legacy;
+}
+
+function readPrimaryOrLegacyItem(
+  store: Storage,
+  primaryKey: string,
+  legacyKey: string
+): string | null {
+  return dualReadItem(store, primaryKey, legacyKey);
+}
+
+function dualReadSession(): string | null {
+  if (!isBrowser()) return null;
+  return readPrimaryOrLegacyItem(
+    window.localStorage,
+    INFER_EXTERNAL_SESSION_STORAGE_KEY,
+    LEGACY_NOVA_EXTERNAL_SESSION_STORAGE_KEY
+  );
+}
+
+function dualReadProtocolPublicKey(): string | null {
+  if (!isBrowser()) return null;
+  return readPrimaryOrLegacyItem(
+    window.localStorage,
+    INFER_PROTOCOL_KEY_STORAGE_KEY,
+    LEGACY_NOVA_PROTOCOL_KEY_STORAGE_KEY
+  );
+}
+
+function dualReadPendingMobilePairing(): string | null {
+  if (!isBrowser()) return null;
+  return readPrimaryOrLegacyItem(
+    window.localStorage,
+    INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY,
+    LEGACY_NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY
+  );
+}
+
+function dualReadCallbackMarker(): string | null {
+  if (!isBrowser()) return null;
+  return readPrimaryOrLegacyItem(
+    window.sessionStorage,
+    INFER_CALLBACK_MARKER_STORAGE_KEY,
+    LEGACY_NOVA_CALLBACK_MARKER_STORAGE_KEY
+  );
+}
+
 export function isMobileBrowser(): boolean {
   if (!isBrowser()) return false;
   const userAgent = navigator.userAgent.toLowerCase();
@@ -112,21 +202,21 @@ export function isMobileBrowser(): boolean {
   return /android|iphone|ipad|ipod|mobile/.test(userAgent) || coarsePointer;
 }
 
-export function bridgeBaseUrl(options: NovaWalletOptions = {}): string {
+export function bridgeBaseUrl(options: InferWalletOptions = {}): string {
   return options.bridgeBaseUrl ?? DEFAULT_DESKTOP_BRIDGE_URL;
 }
 
-function bridgeConnectTimeoutMs(options: NovaWalletOptions = {}): number {
+function bridgeConnectTimeoutMs(options: InferWalletOptions = {}): number {
   return options.bridgeConnectTimeoutMs ?? DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS;
 }
 
-function bridgePollIntervalMs(options: NovaWalletOptions = {}): number {
+function bridgePollIntervalMs(options: InferWalletOptions = {}): number {
   return options.bridgePollIntervalMs ?? DEFAULT_BRIDGE_POLL_INTERVAL_MS;
 }
 
 export { bridgePollIntervalMs };
 
-function bridgePollTimeoutMs(options: NovaWalletOptions = {}): number {
+function bridgePollTimeoutMs(options: InferWalletOptions = {}): number {
   return options.bridgePollTimeoutMs ?? DEFAULT_BRIDGE_POLL_TIMEOUT_MS;
 }
 
@@ -145,7 +235,9 @@ export function currentUrlWithoutCallbackKey(): string {
     CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
     CALLBACK_WALLET_NAME_PARAM,
     CALLBACK_REQUEST_ID_PARAM,
-    CALLBACK_STATUS_PARAM
+    LEGACY_CALLBACK_REQUEST_ID_PARAM,
+    CALLBACK_STATUS_PARAM,
+    LEGACY_CALLBACK_STATUS_PARAM
   ]) {
     url.searchParams.delete(key);
   }
@@ -153,7 +245,7 @@ export function currentUrlWithoutCallbackKey(): string {
 }
 
 export function buildDesktopOrMobileConnectUrl(
-  options: NovaWalletOptions = {},
+  options: InferWalletOptions = {},
   callbackUrl = currentUrlWithoutCallbackKey()
 ): string {
   if (isMobileBrowser()) {
@@ -163,7 +255,7 @@ export function buildDesktopOrMobileConnectUrl(
 
   const params = new URLSearchParams({
     redirect: callbackUrl,
-    app: typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk"
+    app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk"
   });
   let url = `${DEFAULT_DESKTOP_LOGIN_URL}?${params.toString()}`;
 
@@ -182,7 +274,7 @@ export function buildDesktopOrMobileConnectUrl(
 }
 
 export function launchDesktopOrMobileConnect(
-  options: NovaWalletOptions = {},
+  options: InferWalletOptions = {},
   callbackUrl = currentUrlWithoutCallbackKey()
 ): string {
   const url = buildDesktopOrMobileConnectUrl(options, callbackUrl);
@@ -193,8 +285,8 @@ export function launchDesktopOrMobileConnect(
 }
 
 function parseExternalSession(
-  candidate: Partial<NovaExternalSession> | null | undefined
-): NovaExternalSession | null {
+  candidate: Partial<InferExternalSession> | null | undefined
+): InferExternalSession | null {
   if (
     !candidate ||
     typeof candidate.address !== "string" ||
@@ -209,14 +301,17 @@ function parseExternalSession(
   // Tier 1 (deeplink hardening): the wallet name is set by the wallet,
   // not the dapp. An attacker who controls the callback URL can
   // substitute any string here to confuse the dapp's UI. Reject any
-  // value other than the canonical `NOVA_CONNECT_NAME`. The legacy
-  // alias `LEGACY_NOVA_DESK_LABEL` is also accepted for backward
-  // compatibility with older wallet builds that named themselves
-  // "Nova Desk" (pre-0.1.1).
+  // value other than the canonical rebrand names. The legacy aliases
+  // (`LEGACY_INFER_CONNECT_NAME` = "Nova Connect" and
+  // `LEGACY_INFER_DESK_LABEL` = "Nova Desk") are also accepted during
+  // the transition window for previously-stored sessions and cached
+  // callback URLs. Slated for removal in 0.4.0.
   if (
     typeof candidate.walletName === "string" &&
-    candidate.walletName !== NOVA_CONNECT_NAME &&
-    candidate.walletName !== LEGACY_NOVA_DESK_LABEL
+    candidate.walletName !== INFER_CONNECT_NAME &&
+    candidate.walletName !== INFER_DESK_APP_NAME &&
+    candidate.walletName !== LEGACY_INFER_DESK_LABEL &&
+    candidate.walletName !== LEGACY_INFER_CONNECT_NAME
   ) {
     return null;
   }
@@ -241,13 +336,13 @@ function parseExternalSession(
   };
 }
 
-export function readExternalSession(): NovaExternalSession | null {
+export function readExternalSession(): InferExternalSession | null {
   if (!isBrowser()) return null;
-  const raw = window.localStorage.getItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
+  const raw = dualReadSession();
   if (!raw) return null;
 
   try {
-    return parseExternalSession(JSON.parse(raw) as Partial<NovaExternalSession>);
+    return parseExternalSession(JSON.parse(raw) as Partial<InferExternalSession>);
   } catch {
     return null;
   }
@@ -258,17 +353,17 @@ export function hasStoredExternalSession(): boolean {
 }
 
 /**
- * 0.2.0-rc.5: if the dapp just returned from a Nova Desk
+ * 0.2.0-rc.5: if the dapp just returned from a Infer Desk
  * deeplink handoff, the URL has either the legacy
  * `?address=...&sessionId=...` bundle or the PKCE
  * `?code=...` query param. Consume it into localStorage so the
  * rest of the resume flow (which reads from localStorage) can
  * pick it up. The dapp dev does not need to call any of this
- * directly — `tryResumeNovaWalletConnection` invokes this on
+ * directly — `tryResumeInferWalletConnection` invokes this on
  * every page load.
  */
 export async function consumeExternalCallbackIfPresent(
-  options: NovaWalletOptions = {}
+  options: InferWalletOptions = {}
 ): Promise<boolean> {
   if (!isBrowser()) return false;
   // Defensive: if the location isn't a parseable URL (jsdom test
@@ -293,7 +388,7 @@ export async function consumeExternalCallbackIfPresent(
         await storeCallbackSessionViaPkce({ codeVerifier, options });
         return true;
       } catch {
-        // Swallow; the caller is `tryResumeNovaWalletConnection`,
+        // Swallow; the caller is `tryResumeInferWalletConnection`,
         // which has its own error surface.
         return false;
       }
@@ -307,24 +402,28 @@ export async function consumeExternalCallbackIfPresent(
   return false;
 }
 
-export function storeExternalSession(session: NovaExternalSession): void {
+export function storeExternalSession(session: InferExternalSession): void {
   if (!isBrowser()) return;
-  window.localStorage.setItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.localStorage.setItem(INFER_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
   if (session.protocolPublicKey) {
-    window.localStorage.setItem(NOVA_PROTOCOL_KEY_STORAGE_KEY, session.protocolPublicKey);
+    window.localStorage.setItem(INFER_PROTOCOL_KEY_STORAGE_KEY, session.protocolPublicKey);
   }
   resolvePendingExternalSessionWaiters(session);
 }
 
 export function clearExternalSession(): void {
   if (!isBrowser()) return;
-  window.localStorage.removeItem(NOVA_EXTERNAL_SESSION_STORAGE_KEY);
-  window.localStorage.removeItem(NOVA_PROTOCOL_KEY_STORAGE_KEY);
+  window.localStorage.removeItem(INFER_EXTERNAL_SESSION_STORAGE_KEY);
+  window.localStorage.removeItem(INFER_PROTOCOL_KEY_STORAGE_KEY);
+  // v0.3.0 (rebrand): also clear legacy aliases so a wallet that migrates a
+  // previous user immediately picks up the new key.
+  window.localStorage.removeItem(LEGACY_NOVA_EXTERNAL_SESSION_STORAGE_KEY);
+  window.localStorage.removeItem(LEGACY_NOVA_PROTOCOL_KEY_STORAGE_KEY);
 }
 
 function parsePendingMobilePairing(
-  candidate: Partial<NovaPendingMobilePairing> | null | undefined
-): NovaPendingMobilePairing | null {
+  candidate: Partial<InferPendingMobilePairing> | null | undefined
+): InferPendingMobilePairing | null {
   if (
     !candidate ||
     typeof candidate.pairingId !== "string" ||
@@ -352,13 +451,13 @@ function parsePendingMobilePairing(
   };
 }
 
-export function readPendingMobilePairing(): NovaPendingMobilePairing | null {
+export function readPendingMobilePairing(): InferPendingMobilePairing | null {
   if (!isBrowser()) return null;
-  const raw = window.localStorage.getItem(NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY);
+  const raw = dualReadPendingMobilePairing();
   if (!raw) return null;
 
   try {
-    const pairing = parsePendingMobilePairing(JSON.parse(raw) as Partial<NovaPendingMobilePairing>);
+    const pairing = parsePendingMobilePairing(JSON.parse(raw) as Partial<InferPendingMobilePairing>);
     if (!pairing) {
       clearPendingMobilePairing();
     }
@@ -369,19 +468,20 @@ export function readPendingMobilePairing(): NovaPendingMobilePairing | null {
   }
 }
 
-export function storePendingMobilePairing(pairing: NovaPendingMobilePairing): void {
+export function storePendingMobilePairing(pairing: InferPendingMobilePairing): void {
   if (!isBrowser()) return;
-  window.localStorage.setItem(NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY, JSON.stringify(pairing));
+  window.localStorage.setItem(INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY, JSON.stringify(pairing));
 }
 
 export function clearPendingMobilePairing(): void {
   if (!isBrowser()) return;
-  window.localStorage.removeItem(NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY);
+  window.localStorage.removeItem(INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY);
+  window.localStorage.removeItem(LEGACY_NOVA_PENDING_MOBILE_PAIRING_STORAGE_KEY);
 }
 
 function sessionEndpointUrl(
-  session: Pick<NovaExternalSession, "sessionId" | "bridgeUrl">,
-  options: NovaWalletOptions = {}
+  session: Pick<InferExternalSession, "sessionId" | "bridgeUrl">,
+  options: InferWalletOptions = {}
 ): string {
   return _sessionEndpointUrlInternal(session, options);
 }
@@ -393,8 +493,8 @@ function sessionEndpointUrl(
  * stable surface — it may be removed or renamed without a major bump.
  */
 export function _sessionEndpointUrlInternal(
-  session: Pick<NovaExternalSession, "sessionId" | "bridgeUrl">,
-  options: NovaWalletOptions = {}
+  session: Pick<InferExternalSession, "sessionId" | "bridgeUrl">,
+  options: InferWalletOptions = {}
 ): string {
   const sessionId = encodeURIComponent(session.sessionId);
   const base = sessionBridgeBaseUrl(session, options);
@@ -421,8 +521,8 @@ export function _sessionEndpointUrlInternal(
 }
 
 function connectionEndpointUrl(
-  session: Pick<NovaExternalSession, "address" | "network" | "bridgeUrl">,
-  options: NovaWalletOptions = {}
+  session: Pick<InferExternalSession, "address" | "network" | "bridgeUrl">,
+  options: InferWalletOptions = {}
 ): string {
   return _connectionEndpointUrlInternal(session, options);
 }
@@ -434,8 +534,8 @@ function connectionEndpointUrl(
  * stable surface — it may be removed or renamed without a major bump.
  */
 export function _connectionEndpointUrlInternal(
-  session: Pick<NovaExternalSession, "address" | "network" | "bridgeUrl">,
-  options: NovaWalletOptions = {}
+  session: Pick<InferExternalSession, "address" | "network" | "bridgeUrl">,
+  options: InferWalletOptions = {}
 ): string {
   const base = sessionBridgeBaseUrl(session, options);
   const tokenSegment = extractBridgeTokenFromBaseUrl(base, options);
@@ -460,7 +560,7 @@ export function _connectionEndpointUrlInternal(
  */
 function extractBridgeTokenFromBaseUrl(
   baseUrl: string,
-  options: NovaWalletOptions = {}
+  options: InferWalletOptions = {}
 ): string | null {
   const candidates = [baseUrl, options.bridgeBaseUrl ?? ""];
   for (const raw of candidates) {
@@ -477,8 +577,8 @@ function extractBridgeTokenFromBaseUrl(
 }
 
 function sessionBridgeBaseUrl(
-  session: Pick<NovaExternalSession, "bridgeUrl">,
-  options: NovaWalletOptions = {}
+  session: Pick<InferExternalSession, "bridgeUrl">,
+  options: InferWalletOptions = {}
 ): string {
   // Tier 1 (deeplink hardening): the dapp's configured `bridgeBaseUrl`
   // is the source of truth. `session.bridgeUrl` is treated as advisory
@@ -502,7 +602,7 @@ function sessionBridgeBaseUrl(
   }
 }
 
-export function sessionToAccountInfo(session: NovaExternalSession): AccountInfo {
+export function sessionToAccountInfo(session: InferExternalSession): AccountInfo {
   return normalizeProviderAccount({
     address: session.address,
     publicKey: session.publicKey,
@@ -513,7 +613,7 @@ export function sessionToAccountInfo(session: NovaExternalSession): AccountInfo 
   });
 }
 
-function sessionFromBridgePoll(payload: NovaBridgeConnectPoll): NovaExternalSession {
+function sessionFromBridgePoll(payload: InferBridgeConnectPoll): InferExternalSession {
   const address = payload.address;
   const publicKey = payload.publicKey ?? payload.public_key;
   const network = payload.network;
@@ -529,7 +629,7 @@ function sessionFromBridgePoll(payload: NovaBridgeConnectPoll): NovaExternalSess
     typeof chainId !== "number" ||
     typeof sessionId !== "string"
   ) {
-    throw new Error("Nova Desk bridge returned an incomplete session payload");
+    throw new Error("Infer Desk bridge returned an incomplete session payload");
   }
 
   return {
@@ -544,9 +644,9 @@ function sessionFromBridgePoll(payload: NovaBridgeConnectPoll): NovaExternalSess
   };
 }
 
-function dispatchSessionReadyEvent(session: NovaExternalSession): void {
+function dispatchSessionReadyEvent(session: InferExternalSession): void {
   window.dispatchEvent(
-    new CustomEvent<NovaExternalSession>(NOVA_SESSION_READY_MESSAGE_TYPE, {
+    new CustomEvent<InferExternalSession>(INFER_SESSION_READY_MESSAGE_TYPE, {
       detail: session
     })
   );
@@ -554,15 +654,15 @@ function dispatchSessionReadyEvent(session: NovaExternalSession): void {
 
 /** v0.2.0-rc.8 (Phase 5 UX): payload-less same-window dispatch. Dapp code
  * that wants to observe disconnect events without going through
- * `NovaClient` can listen directly with
- * `window.addEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, ...)`.
+ * `InferClient` can listen directly with
+ * `window.addEventListener(INFER_SESSION_CLEARED_MESSAGE_TYPE, ...)`.
  * Mirror of `dispatchSessionReadyEvent`. */
 function dispatchExternalDisconnect(): void {
   if (!isBrowser()) return;
-  window.dispatchEvent(new CustomEvent(NOVA_SESSION_CLEARED_MESSAGE_TYPE));
+  window.dispatchEvent(new CustomEvent(INFER_SESSION_CLEARED_MESSAGE_TYPE));
 }
 
-function resolvePendingExternalSessionWaiters(session: NovaExternalSession): void {
+function resolvePendingExternalSessionWaiters(session: InferExternalSession): void {
   if (!isBrowser()) return;
 
   dispatchSessionReadyEvent(session);
@@ -580,7 +680,7 @@ function getSessionReadyChannel(): BroadcastChannel | null {
     return sessionReadyChannel;
   }
 
-  sessionReadyChannel = new BroadcastChannel(NOVA_SESSION_READY_MESSAGE_TYPE);
+  sessionReadyChannel = new BroadcastChannel(INFER_SESSION_READY_MESSAGE_TYPE);
   return sessionReadyChannel;
 }
 
@@ -594,17 +694,17 @@ function getSessionClearedChannel(): BroadcastChannel | null {
     return sessionClearedChannel;
   }
 
-  sessionClearedChannel = new BroadcastChannel(NOVA_SESSION_CLEARED_MESSAGE_TYPE);
+  sessionClearedChannel = new BroadcastChannel(INFER_SESSION_CLEARED_MESSAGE_TYPE);
   return sessionClearedChannel;
 }
 
-function parseSessionReadyPayload(payload: unknown): NovaExternalSession | null {
+function parseSessionReadyPayload(payload: unknown): InferExternalSession | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
 
-  const candidate = payload as Partial<NovaSessionReadyPayload>;
-  if (candidate.type !== NOVA_SESSION_READY_MESSAGE_TYPE) {
+  const candidate = payload as Partial<InferSessionReadyPayload>;
+  if (candidate.type !== INFER_SESSION_READY_MESSAGE_TYPE) {
     return null;
   }
 
@@ -618,11 +718,11 @@ export function parseDisconnectPayload(payload: unknown): boolean {
     return false;
   }
 
-  const candidate = payload as Partial<NovaSessionClearedPayload>;
-  return candidate.type === NOVA_SESSION_CLEARED_MESSAGE_TYPE;
+  const candidate = payload as Partial<InferSessionClearedPayload>;
+  return candidate.type === INFER_SESSION_CLEARED_MESSAGE_TYPE;
 }
 
-function syncReadySession(session: NovaExternalSession | null): void {
+function syncReadySession(session: InferExternalSession | null): void {
   if (!session) {
     return;
   }
@@ -635,7 +735,13 @@ export function installExternalSessionResumeListeners(): void {
   }
 
   window.addEventListener("storage", (event) => {
-    if (event.key !== NOVA_EXTERNAL_SESSION_STORAGE_KEY) {
+    // v0.3.0 (rebrand): listen for BOTH the canonical rebrand key and the
+    // legacy alias key so cross-tab events from older Infer Desk builds that
+    // still write to the legacy key are also observed.
+    if (
+      event.key !== INFER_EXTERNAL_SESSION_STORAGE_KEY &&
+      event.key !== LEGACY_NOVA_EXTERNAL_SESSION_STORAGE_KEY
+    ) {
       return;
     }
 
@@ -652,7 +758,7 @@ export function installExternalSessionResumeListeners(): void {
     }
 
     try {
-      const session = parseExternalSession(JSON.parse(event.newValue) as Partial<NovaExternalSession>);
+      const session = parseExternalSession(JSON.parse(event.newValue) as Partial<InferExternalSession>);
       syncReadySession(session);
     } catch {
       // Ignore malformed storage payloads and let regular validation handle them.
@@ -696,8 +802,8 @@ function broadcastExternalDisconnect(): void {
     return;
   }
 
-  const payload: NovaSessionClearedPayload = {
-    type: NOVA_SESSION_CLEARED_MESSAGE_TYPE
+  const payload: InferSessionClearedPayload = {
+    type: INFER_SESSION_CLEARED_MESSAGE_TYPE
   };
 
   dispatchExternalDisconnect();
@@ -718,7 +824,7 @@ function broadcastExternalDisconnect(): void {
 }
 
 /** v0.2.0-rc.8 (Phase 5 UX): same-tab, in-process subscribe helper. Used
- * by `NovaClient` to wait for a disconnect signal to settle (e.g., to
+ * by `InferClient` to wait for a disconnect signal to settle (e.g., to
  * serialize a reconnect attempt behind a wallet-initiated revoke).
  * Resolves immediately if a disconnect was already observed in this
  * tab before the subscribe call returned. */
@@ -736,7 +842,7 @@ export function awaitExternalDisconnect(): Promise<void> {
 /** v0.2.0-rc.8 (Phase 5 UX): explicit dispatcher for dapp-side
  * disconnect events. Public API so a dapp that calls `clearExternalSession`
  * directly (without going through `client.disconnect()`) can still
- * broadcast a disconnect to peer tabs and listeners. `NovaClient`
+ * broadcast a disconnect to peer tabs and listeners. `InferClient`
  * emits this internally; dapp code calling `client.disconnect()` does
  * not need to invoke this directly. */
 export function notifyExternalDisconnect(): void {
@@ -760,13 +866,13 @@ export function _resetExternalSessionResumeListenersForTesting(): void {
   pendingExternalDisconnectWaiters.clear();
 }
 
-function broadcastReadySession(session: NovaExternalSession): void {
+function broadcastReadySession(session: InferExternalSession): void {
   if (!isBrowser()) {
     return;
   }
 
-  const payload: NovaSessionReadyPayload = {
-    type: NOVA_SESSION_READY_MESSAGE_TYPE,
+  const payload: InferSessionReadyPayload = {
+    type: INFER_SESSION_READY_MESSAGE_TYPE,
     session
   };
 
@@ -782,12 +888,12 @@ function broadcastReadySession(session: NovaExternalSession): void {
 }
 
 function renderCallbackCompletionFallback(): void {
-  if (!isBrowser() || !document.body || document.getElementById(NOVA_CALLBACK_OVERLAY_ID)) {
+  if (!isBrowser() || !document.body || document.getElementById(INFER_CALLBACK_OVERLAY_ID)) {
     return;
   }
 
   const overlay = document.createElement("div");
-  overlay.id = NOVA_CALLBACK_OVERLAY_ID;
+  overlay.id = INFER_CALLBACK_OVERLAY_ID;
   overlay.setAttribute(
     "style",
     [
@@ -804,7 +910,7 @@ function renderCallbackCompletionFallback(): void {
       "text-align:center"
     ].join(";")
   );
-  overlay.textContent = "Nova Connect is complete. Return to the original tab.";
+  overlay.textContent = "Infer Connect is complete. Return to the original tab.";
   document.body.appendChild(overlay);
 }
 
@@ -833,9 +939,19 @@ export function storeCallbackSession(): void {
   const bridgeUrl = url.searchParams.get(CALLBACK_BRIDGE_URL_PARAM);
   const protocolPublicKey = url.searchParams.get(CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM);
   const walletName = url.searchParams.get(CALLBACK_WALLET_NAME_PARAM);
-  const requestId = url.searchParams.get(CALLBACK_REQUEST_ID_PARAM);
-  const status = url.searchParams.get(CALLBACK_STATUS_PARAM);
-  let callbackSession: NovaExternalSession | null = null;
+  // v0.3.0 (rebrand): dual-read the callback URL params. The rebrand
+  // canonical names are `inferRequestId` / `inferStatus`; the legacy
+  // names `novaRequestId` / `novaStatus` are still accepted during the
+  // transition window because older Infer Desk builds (pre-rebrand) and
+  // any dapps that cached the old URLs may still issue them. Remove the
+  // legacy fallbacks in 0.4.0.
+  const requestId =
+    url.searchParams.get(CALLBACK_REQUEST_ID_PARAM) ??
+    url.searchParams.get(LEGACY_CALLBACK_REQUEST_ID_PARAM);
+  const status =
+    url.searchParams.get(CALLBACK_STATUS_PARAM) ??
+    url.searchParams.get(LEGACY_CALLBACK_STATUS_PARAM);
+  let callbackSession: InferExternalSession | null = null;
 
   if (address && publicKey && network && chainId && sessionId) {
     const parsedChainId = Number.parseInt(chainId, 10);
@@ -854,13 +970,13 @@ export function storeCallbackSession(): void {
       storeExternalSession(callbackSession);
     }
   } else if (publicKey) {
-    window.localStorage.setItem(NOVA_PROTOCOL_KEY_STORAGE_KEY, publicKey);
+    window.localStorage.setItem(INFER_PROTOCOL_KEY_STORAGE_KEY, publicKey);
   }
 
   if (requestId && status) {
     window.sessionStorage.setItem(
-      NOVA_CALLBACK_MARKER_STORAGE_KEY,
-      JSON.stringify({ requestId, status } satisfies NovaCallbackMarker)
+      INFER_CALLBACK_MARKER_STORAGE_KEY,
+      JSON.stringify({ requestId, status } satisfies InferCallbackMarker)
     );
   }
 
@@ -902,8 +1018,8 @@ export function storeCallbackSession(): void {
  */
 export async function storeCallbackSessionViaPkce(input: {
   codeVerifier: string;
-  options?: NovaWalletOptions;
-}): Promise<NovaExternalSession | null> {
+  options?: InferWalletOptions;
+}): Promise<InferExternalSession | null> {
   if (!isBrowser()) return null;
   const url = new URL(window.location.href);
   const code = url.searchParams.get("code");
@@ -927,16 +1043,16 @@ export async function storeCallbackSessionViaPkce(input: {
     chainId: session.chainId,
     sessionId: session.sessionId,
     bridgeUrl: session.bridgeUrl,
-    walletName: session.walletName ?? "Nova Connect"
+    walletName: session.walletName ?? "Infer Connect"
   });
 
   // Mark the callback as resolved for the legacy marker path.
   window.sessionStorage.setItem(
-    NOVA_CALLBACK_MARKER_STORAGE_KEY,
+    INFER_CALLBACK_MARKER_STORAGE_KEY,
     JSON.stringify({
       requestId: "pkce",
       status: "approved"
-    } satisfies NovaCallbackMarker)
+    } satisfies InferCallbackMarker)
   );
 
   // Strip the `code` query param from the URL.
@@ -951,13 +1067,13 @@ export async function storeCallbackSessionViaPkce(input: {
   return stored;
 }
 
-export function readCallbackMarker(): NovaCallbackMarker | null {
+export function readCallbackMarker(): InferCallbackMarker | null {
   if (!isBrowser()) return null;
-  const raw = window.sessionStorage.getItem(NOVA_CALLBACK_MARKER_STORAGE_KEY);
+  const raw = dualReadCallbackMarker();
   if (!raw) return null;
 
   try {
-    const parsed = JSON.parse(raw) as Partial<NovaCallbackMarker>;
+    const parsed = JSON.parse(raw) as Partial<InferCallbackMarker>;
     if (typeof parsed.requestId === "string" && typeof parsed.status === "string") {
       return {
         requestId: parsed.requestId,
@@ -973,7 +1089,8 @@ export function readCallbackMarker(): NovaCallbackMarker | null {
 
 export function clearCallbackMarker(): void {
   if (!isBrowser()) return;
-  window.sessionStorage.removeItem(NOVA_CALLBACK_MARKER_STORAGE_KEY);
+  window.sessionStorage.removeItem(INFER_CALLBACK_MARKER_STORAGE_KEY);
+  window.sessionStorage.removeItem(LEGACY_NOVA_CALLBACK_MARKER_STORAGE_KEY);
 }
 
 function hasPendingMobilePairingCallbackResume(): boolean {
@@ -983,8 +1100,8 @@ function hasPendingMobilePairingCallbackResume(): boolean {
 }
 
 export async function waitForExternalSession(
-  options: NovaWalletOptions = {}
-): Promise<NovaExternalSession | null> {
+  options: InferWalletOptions = {}
+): Promise<InferExternalSession | null> {
   if (!isBrowser()) return null;
   installExternalSessionResumeListeners();
   storeCallbackSession();
@@ -996,14 +1113,14 @@ export async function waitForExternalSession(
 
   return await new Promise((resolve) => {
     let settled = false;
-    const finish = (session: NovaExternalSession | null) => {
+    const finish = (session: InferExternalSession | null) => {
       if (settled) {
         return;
       }
       settled = true;
       pendingExternalSessionWaiters.delete(handleReady);
       window.removeEventListener(
-        NOVA_SESSION_READY_MESSAGE_TYPE,
+        INFER_SESSION_READY_MESSAGE_TYPE,
         handleEvent as EventListener
       );
       window.clearInterval(pollId);
@@ -1011,18 +1128,18 @@ export async function waitForExternalSession(
       resolve(session);
     };
 
-    const handleReady = (session: NovaExternalSession) => {
+    const handleReady = (session: InferExternalSession) => {
       finish(session);
     };
 
     const handleEvent = (event: Event) => {
-      const session = (event as CustomEvent<NovaExternalSession | undefined>).detail;
+      const session = (event as CustomEvent<InferExternalSession | undefined>).detail;
       finish(session ?? readExternalSession());
     };
 
     pendingExternalSessionWaiters.add(handleReady);
     window.addEventListener(
-      NOVA_SESSION_READY_MESSAGE_TYPE,
+      INFER_SESSION_READY_MESSAGE_TYPE,
       handleEvent as EventListener
     );
 
@@ -1041,9 +1158,9 @@ export async function waitForExternalSession(
 }
 
 export async function validateExternalSession(
-  session: NovaExternalSession,
-  options: NovaWalletOptions = {}
-): Promise<NovaExternalSession | null> {
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
+): Promise<InferExternalSession | null> {
   if (!isBrowser()) return null;
   if (session.transport === "mobile-relay") {
     return session;
@@ -1051,12 +1168,12 @@ export async function validateExternalSession(
 
   try {
     const sessionUrl = sessionEndpointUrl(session, options);
-    const payload = await fetchJsonWithTimeout<Partial<NovaExternalSession>>(
+    const payload = await fetchJsonWithTimeout<Partial<InferExternalSession>>(
       sessionUrl,
       bridgeConnectTimeoutMs(options)
     );
     const validatedSession = parseExternalSession(payload) ?? session;
-    const refreshedSession: NovaExternalSession = {
+    const refreshedSession: InferExternalSession = {
       ...session,
       ...validatedSession,
       bridgeUrl: validatedSession.bridgeUrl ?? session.bridgeUrl,
@@ -1082,12 +1199,12 @@ export async function validateExternalSession(
     //      response (CORS block) or the fetch hit a network failure.
     //      Indistinguishable from JS, but the recovery is the same.
     //
-    //      Nova Desk's HTTP bridge intentionally returns 404
+    //      Infer Desk's HTTP bridge intentionally returns 404
     //      responses without CORS headers (F-03 token gate — see
     //      `write_404_no_cors` in nova-desk-ui's external_bridge.rs).
     //      Browsers block reading those responses, which surfaces as
     //      `TypeError: Failed to fetch` instead of a BridgeHttpError.
-    //      Without this branch, dapps that reload inside Nova Desk's
+    //      Without this branch, dapps that reload inside Infer Desk's
     //      embedded browser with a session ID from a previous
     //      external-browser deeplink flow keep retrying the stale
     //      session on every page load and emit a confusing
@@ -1105,8 +1222,8 @@ export async function validateExternalSession(
 }
 
 export async function revokeExternalSession(
-  session: NovaExternalSession,
-  options: NovaWalletOptions = {}
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
 ): Promise<void> {
   if (!isBrowser()) return;
   if (session.transport === "mobile-relay") {
@@ -1161,8 +1278,8 @@ export async function revokeExternalSession(
 }
 
 export async function readValidatedExternalSession(
-  options: NovaWalletOptions = {}
-): Promise<NovaExternalSession | null> {
+  options: InferWalletOptions = {}
+): Promise<InferExternalSession | null> {
   const session = readExternalSession();
   if (!session) {
     return null;
@@ -1171,14 +1288,14 @@ export async function readValidatedExternalSession(
   return validateExternalSession(session, options);
 }
 
-export async function tryResumeNovaWalletConnection(
-  walletCore: NovaWalletCoreLike,
-  options: NovaWalletOptions = {}
+export async function tryResumeInferWalletConnection(
+  walletCore: InferWalletCoreLike,
+  options: InferWalletOptions = {}
 ): Promise<boolean> {
   if (!isBrowser()) return false;
   installExternalSessionResumeListeners();
 
-  // 0.2.0-rc.5: if Nova Desk redirected us back to the dapp with
+  // 0.2.0-rc.5: if Infer Desk redirected us back to the dapp with
   // a callback URL (legacy `?address=...&sessionId=...` or PKCE
   // `?code=...`), consume it BEFORE the localStorage read. The
   // dapp's useEffect calls this on every page load; if the URL
@@ -1188,7 +1305,12 @@ export async function tryResumeNovaWalletConnection(
   // required.
   await consumeExternalCallbackIfPresent(options);
 
-  const candidateWalletName = [NOVA_CONNECT_NAME, LEGACY_NOVA_DESK_LABEL].find((walletName) =>
+  const candidateWalletName = [
+    INFER_CONNECT_NAME,
+    INFER_DESK_APP_NAME,
+    LEGACY_INFER_DESK_LABEL,
+    LEGACY_INFER_CONNECT_NAME
+  ].find((walletName) =>
     walletCore.wallets.some((wallet) => wallet.name === walletName)
   );
   if (!candidateWalletName) {
@@ -1245,7 +1367,7 @@ export async function fetchJsonWithTimeout<T>(
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new BridgeHttpError(response.status, body || `Nova Desk bridge request failed with status ${response.status}`);
+      throw new BridgeHttpError(response.status, body || `Infer Desk bridge request failed with status ${response.status}`);
     }
 
     return (await response.json()) as T;
@@ -1256,7 +1378,7 @@ export async function fetchJsonWithTimeout<T>(
 
 async function pollBridge<T extends { status?: string; error?: string }>(
   url: string,
-  options: NovaWalletOptions
+  options: InferWalletOptions
 ): Promise<T> {
   const deadline = Date.now() + bridgePollTimeoutMs(options);
 
@@ -1268,17 +1390,17 @@ async function pollBridge<T extends { status?: string; error?: string }>(
     await new Promise((resolve) => window.setTimeout(resolve, bridgePollIntervalMs(options)));
   }
 
-  throw new Error("Timed out waiting for Nova Desk approval");
+  throw new Error("Timed out waiting for Infer Desk approval");
 }
 
 /**
- * v0.3.0+ pre-auth flow (Nova Desk 0.6.0-rc.3+, no-new-tab):
+ * v0.3.0+ pre-auth flow (Infer Desk 0.6.0-rc.3+, no-new-tab):
  *
  * The dapp's adapter calls `POST /preauth-connect` on the wallet's
  * bridge (no token required, `Origin` header is the auth — browsers
  * enforce it). The wallet returns a `requestId`. The adapter fires
  * the `inferenco://login?request=<requestId>&app=<name>` deeplink.
- * After the user approves in Nova Desk, the adapter polls
+ * After the user approves in Infer Desk, the adapter polls
  * `GET /preauth-poll/<requestId>` and receives the session.
  *
  * This eliminates the legacy `xdg-open` step that opened a new tab
@@ -1294,9 +1416,9 @@ export interface PreauthStartResult {
   requestId: string;
   pollUrl: string;
   /**
-   * Optional: present on older wallet builds (Nova Desk
+   * Optional: present on older wallet builds (Infer Desk
    * < 0.6.0-rc.7), absent on newer builds (audit-08
-   * ND-WEB-001 follow-on). Nova Desk no longer exposes the
+   * ND-WEB-001 follow-on). Infer Desk no longer exposes the
    * process-global bridge URL to a dapp before approval —
    * the adapter falls back to its configured `bridgeBaseUrl`
    * for all sign operations via `bridgeUrlWithToken` /
@@ -1315,7 +1437,7 @@ export async function startPreauthConnect(input: {
   app: string;
   expectedOrigin?: string;
   codeChallenge?: string;
-  options?: NovaWalletOptions;
+  options?: InferWalletOptions;
 }): Promise<PreauthStartResult | null> {
   if (!isBrowser() || isMobileBrowser()) return null;
 
@@ -1364,11 +1486,11 @@ export async function startPreauthConnect(input: {
  * failure (caller should retry).
  *
  * The adapter normalizes the wallet's flat shape into a
- * `NovaExternalSession`.
+ * `InferExternalSession`.
  */
 export interface PreauthPollResult {
   status: "pending" | "approved" | "rejected";
-  session?: NovaExternalSession;
+  session?: InferExternalSession;
   error?: string;
 }
 
@@ -1384,7 +1506,7 @@ interface PreauthApprovedFlat {
   walletName: string;
 }
 
-function preauthFlatToSession(flat: PreauthApprovedFlat): NovaExternalSession {
+function preauthFlatToSession(flat: PreauthApprovedFlat): InferExternalSession {
   return {
     transport: "desktop-bridge",
     address: flat.address,
@@ -1399,7 +1521,7 @@ function preauthFlatToSession(flat: PreauthApprovedFlat): NovaExternalSession {
 
 export async function pollPreauthConnect(input: {
   requestId: string;
-  options?: NovaWalletOptions;
+  options?: InferWalletOptions;
 }): Promise<PreauthPollResult | null> {
   if (!isBrowser() || isMobileBrowser()) return null;
 
@@ -1460,9 +1582,9 @@ export async function pollPreauthConnect(input: {
 
 /**
  * @deprecated since 0.2.0-rc.10. The pre-auth flow no longer
- * requires a deeplink in the success path. Nova Desk 0.6.0-rc.6+
+ * requires a deeplink in the success path. Infer Desk 0.6.0-rc.6+
  * auto-shows the approval sheet from `POST /preauth-connect` —
- * `NovaClient.connect()` no longer fires this URL internally. This
+ * `InferClient.connect()` no longer fires this URL internally. This
  * export remains for dapps that call it directly; it will be
  * removed in 0.4.0. When `startPreauthConnect` succeeds the wallet
  * surfaces the approval sheet via the bridge queue, so firing the
@@ -1487,12 +1609,12 @@ export async function pollPreauthConnect(input: {
 export function buildDesktopOrMobileConnectUrlWithRequest(
   requestId: string,
   app: string,
-  options: NovaWalletOptions = {},
+  options: InferWalletOptions = {},
 ): string {
   if (typeof console !== "undefined") {
     console.warn(
       "[inferenco-wallet-adapter] buildDesktopOrMobileConnectUrlWithRequest is deprecated since 0.2.0-rc.10. " +
-      "When the pre-auth flow succeeds, Nova Desk auto-shows the approval sheet from the POST /preauth-connect queue — " +
+      "When the pre-auth flow succeeds, Infer Desk auto-shows the approval sheet from the POST /preauth-connect queue — " +
       "no deeplink is needed. This export will be removed in 0.4.0.",
     );
   }
@@ -1503,22 +1625,22 @@ export function buildDesktopOrMobileConnectUrlWithRequest(
   }
   const params = new URLSearchParams({
     request: requestId,
-    app: app || "Nova Desk",
+    app: app || "Infer Desk",
   });
   return `${DEFAULT_DESKTOP_LOGIN_URL}?${params.toString()}`;
 }
 
-export async function tryLocalBridgeConnect(options: NovaWalletOptions = {}): Promise<AccountInfo | null> {
+export async function tryLocalBridgeConnect(options: InferWalletOptions = {}): Promise<AccountInfo | null> {
   if (!isBrowser() || isMobileBrowser()) return null;
 
   // 0.2.0-rc.5: catch the synchronous `MissingBridgeTokenError` from
   // `bridgePathWithToken` (which calls `readBridgeToken`).
   // The dapp is in an external browser, the per-session URL token
   // is not available, and the bridge is unreachable. Return null
-  // so the caller (`NovaClient.connect`) can fire its existing
+  // so the caller (`InferClient.connect`) can fire its existing
   // deeplink fallback at line 340+. The page navigates away,
-  // the user approves in Nova Desk, the browser returns to the
-  // dapp's callback URL, and `tryResumeNovaWalletConnection` on
+  // the user approves in Infer Desk, the browser returns to the
+  // dapp's callback URL, and `tryResumeInferWalletConnection` on
   // the new page consumes the session. The dapp dev code does
   // not need to change.
   let connectPath: string;
@@ -1530,7 +1652,7 @@ export async function tryLocalBridgeConnect(options: NovaWalletOptions = {}): Pr
       // Some other synchronous failure (e.g. `bridgeBaseUrl` not a
       // URL): also fall through to the deeplink fallback rather
       // than surfacing a hard error.
-      !(error instanceof NovaAdapterError)
+      !(error instanceof InferAdapterError)
     ) {
       return null;
     }
@@ -1538,13 +1660,13 @@ export async function tryLocalBridgeConnect(options: NovaWalletOptions = {}): Pr
   }
   const connectUrl = new URL(connectPath, DEFAULT_DESKTOP_BRIDGE_URL);
   connectUrl.searchParams.set("origin", window.location.origin);
-  connectUrl.searchParams.set("app", typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk");
+  connectUrl.searchParams.set("app", typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk");
   const connectUrlString = connectUrl.toString();
   const timeoutMs = bridgeConnectTimeoutMs(options);
 
-  let start: NovaBridgeStartResponse;
+  let start: InferBridgeStartResponse;
   try {
-    start = await fetchJsonWithTimeout<NovaBridgeStartResponse>(connectUrlString, timeoutMs);
+    start = await fetchJsonWithTimeout<InferBridgeStartResponse>(connectUrlString, timeoutMs);
   } catch {
     return null;
   }
@@ -1554,7 +1676,7 @@ export async function tryLocalBridgeConnect(options: NovaWalletOptions = {}): Pr
   }
 
   const pollUrl = bridgeUrlWithToken(`/request/${start.requestId}`, options);
-  const payload = await pollBridge<NovaBridgeConnectPoll>(pollUrl, options);
+  const payload = await pollBridge<InferBridgeConnectPoll>(pollUrl, options);
 
   if (payload.status === "approved") {
     const session = sessionFromBridgePoll(payload);
@@ -1563,18 +1685,18 @@ export async function tryLocalBridgeConnect(options: NovaWalletOptions = {}): Pr
   }
 
   if (payload.status === "rejected") {
-    throw new Error(payload.error ?? "Nova Desk rejected the browser bridge request");
+    throw new Error(payload.error ?? "Infer Desk rejected the browser bridge request");
   }
 
-  throw new Error(payload.error ?? "Nova Desk bridge connect failed");
+  throw new Error(payload.error ?? "Infer Desk bridge connect failed");
 }
 
 function reconnectSigningError(): Error {
-  return new Error("Nova Desk is not reachable for signing. Reconnect the wallet and try again.");
+  return new Error("Infer Desk is not reachable for signing. Reconnect the wallet and try again.");
 }
 
 function reconnectTransactionError(): Error {
-  return new Error("Nova Desk is not reachable for transaction approval. Reconnect the wallet and try again.");
+  return new Error("Infer Desk is not reachable for transaction approval. Reconnect the wallet and try again.");
 }
 
 /**
@@ -1584,13 +1706,13 @@ function reconnectTransactionError(): Error {
  * also lazy-sweeps expired requests on its own.
  *
  * Without this, a cancelled dapp request would block the wallet's
- * "Another Nova Desk ... approval is already pending." guard for the
+ * "Another Infer Desk ... approval is already pending." guard for the
  * lifetime of the wallet process.
  */
 function cancelPendingRequest(
   requestId: string,
-  session: NovaExternalSession,
-  options: NovaWalletOptions,
+  session: InferExternalSession,
+  options: InferWalletOptions,
   reason: string
 ): void {
   if (!isBrowser() || !session.bridgeUrl) return;
@@ -1610,7 +1732,7 @@ function cancelPendingRequest(
   });
 }
 
-function normalizeBridgeSignMessageOutput(payload: NovaBridgeMessagePoll): CedraSignMessageOutput {
+function normalizeBridgeSignMessageOutput(payload: InferBridgeMessagePoll): CedraSignMessageOutput {
   const address = payload.address;
   const signature = payload.signature;
   const fullMessage = payload.fullMessage ?? payload.full_message;
@@ -1622,7 +1744,7 @@ function normalizeBridgeSignMessageOutput(payload: NovaBridgeMessagePoll): Cedra
     typeof fullMessage !== "string" ||
     typeof message !== "string"
   ) {
-    throw new Error("Nova Desk bridge returned an incomplete signMessage payload");
+    throw new Error("Infer Desk bridge returned an incomplete signMessage payload");
   }
 
   return {
@@ -1636,7 +1758,7 @@ function normalizeBridgeSignMessageOutput(payload: NovaBridgeMessagePoll): Cedra
 }
 
 function normalizeBridgeSignTransactionOutput(
-  payload: NovaBridgeSignTransactionPoll
+  payload: InferBridgeSignTransactionPoll
 ): CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string } {
   const rawTransactionBcsHex = payload.rawTransactionBcsHex ?? payload.raw_transaction_bcs_hex;
   
@@ -1648,7 +1770,7 @@ function normalizeBridgeSignTransactionOutput(
   }
 
   if (typeof authenticatorHex !== "string" || typeof rawTransactionBcsHex !== "string") {
-    throw new Error("Nova Desk bridge returned an incomplete signTransaction payload");
+    throw new Error("Infer Desk bridge returned an incomplete signTransaction payload");
   }
 
   return {
@@ -1662,7 +1784,7 @@ function normalizeBridgeSignTransactionOutput(
 async function startBridgeRequest<T>(
   path: string,
   body: unknown,
-  options: NovaWalletOptions,
+  options: InferWalletOptions,
   reconnectError: Error
 ): Promise<string> {
   // B+ retry logic: a 404 from the wallet's HTTP bridge most likely
@@ -1670,7 +1792,7 @@ async function startBridgeRequest<T>(
   // rotated. We force-refresh the token (re-read pathname + re-arm
   // the postMessage listener) and retry once before giving up.
   const tryOnce = async () =>
-    fetchJsonWithTimeout<NovaBridgeStartResponse>(
+    fetchJsonWithTimeout<InferBridgeStartResponse>(
       bridgeUrlWithToken(path, options),
       bridgeConnectTimeoutMs(options),
       {
@@ -1680,7 +1802,7 @@ async function startBridgeRequest<T>(
       }
     );
 
-  let start: NovaBridgeStartResponse;
+  let start: InferBridgeStartResponse;
   try {
     start = await tryOnce();
   } catch (error) {
@@ -1701,7 +1823,7 @@ async function startBridgeRequest<T>(
   }
 
   if (typeof start.requestId !== "string" || start.requestId.length === 0) {
-    throw new Error("Nova Desk bridge did not return a request id");
+    throw new Error("Infer Desk bridge did not return a request id");
   }
 
   return start.requestId;
@@ -1710,7 +1832,7 @@ async function startBridgeRequest<T>(
 async function pollSignedResult<T extends { status?: string; error?: string }>(
   path: string,
   requestId: string,
-  options: NovaWalletOptions,
+  options: InferWalletOptions,
   reconnectError: Error
 ): Promise<T> {
   // B+ retry logic: same token-refresh on 404, applied to the poll
@@ -1742,8 +1864,8 @@ async function pollSignedResult<T extends { status?: string; error?: string }>(
 
 export async function tryLocalBridgeSignMessage(
   input: CedraSignMessageInput,
-  session: NovaExternalSession,
-  options: NovaWalletOptions = {}
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
 ): Promise<CedraSignMessageOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
 
@@ -1751,7 +1873,7 @@ export async function tryLocalBridgeSignMessage(
     "/sign-message",
     {
       origin: window.location.origin,
-      app: typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk",
+      app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
       sessionId: session.sessionId,
       message: input
     },
@@ -1759,7 +1881,7 @@ export async function tryLocalBridgeSignMessage(
     reconnectSigningError()
   );
   try {
-    const payload = await pollSignedResult<NovaBridgeMessagePoll>(
+    const payload = await pollSignedResult<InferBridgeMessagePoll>(
       "/message-request",
       requestId,
       { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
@@ -1767,7 +1889,7 @@ export async function tryLocalBridgeSignMessage(
     );
 
     if (payload.status === "approved") return normalizeBridgeSignMessageOutput(payload);
-    throw new Error(payload.error ?? "Nova Desk rejected the signMessage request");
+    throw new Error(payload.error ?? "Infer Desk rejected the signMessage request");
   } catch (error) {
     cancelPendingRequest(
       requestId,
@@ -1780,9 +1902,9 @@ export async function tryLocalBridgeSignMessage(
 }
 
 export async function tryLocalBridgeSignTransaction(
-  input: CedraSignTransactionInputV1_1 | NovaExternalSignTransactionInput,
-  session: NovaExternalSession,
-  options: NovaWalletOptions = {}
+  input: CedraSignTransactionInputV1_1 | InferExternalSignTransactionInput,
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
 
@@ -1790,7 +1912,7 @@ export async function tryLocalBridgeSignTransaction(
     "/sign-transaction",
     {
       origin: window.location.origin,
-      app: typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk",
+      app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
       sessionId: session.sessionId,
       transaction: input
     },
@@ -1798,7 +1920,7 @@ export async function tryLocalBridgeSignTransaction(
     reconnectSigningError()
   );
   try {
-    const payload = await pollSignedResult<NovaBridgeSignTransactionPoll>(
+    const payload = await pollSignedResult<InferBridgeSignTransactionPoll>(
       "/sign-transaction-request",
       requestId,
       { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
@@ -1806,7 +1928,7 @@ export async function tryLocalBridgeSignTransaction(
     );
 
     if (payload.status === "approved") return normalizeBridgeSignTransactionOutput(payload);
-    throw new Error(payload.error ?? "Nova Desk rejected the signTransaction request");
+    throw new Error(payload.error ?? "Infer Desk rejected the signTransaction request");
   } catch (error) {
     cancelPendingRequest(
       requestId,
@@ -1825,8 +1947,8 @@ function hasOnlyKeys(value: object, allowedKeys: readonly string[]): boolean {
 
 export async function tryLocalBridgeSignAndSubmit(
   input: CedraSignAndSubmitTransactionInput,
-  session: NovaExternalSession,
-  options: NovaWalletOptions = {}
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
 ): Promise<CedraSignAndSubmitTransactionOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectTransactionError();
 
@@ -1834,7 +1956,7 @@ export async function tryLocalBridgeSignAndSubmit(
     "/transaction",
     {
       origin: window.location.origin,
-      app: typeof document !== "undefined" ? document.title || "Nova Desk" : "Nova Desk",
+      app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
       sessionId: session.sessionId,
       transaction: input
     },
@@ -1842,7 +1964,7 @@ export async function tryLocalBridgeSignAndSubmit(
     reconnectTransactionError()
   );
   try {
-    const payload = await pollSignedResult<NovaBridgeTransactionPoll>(
+    const payload = await pollSignedResult<InferBridgeTransactionPoll>(
       "/transaction-request",
       requestId,
       { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
@@ -1850,9 +1972,9 @@ export async function tryLocalBridgeSignAndSubmit(
     );
 
     if (payload.requestId !== requestId) {
-      throw new NovaAdapterError(
-        NovaErrorCode.InternalError,
-        "Nova Desk returned a transaction result for a different request"
+      throw new InferAdapterError(
+        InferErrorCode.InternalError,
+        "Infer Desk returned a transaction result for a different request"
       );
     }
 
@@ -1869,15 +1991,15 @@ export async function tryLocalBridgeSignAndSubmit(
       hasOnlyKeys(payload, ["status", "requestId", "error"]) &&
       (payload.error === undefined || typeof payload.error === "string")
     ) {
-      throw new NovaAdapterError(
-        NovaErrorCode.UserRejected,
+      throw new InferAdapterError(
+        InferErrorCode.UserRejected,
         "User rejected the transaction request"
       );
     }
 
-    throw new NovaAdapterError(
-      NovaErrorCode.InternalError,
-      "Nova Desk returned an ambiguous transaction result"
+    throw new InferAdapterError(
+      InferErrorCode.InternalError,
+      "Infer Desk returned an ambiguous transaction result"
     );
   } catch (error) {
     cancelPendingRequest(

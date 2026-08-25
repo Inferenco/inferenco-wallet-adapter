@@ -9,9 +9,9 @@ import {
 } from "@cedra-labs/ts-sdk";
 import type { CedraSignTransactionInputV1_1 } from "@cedra-labs/wallet-standard";
 import {
-  NOVA_CALLBACK_MARKER_STORAGE_KEY,
-  NOVA_CONNECT_NAME,
-  NOVA_SESSION_CLEARED_MESSAGE_TYPE
+  INFER_CALLBACK_MARKER_STORAGE_KEY,
+  INFER_CONNECT_NAME,
+  INFER_SESSION_CLEARED_MESSAGE_TYPE
 } from "../src/constants";
 import {
   _resetExternalSessionResumeListenersForTesting,
@@ -23,7 +23,7 @@ import {
   storeExternalSession,
   storePendingMobilePairing,
   tryLocalBridgeSignTransaction,
-  tryResumeNovaWalletConnection,
+  tryResumeInferWalletConnection,
   waitForExternalSession
 } from "../src/bridge";
 import { _setBridgeTokenForTesting } from "../src/bridge/token";
@@ -74,11 +74,11 @@ describe("bridge resume helpers", () => {
 
   it("returns false when no Nova state can be resumed", async () => {
     const walletCore = {
-      wallets: [{ name: NOVA_CONNECT_NAME }],
+      wallets: [{ name: INFER_CONNECT_NAME }],
       connect: vi.fn()
     };
 
-    await expect(tryResumeNovaWalletConnection(walletCore)).resolves.toBe(false);
+    await expect(tryResumeInferWalletConnection(walletCore)).resolves.toBe(false);
     expect(walletCore.connect).not.toHaveBeenCalled();
   });
 
@@ -96,12 +96,12 @@ describe("bridge resume helpers", () => {
       walletPublicKey: "wallet-public-key"
     });
     const walletCore = {
-      wallets: [{ name: NOVA_CONNECT_NAME }],
+      wallets: [{ name: INFER_CONNECT_NAME }],
       connect: vi.fn().mockResolvedValue(undefined)
     };
 
-    await expect(tryResumeNovaWalletConnection(walletCore)).resolves.toBe(true);
-    expect(walletCore.connect).toHaveBeenCalledWith(NOVA_CONNECT_NAME);
+    await expect(tryResumeInferWalletConnection(walletCore)).resolves.toBe(true);
+    expect(walletCore.connect).toHaveBeenCalledWith(INFER_CONNECT_NAME);
   });
 
   it("calls walletCore.connect when a pending mobile callback can be resumed", async () => {
@@ -114,19 +114,19 @@ describe("bridge resume helpers", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString()
     });
     window.sessionStorage.setItem(
-      NOVA_CALLBACK_MARKER_STORAGE_KEY,
+      INFER_CALLBACK_MARKER_STORAGE_KEY,
       JSON.stringify({
         requestId: "pairing-123",
         status: "approved"
       })
     );
     const walletCore = {
-      wallets: [{ name: NOVA_CONNECT_NAME }],
+      wallets: [{ name: INFER_CONNECT_NAME }],
       connect: vi.fn().mockResolvedValue(undefined)
     };
 
-    await expect(tryResumeNovaWalletConnection(walletCore)).resolves.toBe(true);
-    expect(walletCore.connect).toHaveBeenCalledWith(NOVA_CONNECT_NAME);
+    await expect(tryResumeInferWalletConnection(walletCore)).resolves.toBe(true);
+    expect(walletCore.connect).toHaveBeenCalledWith(INFER_CONNECT_NAME);
   });
 
   it("stores callback sessions, notifies the opener, and strips callback params", async () => {
@@ -155,7 +155,7 @@ describe("bridge resume helpers", () => {
     });
     expect(opener.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "inferenco:nova-session-ready",
+        type: "inferenco:infer-session-ready",
         session: expect.objectContaining({ sessionId: "session-123" })
       }),
       window.location.origin
@@ -179,8 +179,8 @@ describe("bridge resume helpers", () => {
     storeCallbackSession();
     await vi.advanceTimersByTimeAsync(200);
 
-    expect(document.getElementById("inferenco-nova-callback-overlay")?.textContent).toContain(
-      "Nova Connect is complete"
+    expect(document.getElementById("inferenco-infer-callback-overlay")?.textContent).toContain(
+      "Infer Connect is complete"
     );
     vi.useRealTimers();
   });
@@ -298,7 +298,7 @@ describe("bridge resume helpers", () => {
   it("storage event with newValue=null triggers the disconnect dispatcher", async () => {
     _resetExternalSessionResumeListenersForTesting();
     const customEventListener = vi.fn();
-    window.addEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
+    window.addEventListener(INFER_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
 
     installExternalSessionResumeListeners();
 
@@ -311,26 +311,26 @@ describe("bridge resume helpers", () => {
     );
 
     expect(customEventListener).toHaveBeenCalled();
-    window.removeEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
+    window.removeEventListener(INFER_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
   });
 
   it("BroadcastChannel disconnect message triggers the disconnect dispatcher", async () => {
     _resetExternalSessionResumeListenersForTesting();
     const customEventListener = vi.fn();
-    window.addEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
+    window.addEventListener(INFER_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
 
     installExternalSessionResumeListeners();
 
     // The MockBroadcastChannel above records each construction. Find the
     // cleared channel and dispatch on it.
     const cleared = MockBroadcastChannel.instances.find(
-      (instance) => instance.name === NOVA_SESSION_CLEARED_MESSAGE_TYPE
+      (instance) => instance.name === INFER_SESSION_CLEARED_MESSAGE_TYPE
     );
     expect(cleared).toBeDefined();
-    cleared!.dispatch({ type: NOVA_SESSION_CLEARED_MESSAGE_TYPE });
+    cleared!.dispatch({ type: INFER_SESSION_CLEARED_MESSAGE_TYPE });
 
     expect(customEventListener).toHaveBeenCalled();
-    window.removeEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
+    window.removeEventListener(INFER_SESSION_CLEARED_MESSAGE_TYPE, customEventListener);
   });
 
   it("awaitExternalDisconnect resolves after notifyExternalDisconnect fires", async () => {

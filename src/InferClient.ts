@@ -45,12 +45,12 @@ import {
   normalizeSignMessageOutput,
   normalizeSignTransactionResult
 } from "./conversion";
-import { DEFAULT_SESSION_LIVENESS_INTERVAL_MS, NOVA_SESSION_CLEARED_MESSAGE_TYPE } from "./constants";
+import { DEFAULT_SESSION_LIVENESS_INTERVAL_MS, INFER_SESSION_CLEARED_MESSAGE_TYPE } from "./constants";
 import {
   isValidTransactionHash,
-  NovaAdapterError,
-  NovaErrorCode,
-  remapNovaError,
+  InferAdapterError,
+  InferErrorCode,
+  remapInferError,
   remapSignAndSubmitError
 } from "./errors";
 import { buildDeeplinkUrl } from "./deeplink";
@@ -63,18 +63,18 @@ import {
 } from "./mobileRelay";
 import { detectProvider } from "./provider";
 import type {
-  NovaExternalAccountInput,
-  NovaExternalSignTransactionInput,
-  NovaSignMessageResponse,
-  NovaExternalSession,
-  NovaProvider,
-  NovaRawTransactionSignInput,
-  NovaSignTransactionResult,
-  NovaTransactionPayload,
-  NovaWalletOptions
+  InferExternalAccountInput,
+  InferExternalSignTransactionInput,
+  InferSignMessageResponse,
+  InferExternalSession,
+  InferProvider,
+  InferRawTransactionSignInput,
+  InferSignTransactionResult,
+  InferTransactionPayload,
+  InferWalletOptions
 } from "./types";
 
-type NovaClientEvents = {
+type InferClientEvents = {
   accountChange: [AccountInfo];
   networkChange: [NetworkInfo];
   /**
@@ -83,7 +83,7 @@ type NovaClientEvents = {
    * a peer tab cleared the localStorage entry, the wallet revoked
    * the session from its dashboard (detected via opt-in heartbeat
    * or the next user-initiated `connect()`), or the embedded
-   * provider was pushed a disconnect via `__novaDeskHostUpdate`.
+   * provider was pushed a disconnect via `__inferDeskHostUpdate`.
    *
    * Subscribers should drop any cached account/network state and
    * route the user back through the connect flow.
@@ -143,7 +143,7 @@ function publicKeyToString(value: unknown): string | undefined {
   return undefined;
 }
 
-function normalizeExternalAccountInput(input: unknown): NovaExternalAccountInput | undefined {
+function normalizeExternalAccountInput(input: unknown): InferExternalAccountInput | undefined {
   const address = addressToString(input);
   if (!address) return undefined;
 
@@ -173,14 +173,14 @@ function toJsonCompatibleValue(value: unknown): unknown {
 function normalizeWalletStandardSignTransactionInput(
   transaction: CedraSignTransactionInputV1_1,
   options?: unknown
-): NovaExternalSignTransactionInput {
+): InferExternalSignTransactionInput {
   const input: Record<string, unknown> = { ...transaction };
   const sender = normalizeExternalAccountInput(transaction.sender);
   const signerAddress = addressToString(transaction.signerAddress);
   const feePayer = normalizeExternalAccountInput(transaction.feePayer);
   const secondarySigners = transaction.secondarySigners
     ?.map(normalizeExternalAccountInput)
-    .filter((account): account is NovaExternalAccountInput => !!account);
+    .filter((account): account is InferExternalAccountInput => !!account);
 
   if (sender) input.sender = sender.address;
   if (signerAddress) input.signerAddress = signerAddress;
@@ -194,15 +194,15 @@ function normalizeWalletStandardSignTransactionInput(
   }
   if (options !== undefined) input.options = options;
 
-  return toJsonCompatibleValue(input) as NovaExternalSignTransactionInput;
+  return toJsonCompatibleValue(input) as InferExternalSignTransactionInput;
 }
 
 function normalizeSdkRawTransactionInput(
   transaction: AnyRawTransaction,
   options?: unknown
-): NovaRawTransactionSignInput {
+): InferRawTransactionSignInput {
   const rawTransactionBcsHex = transaction.toString();
-  const input: NovaRawTransactionSignInput = {
+  const input: InferRawTransactionSignInput = {
     rawTransactionBcsHex,
     bcsHex: rawTransactionBcsHex
   };
@@ -225,9 +225,9 @@ function normalizeSdkRawTransactionInput(
 }
 
 function toExternalSignTransactionInput(
-  transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
+  transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
   options?: unknown
-): NovaExternalSignTransactionInput {
+): InferExternalSignTransactionInput {
   if (isWalletStandardSignTransactionInput(transaction)) {
     return normalizeWalletStandardSignTransactionInput(transaction, options);
   }
@@ -236,9 +236,9 @@ function toExternalSignTransactionInput(
     return normalizeSdkRawTransactionInput(transaction, options);
   }
 
-  throw new NovaAdapterError(
-    NovaErrorCode.Unsupported,
-    "Nova external signTransaction requires a wallet-standard v1.1 payload or prebuilt SDK transaction"
+  throw new InferAdapterError(
+    InferErrorCode.Unsupported,
+    "Infer external signTransaction requires a wallet-standard v1.1 payload or prebuilt SDK transaction"
   );
 }
 
@@ -275,7 +275,7 @@ function snapshotProviderRecord(
     }
     return snapshot;
   } catch (error) {
-    throw new NovaAdapterError(NovaErrorCode.InternalError, malformedMessage, error);
+    throw new InferAdapterError(InferErrorCode.InternalError, malformedMessage, error);
   }
 }
 
@@ -289,19 +289,19 @@ function normalizeSignAndSubmitProviderResult(
 ): CedraSignAndSubmitTransactionOutput {
   const record = snapshotProviderRecord(
     value,
-    "Nova provider returned an unreadable transaction result"
+    "Infer provider returned an unreadable transaction result"
   );
   if (!record) {
-    throw new NovaAdapterError(
-      NovaErrorCode.InternalError,
-      "Nova provider returned a malformed transaction result"
+    throw new InferAdapterError(
+      InferErrorCode.InternalError,
+      "Infer provider returned a malformed transaction result"
     );
   }
 
   if (Object.prototype.hasOwnProperty.call(record, "status")) {
     if (record.status === "Rejected" && hasExactKeys(record, ["status"])) {
-      throw new NovaAdapterError(
-        NovaErrorCode.UserRejected,
+      throw new InferAdapterError(
+        InferErrorCode.UserRejected,
         "User rejected the transaction request"
       );
     }
@@ -312,16 +312,16 @@ function normalizeSignAndSubmitProviderResult(
     ) {
       const args = snapshotProviderRecord(
         record.args,
-        "Nova provider returned unreadable approved transaction arguments"
+        "Infer provider returned unreadable approved transaction arguments"
       );
       if (args && hasExactKeys(args, ["hash"]) && isValidTransactionHash(args.hash)) {
         return { hash: args.hash };
       }
     }
 
-    throw new NovaAdapterError(
-      NovaErrorCode.InternalError,
-      "Nova provider returned an ambiguous transaction status"
+    throw new InferAdapterError(
+      InferErrorCode.InternalError,
+      "Infer provider returned an ambiguous transaction status"
     );
   }
 
@@ -329,9 +329,9 @@ function normalizeSignAndSubmitProviderResult(
     return { hash: record.hash };
   }
 
-  throw new NovaAdapterError(
-    NovaErrorCode.InternalError,
-    "Nova provider returned a malformed transaction result"
+  throw new InferAdapterError(
+    InferErrorCode.InternalError,
+    "Infer provider returned a malformed transaction result"
   );
 }
 
@@ -340,7 +340,7 @@ const DESKTOP_BRIDGE_RETRY_DELAY_MS = 250;
 const DESKTOP_BRIDGE_RETRY_CONNECT_TIMEOUT_MS = 1_000;
 
 async function retryLocalBridgeConnectAfterDeeplink(
-  options: NovaWalletOptions
+  options: InferWalletOptions
 ): Promise<AccountInfo | null> {
   const deadline = Date.now() + DESKTOP_BRIDGE_RETRY_WINDOW_MS;
 
@@ -365,15 +365,15 @@ async function retryLocalBridgeConnectAfterDeeplink(
  * responds with `approved` or `rejected`, or the bridge poll
  * deadline (`DEFAULT_BRIDGE_POLL_TIMEOUT_MS = 120 s`) elapses.
  *
- * Returns the validated `NovaExternalSession` on approval; null
+ * Returns the validated `InferExternalSession` on approval; null
  * on timeout or rejection. Single-shot: the dapp's tab is the
  * only consumer — the wallet invalidates the request_id after
  * the first `Approved` poll.
  */
 async function pollPreauthUntilResolved(
   requestId: string,
-  options: NovaWalletOptions
-): Promise<NovaExternalSession | null> {
+  options: InferWalletOptions
+): Promise<InferExternalSession | null> {
   const deadline = Date.now() + bridgePollTimeoutMs(options);
   while (Date.now() < deadline) {
     const result = await pollPreauthConnect({ requestId, options });
@@ -393,8 +393,8 @@ async function pollPreauthUntilResolved(
   return null;
 }
 
-export class NovaClient extends EventEmitter<NovaClientEvents> {
-  private provider?: NovaProvider;
+export class InferClient extends EventEmitter<InferClientEvents> {
+  private provider?: InferProvider;
   private accountInfo: AccountInfo | null = null;
   private networkInfo: NetworkInfo | null = null;
   /** v0.2.0-rc.8 (Phase 5 UX): opt-in session liveness handle. */
@@ -404,7 +404,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
    * (e.g., storage event in peer tab + direct emit) doesn't double-clear. */
   private disconnectEmitted = false;
 
-  constructor(private readonly options: NovaWalletOptions = {}) {
+  constructor(private readonly options: InferWalletOptions = {}) {
     super();
     installExternalSessionResumeListeners();
     storeCallbackSession();
@@ -422,14 +422,14 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
     if (typeof window === "undefined") return;
 
     // Same-window CustomEvent delivery.
-    window.addEventListener(NOVA_SESSION_CLEARED_MESSAGE_TYPE, () => {
+    window.addEventListener(INFER_SESSION_CLEARED_MESSAGE_TYPE, () => {
       this.handleExternalSessionCleared();
     });
 
     // Cross-tab BroadcastChannel delivery — only relevant for tabs that
     // join after the first one installed its channel listener.
     if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel(NOVA_SESSION_CLEARED_MESSAGE_TYPE);
+      const channel = new BroadcastChannel(INFER_SESSION_CLEARED_MESSAGE_TYPE);
       channel.addEventListener("message", (event) => {
         if (parseDisconnectPayload(event.data)) {
           this.handleExternalSessionCleared();
@@ -469,7 +469,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
 
   /** v0.2.0-rc.8 (Phase 5 UX): opt-in liveness heartbeat. When
    * `options.sessionLivenessIntervalMs > 0`, schedule a periodic
-   * `readValidatedExternalSession` against the local Nova Desk
+   * `readValidatedExternalSession` against the local Infer Desk
    * bridge. A 403/404 response indicates the wallet revoked our
    * session, so we emit the `disconnect` event. */
   private maybeStartSessionLiveness(): void {
@@ -499,7 +499,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
     }
   }
 
-  refreshProvider(): NovaProvider | undefined {
+  refreshProvider(): InferProvider | undefined {
     this.provider = detectProvider(this.options);
     return this.provider;
   }
@@ -521,7 +521,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
   }
 
   private connectResultFromExternalSession(
-    externalSession: NovaExternalSession
+    externalSession: InferExternalSession
   ): { account: AccountInfo; network: NetworkInfo } {
     const account = sessionToAccountInfo(externalSession);
     const network = normalizeNetwork({
@@ -554,7 +554,7 @@ export class NovaClient extends EventEmitter<NovaClientEvents> {
         return this.connectResultFromExternalSession(resumedMobileSession);
       }
 
-      // 0.2.0-rc.7: if Nova Desk redirected us back to the dapp with
+      // 0.2.0-rc.7: if Infer Desk redirected us back to the dapp with
       // the callback URL params (?address=...&sessionId=...&bridgeUrl=...),
       // consume them into localStorage BEFORE trying the local-bridge
       // or deeplink paths. Without this, the page navigation that the
@@ -593,11 +593,11 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         return this.connectResultFromExternalSession(mobileSession);
       }
 
-      // 0.2.0-rc.10 pre-auth flow (Nova Desk 0.6.0-rc.6+). Desktop
+      // 0.2.0-rc.10 pre-auth flow (Infer Desk 0.6.0-rc.6+). Desktop
       // browser path: NO deeplink, NO new tab. The dapp creates a
       // connect request via `POST /preauth-connect`, then polls
       // `GET /preauth-poll/<request_id>` until the user approves
-      // in Nova Desk. Nova Desk auto-shows the approval sheet
+      // in Infer Desk. Infer Desk auto-shows the approval sheet
       // from the bridge queue (no `inferenco://` deeplink needed).
       //
       // v0.2.0-rc.10 removed the `window.location.href = deeplink`
@@ -608,7 +608,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
       if (typeof window !== "undefined" && !isMobileBrowser()) {
         const app =
           (typeof document !== "undefined" && document.title) ||
-          "Nova Desk";
+          "Infer Desk";
         const preauth = await startPreauthConnect({
           origin: window.location.origin,
           app,
@@ -622,9 +622,9 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
           if (session) {
             return this.connectResultFromExternalSession(session);
           }
-          throw new NovaAdapterError(
-            NovaErrorCode.ConnectionTimeout,
-            "Timed out waiting for Nova Desk to approve the pre-auth connect request.",
+          throw new InferAdapterError(
+            InferErrorCode.ConnectionTimeout,
+            "Timed out waiting for Infer Desk to approve the pre-auth connect request.",
           );
         }
 
@@ -632,7 +632,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         // bridge is down). Fall through to the legacy inferenco://
         // deeplink to launch the wallet via the OS handler. This
         // keeps the adapter working against pre-0.6.0-rc.6
-        // wallets and against cold-start cases where Nova Desk
+        // wallets and against cold-start cases where Infer Desk
         // isn't running yet.
       }
 
@@ -670,18 +670,18 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
           return this.connectResultFromExternalSession(handoffSession);
         }
 
-        throw new NovaAdapterError(
-          NovaErrorCode.ConnectionTimeout,
-          "Timed out waiting for Nova Desk to complete the external connection handoff."
+        throw new InferAdapterError(
+          InferErrorCode.ConnectionTimeout,
+          "Timed out waiting for Infer Desk to complete the external connection handoff."
         );
       }
 
-      throw new NovaAdapterError(
-        NovaErrorCode.NotInstalled,
-        `Nova provider not found. Open ${buildDeeplinkUrl(this.options)}`
+      throw new InferAdapterError(
+        InferErrorCode.NotInstalled,
+        `Infer provider not found. Open ${buildDeeplinkUrl(this.options)}`
       );
     } catch (error) {
-      remapNovaError(error);
+      remapInferError(error);
     }
   }
 
@@ -703,9 +703,9 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         return account;
       }
 
-      throw new NovaAdapterError(NovaErrorCode.NotInstalled, "Nova provider account() unavailable");
+      throw new InferAdapterError(InferErrorCode.NotInstalled, "Infer provider account() unavailable");
     } catch (error) {
-      remapNovaError(error);
+      remapInferError(error);
     }
   }
 
@@ -719,7 +719,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         await revokeExternalSession(externalSession, this.options);
       }
     } catch (error) {
-      remapNovaError(error);
+      remapInferError(error);
     } finally {
       clearExternalSession();
       clearPendingMobilePairing();
@@ -754,9 +754,9 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         return network;
       }
 
-      throw new NovaAdapterError(NovaErrorCode.NotInstalled, "Nova provider network() unavailable");
+      throw new InferAdapterError(InferErrorCode.NotInstalled, "Infer provider network() unavailable");
     } catch (error) {
-      remapNovaError(error);
+      remapInferError(error);
     }
   }
 
@@ -764,7 +764,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     try {
       const provider = this.refreshProvider();
       if (provider?.signMessage) {
-        const result = unwrap(await provider.signMessage(input)) as CedraSignMessageOutput | NovaSignMessageResponse;
+        const result = unwrap(await provider.signMessage(input)) as CedraSignMessageOutput | InferSignMessageResponse;
         return normalizeSignMessageOutput(result);
       }
 
@@ -775,9 +775,9 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
           : tryLocalBridgeSignMessage(input, externalSession, this.options);
       }
 
-      throw new NovaAdapterError(NovaErrorCode.Unsupported, "Nova provider signMessage() unavailable");
+      throw new InferAdapterError(InferErrorCode.Unsupported, "Infer provider signMessage() unavailable");
     } catch (error) {
-      remapNovaError(error);
+      remapInferError(error);
     }
   }
 
@@ -802,16 +802,16 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
   }
 
   async signTransaction(
-    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
+    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
     options?: unknown
-  ): Promise<NovaSignTransactionResult> {
+  ): Promise<InferSignTransactionResult> {
     try {
       const provider = this.refreshProvider();
       if (provider?.signTransaction) {
         return normalizeSignTransactionResult(
           unwrap(
             await provider.signTransaction(
-              transaction as AnyRawTransaction | NovaTransactionPayload | CedraSignTransactionInputV1_1,
+              transaction as AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
               options
             )
           )
@@ -826,14 +826,14 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
           : tryLocalBridgeSignTransaction(externalInput, externalSession, this.options);
       }
 
-      throw new NovaAdapterError(NovaErrorCode.Unsupported, "Nova provider signTransaction() unavailable");
+      throw new InferAdapterError(InferErrorCode.Unsupported, "Infer provider signTransaction() unavailable");
     } catch (error) {
-      remapNovaError(error);
+      remapInferError(error);
     }
   }
 
   async signAndSubmitTransaction(
-    transaction: AnyRawTransaction | NovaTransactionPayload | CedraSignAndSubmitTransactionInput,
+    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignAndSubmitTransactionInput,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     try {
@@ -842,13 +842,13 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         let providerResult: unknown;
         try {
           providerResult = await provider.signAndSubmitTransaction(
-            transaction as AnyRawTransaction | NovaTransactionPayload,
+            transaction as AnyRawTransaction | InferTransactionPayload,
             options
           );
         } catch (error) {
-          throw new NovaAdapterError(
-            NovaErrorCode.InternalError,
-            "Nova provider signAndSubmitTransaction() failed",
+          throw new InferAdapterError(
+            InferErrorCode.InternalError,
+            "Infer provider signAndSubmitTransaction() failed",
             error
           );
         }
@@ -870,9 +870,9 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
             );
       }
 
-      throw new NovaAdapterError(
-        NovaErrorCode.Unsupported,
-        "Nova provider signAndSubmitTransaction() unavailable"
+      throw new InferAdapterError(
+        InferErrorCode.Unsupported,
+        "Infer provider signAndSubmitTransaction() unavailable"
       );
     } catch (error) {
       remapSignAndSubmitError(error);
@@ -880,7 +880,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
   }
 
   async signAndSubmitBCSTransaction(
-    transaction: AnyRawTransaction | NovaTransactionPayload,
+    transaction: AnyRawTransaction | InferTransactionPayload,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     return this.signAndSubmitTransaction(transaction, options);
