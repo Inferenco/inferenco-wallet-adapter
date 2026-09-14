@@ -1,7 +1,3 @@
-import {
-  AccountAuthenticator,
-  Deserializer
-} from "@cedra-labs/ts-sdk";
 import type {
   CedraSignAndSubmitTransactionInput,
   CedraSignAndSubmitTransactionOutput,
@@ -20,6 +16,7 @@ import {
   DEFAULT_MOBILE_WEBSOCKET_URL
 } from "./constants";
 import {
+  BridgeHttpError,
   clearCallbackMarker,
   clearPendingMobilePairing,
   fetchJsonWithTimeout,
@@ -38,11 +35,16 @@ import {
 } from "./mobileCrypto";
 import { watchRelaySocket } from "./mobileSocket";
 import {
+  storePendingMobileRelayRequest,
+  readPendingMobileRelayRequests,
+  type PendingMobileRelayRequest
+} from "./mobileRequests";
+import {
   isValidTransactionHash,
   InferAdapterError,
   InferErrorCode
 } from "./errors";
-import { deserializeAnyRawTransaction, ensureBcsToHex } from "./conversion";
+import { deserializeSignTransactionResult } from "./conversion";
 import type {
   InferExternalSignTransactionInput,
   InferExternalSession,
@@ -267,78 +269,100 @@ async function waitForRequestOutcome(
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction",
   session: InferExternalSession,
   options: InferWalletOptions,
-  websocketUrl?: string
+  expiresAt: string
 ): Promise<InferMobileRequestStatus> {
-  const relayBaseUrl = getRelayBaseUrl(options);
-  const deadline = Date.now() + mobileRequestTimeout(options);
-  let socketSignal = false;
-
-  const socket =
-    websocketUrl && session.dappSessionToken
-      ? watchRelaySocket({
-          websocketUrl,
-          role: "dapp",
-          token: session.dappSessionToken,
-          target: { kind: "session", id: session.sessionId },
-          options,
-          onEvent(event) {
-            if (
-              (event.type === "request.approved" || event.type === "request.rejected") &&
-              event.requestId === requestId
-            ) {
-              socketSignal = true;
-            }
-            if (event.type === "session.revoked" || event.type === "session.expired") {
-              socketSignal = true;
-            }
-          }
-        })
-      : null;
+  const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
+  const clientDeadline = Date.now() + mobileRequestTimeout(options);
+  const deadline = Math.min(clientDeadline, Date.parse(expiresAt));
+  let wakePoll: (() => void) | undefined;
+  const wake = () => wakePoll?.();
+  let socket: ReturnType<typeof watchRelaySocket> | null = null;
+  try {
+    socket = watchRelaySocket({
+      websocketUrl: getWebsocketUrl({ ...options, relayBaseUrl })!,
+      role: "dapp",
+      token: session.dappSessionToken!,
+      target: { kind: "session", id: session.sessionId },
+      options,
+      onEvent(event) {
+        if (event.requestId === requestId ||
+            event.type === "session.revoked" || event.type === "session.expired") wake();
+      }
+    });
+  } catch {
+    // HTTP remains authoritative when WebSockets are blocked or unavailable.
+  }
+  window.addEventListener("focus", wake);
+  document.addEventListener("visibilitychange", wake);
 
   try {
-    while (Date.now() < deadline) {
+    // Always reconcile once, including when resuming an already-expired request.
+    do {
       storeCallbackSession();
-      const marker = readCallbackMarker();
-      if (socketSignal || marker?.requestId === requestId || !websocketUrl) {
+      try {
         const status = await fetchJsonWithTimeout<InferMobileRequestStatus>(
-          buildRelayUrl(relayBaseUrl, `/v1/requests/${requestId}`),
-          mobileRequestTimeout(options),
-          {
-            headers: {
-              // v0.3.0 (rebrand): canonical session-token header for the
-              // rebranded relay. nova-service (mobile relay backend) currently
-              // recognises the legacy header; the canonical name is the
-              // post-rebrand contract. Send BOTH during the transition; remove
-              // the legacy one in 0.4.0.
-              "x-infer-session-token": session.dappSessionToken ?? "",
-              "x-nova-session-token": session.dappSessionToken ?? ""
-            }
-          }
+          buildRelayUrl(relayBaseUrl, "/v1/requests/" + encodeURIComponent(requestId)),
+          Math.max(1, Math.min(10_000, clientDeadline - Date.now())),
+          { headers: { "x-infer-session-token": session.dappSessionToken! } }
         );
-        if (
-          status.requestId !== requestId ||
-          status.sessionId !== session.sessionId ||
-          status.method !== method
-        ) {
-          throw new InferAdapterError(
-            InferErrorCode.InternalError,
-            "Infer Connect returned a result for a different request"
-          );
+        if (!status || status.requestId !== requestId ||
+            status.sessionId !== session.sessionId || status.method !== method) {
+          throw new InferAdapterError(InferErrorCode.InternalError,
+            "Infer Connect returned a result for a different request");
         }
         if (isFinalStatus(status.status)) {
           clearCallbackMarker();
           return status;
         }
-        socketSignal = false;
+        if (status.status !== "pending") {
+          throw new InferAdapterError(InferErrorCode.InternalError, "Unknown relay request status");
+        }
+      } catch (error) {
+        // Retry reads only. Never repeat request creation after an ambiguous failure.
+        const retryable = error instanceof TypeError ||
+          (error instanceof DOMException && error.name === "AbortError") ||
+          (error instanceof BridgeHttpError && (error.status === 429 || error.status >= 500));
+        if (!retryable) throw error;
       }
-
-      await new Promise((resolve) => window.setTimeout(resolve, mobilePollInterval(options)));
-    }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          window.clearTimeout(timer);
+          wakePoll = undefined;
+          resolve();
+        };
+        const timer = window.setTimeout(finish, Math.min(mobilePollInterval(options), remaining));
+        wakePoll = finish;
+      });
+    } while (Date.now() < deadline);
   } finally {
+    wakePoll?.();
+    window.removeEventListener("focus", wake);
+    document.removeEventListener("visibilitychange", wake);
     socket?.close();
   }
+  throw new InferAdapterError(InferErrorCode.ConnectionTimeout,
+    "Relay outcome is unknown; recover the existing request before trying again");
+}
 
-  throw new InferAdapterError(InferErrorCode.ConnectionTimeout, "Timed out waiting for Infer Wallet approval");
+/** Read the original request after reload; never creates a request or opens the wallet. */
+export async function resumeMobileRelayRequest(
+  requestId: string,
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
+): Promise<InferMobileRequestStatus> {
+  if (!session.dappSessionToken || !session.sharedSecret) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Missing relay session for recovery");
+  }
+  const pending = readPendingMobileRelayRequests(session).find((item) => item.requestId === requestId);
+  const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
+  if (!pending || pending.relayBaseUrl !== relayBaseUrl) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Request does not belong to this relay session");
+  }
+  // Return the authenticated status/ciphertext for the dapp's existing durable journal.
+  // The caller acknowledges with clearPendingMobileRelayRequest after recording it.
+  return waitForRequestOutcome(requestId, pending.method, session, options, pending.expiresAt);
 }
 
 export async function connectViaMobileRelay(options: InferWalletOptions = {}): Promise<InferExternalSession> {
@@ -424,14 +448,28 @@ async function startRequest(
     }
   );
 
-  launch(response.walletDeeplinkUrl);
-  return waitForRequestOutcome(
-    response.requestId,
+  if (typeof response.requestId !== "string" || !response.requestId ||
+      typeof response.expiresAt !== "string" || !Number.isFinite(Date.parse(response.expiresAt))) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Invalid relay request receipt");
+  }
+  const pending: PendingMobileRelayRequest = {
+    version: 1,
+    requestId: response.requestId,
+    sessionId: session.sessionId,
+    address: session.address,
+    network: session.network,
+    chainId: session.chainId,
+    relayBaseUrl,
     method,
-    session,
-    options,
-    getWebsocketUrl(options)
-  );
+    expiresAt: response.expiresAt,
+    ...(method === "signTransaction" && payload && typeof payload === "object" &&
+        "rawTransactionBcsHex" in payload && typeof payload.rawTransactionBcsHex === "string"
+      ? { expectedTransactionBcsHex: payload.rawTransactionBcsHex } : {})
+  };
+  storePendingMobileRelayRequest(pending);
+  await options.onMobileRequestCreated?.(Object.freeze({ ...pending }));
+  if (Date.parse(response.expiresAt) > Date.now()) launch(response.walletDeeplinkUrl);
+  return waitForRequestOutcome(response.requestId, method, session, options, response.expiresAt);
 }
 
 export async function signMessageViaMobileRelay(
@@ -443,7 +481,8 @@ export async function signMessageViaMobileRelay(
   if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
     throwForStatus(status.status, status.errorMessage);
   }
-  return decryptJson<CedraSignMessageOutput>(status.encryptedResult, session.sharedSecret);
+  const result = decryptJson<CedraSignMessageOutput>(status.encryptedResult, session.sharedSecret);
+  return result;
 }
 
 export async function signTransactionViaMobileRelay(
@@ -452,19 +491,17 @@ export async function signTransactionViaMobileRelay(
   options: InferWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string }> {
   const status = await startRequest("signTransaction", input, session, options);
-  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
-    throwForStatus(status.status, status.errorMessage);
+  if (isCleanMobileTransactionRejection(status)) {
+    throw new InferAdapterError(InferErrorCode.UserRejected, "User rejected the transaction request");
   }
-  const result = decryptJson<{
-    authenticatorHex: string;
-    rawTransactionBcsHex: string;
-  }>(status.encryptedResult, session.sharedSecret);
-  return {
-    authenticator: ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(result.authenticatorHex))),
-    rawTransaction: deserializeAnyRawTransaction(result.rawTransactionBcsHex),
-    authenticatorHex: result.authenticatorHex,
-    rawTransactionBcsHex: result.rawTransactionBcsHex
-  };
+  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Infer Connect returned an ambiguous signing result");
+  }
+  const result = deserializeSignTransactionResult(
+    decryptJson<unknown>(status.encryptedResult, session.sharedSecret),
+    "rawTransactionBcsHex" in input ? input.rawTransactionBcsHex : undefined
+  );
+  return result;
 }
 
 const MOBILE_REJECTION_ALLOWED_KEYS = new Set([
@@ -506,7 +543,7 @@ function isCleanRequestMetadata(value: unknown): boolean {
   );
 }
 
-function isCleanMobileSignAndSubmitRejection(status: InferMobileRequestStatus): boolean {
+function isCleanMobileTransactionRejection(status: InferMobileRequestStatus): boolean {
   if (status.status !== "rejected") return false;
   const record = status as unknown as Record<string, unknown>;
   if (!Object.keys(record).every((key) => MOBILE_REJECTION_ALLOWED_KEYS.has(key))) {
@@ -537,7 +574,7 @@ export async function signAndSubmitViaMobileRelay(
   options: InferWalletOptions = {}
 ): Promise<CedraSignAndSubmitTransactionOutput> {
   const status = await startRequest("signAndSubmitTransaction", input, session, options);
-  if (isCleanMobileSignAndSubmitRejection(status)) {
+  if (isCleanMobileTransactionRejection(status)) {
     throw new InferAdapterError(
       InferErrorCode.UserRejected,
       "User rejected the transaction request"
@@ -579,12 +616,7 @@ export async function revokeMobileRelaySession(
     {
       method: "DELETE",
       headers: {
-        // v0.3.0 (rebrand): dual-write both the canonical
-        // `x-infer-session-token` and the legacy `x-nova-session-token` header
-        // during the transition window (see also `pollMobileRequestStatus`
-        // above). Remove the legacy one in 0.4.0.
-        "x-infer-session-token": session.dappSessionToken,
-        "x-nova-session-token": session.dappSessionToken
+        "x-infer-session-token": session.dappSessionToken
       }
     }
   );

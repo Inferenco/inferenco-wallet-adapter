@@ -1,6 +1,4 @@
 import {
-  AccountAuthenticator,
-  Deserializer,
   Network
 } from "@cedra-labs/ts-sdk";
 import {
@@ -69,7 +67,7 @@ import {
 import { BRIDGE_TOKEN_PATH_REGEX } from "./bridge/token.js";
 import { forceRefreshBridgeToken } from "./bridge/token.js";
 import { bridgePathWithToken, bridgeUrlWithToken, getBridgeBaseUrlWithToken } from "./bridge/url.js";
-import { deserializeAnyRawTransaction, ensureBcsToHex, normalizeProviderAccount } from "./conversion";
+import { deserializeSignTransactionResult, normalizeProviderAccount } from "./conversion";
 
 type InferPendingMobilePairing = {
   pairingId: string;
@@ -1235,7 +1233,7 @@ export async function revokeExternalSession(
       {
         method: "DELETE",
         headers: {
-          "x-nova-session-token": session.dappSessionToken
+          "x-infer-session-token": session.dappSessionToken
         }
       }
     );
@@ -1758,7 +1756,8 @@ function normalizeBridgeSignMessageOutput(payload: InferBridgeMessagePoll): Cedr
 }
 
 function normalizeBridgeSignTransactionOutput(
-  payload: InferBridgeSignTransactionPoll
+  payload: InferBridgeSignTransactionPoll,
+  expectedBcsHex?: string
 ): CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string } {
   const rawTransactionBcsHex = payload.rawTransactionBcsHex ?? payload.raw_transaction_bcs_hex;
   
@@ -1773,12 +1772,7 @@ function normalizeBridgeSignTransactionOutput(
     throw new Error("Infer Desk bridge returned an incomplete signTransaction payload");
   }
 
-  return {
-    authenticator: ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(authenticatorHex))),
-    rawTransaction: deserializeAnyRawTransaction(rawTransactionBcsHex),
-    authenticatorHex,
-    rawTransactionBcsHex
-  };
+  return deserializeSignTransactionResult({ authenticatorHex, rawTransactionBcsHex }, expectedBcsHex);
 }
 
 async function startBridgeRequest<T>(
@@ -1927,8 +1921,20 @@ export async function tryLocalBridgeSignTransaction(
       reconnectSigningError()
     );
 
-    if (payload.status === "approved") return normalizeBridgeSignTransactionOutput(payload);
-    throw new Error(payload.error ?? "Infer Desk rejected the signTransaction request");
+    if ("requestId" in payload && payload.requestId !== requestId) {
+      throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned a different signing request");
+    }
+    if (payload.status === "approved") {
+      return normalizeBridgeSignTransactionOutput(
+        payload, "rawTransactionBcsHex" in input ? input.rawTransactionBcsHex : undefined
+      );
+    }
+    if (payload.status === "rejected" &&
+        hasOnlyKeys(payload, ["status", "requestId", "error"]) &&
+        (payload.error === undefined || typeof payload.error === "string")) {
+      throw new InferAdapterError(InferErrorCode.UserRejected, "User rejected the transaction request");
+    }
+    throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned an ambiguous signing result");
   } catch (error) {
     cancelPendingRequest(
       requestId,

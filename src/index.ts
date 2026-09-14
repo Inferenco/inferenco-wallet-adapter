@@ -26,4 +26,6 @@ export * from "./aip62";
 export { isHostedInInferDesk } from "./hosted";
 export * from "./mobileCrypto";
 export * from "./mobileRelay";
+export { readPendingMobileRelayRequests, clearPendingMobileRelayRequest } from "./mobileRequests";
+export type { PendingMobileRelayRequest } from "./mobileRequests";
 export * from "./mobileSocket";

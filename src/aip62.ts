@@ -146,22 +146,29 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
     "cedra:signTransaction": {
       version: "1.1",
       signTransaction: (async (input: CedraSignTransactionInputV1_1 | AnyRawTransaction) => {
-        const result = await client.signTransaction(input);
-        if (result instanceof Uint8Array) {
-          throw new Error("Infer signTransaction returned bytes instead of an authenticator");
-        }
-        if (result && typeof result === "object" && "authenticator" in result) {
+        try {
+          const result = await client.signTransaction(input);
+          if (result instanceof Uint8Array) {
+            throw new Error("Infer signTransaction returned bytes instead of an authenticator");
+          }
+          if (result && typeof result === "object" && "authenticator" in result) {
+            return {
+              status: UserResponseStatus.APPROVED,
+              args: "rawTransaction" in result && result.rawTransaction
+                ? result
+                : result.authenticator
+            };
+          }
           return {
             status: UserResponseStatus.APPROVED,
-            args: "rawTransaction" in result && result.rawTransaction
-              ? result
-              : result.authenticator
+            args: result
           };
+        } catch (error) {
+          if (error instanceof InferAdapterError && error.code === InferErrorCode.UserRejected) {
+            return { status: UserResponseStatus.REJECTED };
+          }
+          throw error;
         }
-        return {
-          status: UserResponseStatus.APPROVED,
-          args: result
-        };
       }) as CedraSignTransactionMethod & CedraSignTransactionMethodV1_1
     },
     "cedra:signAndSubmitTransaction": {

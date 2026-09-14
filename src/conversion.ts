@@ -38,11 +38,56 @@ export function toUint8Array(input: string | Uint8Array): Uint8Array {
   return new Uint8Array(hex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? []);
 }
 
-function tryDeserializeFinished<T>(
+function strictBcsBytes(hex: string): Uint8Array {
+  if (typeof hex !== "string" || !/^(?:0x)?(?:[0-9a-fA-F]{2})+$/.test(hex)) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Invalid transaction BCS hex");
+  }
+  return toUint8Array(hex);
+}
+
+export function deserializeAccountAuthenticator(hex: string): AccountAuthenticator {
+  const result = tryDeserializeFinished(hex, (deserializer) => AccountAuthenticator.deserialize(deserializer));
+  if (!result) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Invalid or noncanonical authenticator BCS");
+  }
+  return ensureBcsToHex(result);
+}
+
+/** Hydrate the JSON signing boundary and bind a prebuilt request to the returned bytes. */
+export function deserializeSignTransactionResult(result: unknown, expectedBcsHex?: string) {
+  const fields = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const authenticatorHex = stringField(result, "authenticatorHex") ??
+    (fields.authenticator instanceof AccountAuthenticator ? fields.authenticator.toString() : undefined);
+  const raw = fields.rawTransaction;
+  const rawTransactionBcsHex = stringField(result, "rawTransactionBcsHex") ??
+    (raw instanceof SimpleTransaction || raw instanceof MultiAgentTransaction || raw instanceof RawTransaction
+      ? raw.toString() : undefined);
+  if (!authenticatorHex || !rawTransactionBcsHex) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Missing signed transaction BCS fields");
+  }
+  const authenticator = deserializeAccountAuthenticator(authenticatorHex);
+  const rawTransaction = deserializeAnyRawTransaction(rawTransactionBcsHex);
+  if (expectedBcsHex !== undefined) {
+    const expected = strictBcsBytes(expectedBcsHex);
+    const returned = strictBcsBytes(rawTransactionBcsHex);
+    if (expected.length !== returned.length || expected.some((byte, i) => byte !== returned[i])) {
+      throw new InferAdapterError(InferErrorCode.InternalError, "Wallet changed the prebuilt transaction");
+    }
+  }
+  return { authenticator, rawTransaction, authenticatorHex, rawTransactionBcsHex };
+}
+
+function tryDeserializeFinished<T extends { bcsToBytes(): Uint8Array }>(
   hex: string,
   deserialize: (deserializer: Deserializer) => T
 ): T | null {
-  return tryDeserializeBytesFinished(toUint8Array(hex), deserialize);
+  const bytes = strictBcsBytes(hex);
+  const value = tryDeserializeBytesFinished(bytes, deserialize);
+  if (value) {
+    const canonical = value.bcsToBytes();
+    if (canonical.length !== bytes.length || canonical.some((byte, i) => byte !== bytes[i])) return null;
+  }
+  return value;
 }
 
 function tryDeserializeBytesFinished<T>(
@@ -75,7 +120,7 @@ export function deserializeAnyRawTransaction(hex: string): AnyRawTransaction {
   );
   if (rawTransaction) return new SimpleTransaction(rawTransaction);
 
-  throw new Error("Unable to deserialize signed raw transaction payload");
+  throw new InferAdapterError(InferErrorCode.InternalError, "Unable to deserialize signed raw transaction payload");
 }
 
 export function ensureBcsToHex<T extends { toString: () => string }>(
@@ -100,7 +145,7 @@ function stringField(value: unknown, key: string): string | undefined {
 function normalizeAuthenticator(value: unknown, hex?: string): AccountAuthenticator | undefined {
   const nestedHex = stringField(value, "hex");
   if (hex || nestedHex) {
-    return ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(hex ?? nestedHex!)));
+    return deserializeAccountAuthenticator(hex ?? nestedHex!);
   }
   if (
     value &&

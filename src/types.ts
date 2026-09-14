@@ -1,3 +1,4 @@
+import type { PendingMobileRelayRequest } from "./mobileRequests";
 import type {
   AccountAuthenticator,
   AccountAddressInput,
@@ -64,6 +65,9 @@ export interface InferSignMessageResponse {
 }
 
 export interface InferWalletOptions {
+  /** Persist the action/request association before wallet launch. Does not authorize a retry. */
+  onMobileRequestCreated?: (request: Readonly<PendingMobileRelayRequest>) => void | Promise<void>;
+
   deeplinkBaseUrl?: string;
   deeplinkScheme?: string;
   websiteUrl?: string;
@@ -325,6 +329,12 @@ export type InferSignAndSubmitProviderResponse =
       status: "Rejected";
     };
 
+/** JSON-safe signing output for injected and relay transports. */
+export interface InferSerializedSignTransactionResult {
+  authenticatorHex: string;
+  rawTransactionBcsHex: string;
+}
+
 export interface InferSignedTransactionWithAuthenticator {
   authenticator: AccountAuthenticator;
   rawTransaction?: Uint8Array | AnyRawTransaction;
@@ -379,9 +389,9 @@ export interface InferProvider {
     input: CedraSignMessageInput | SignMessagePayload
   ) => Promise<CedraSignMessageOutput | InferSignMessageResponse | InferProviderResponse<CedraSignMessageOutput | InferSignMessageResponse>>;
   signTransaction?: (
-    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
+    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1 | InferExternalSignTransactionInput,
     options?: unknown
-  ) => Promise<AccountAuthenticator | Uint8Array | InferSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1 | InferProviderResponse<AccountAuthenticator | Uint8Array | InferSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1>>;
+  ) => Promise<InferSerializedSignTransactionResult | AccountAuthenticator | Uint8Array | InferSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1 | InferProviderResponse<InferSerializedSignTransactionResult | AccountAuthenticator | Uint8Array | InferSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1>>;
   signAndSubmitTransaction?: (
     transaction: AnyRawTransaction | InferTransactionPayload,
     options?: unknown
