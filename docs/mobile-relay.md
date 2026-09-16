@@ -1,13 +1,13 @@
 # Mobile Relay Protocol
 
-This document describes the end-to-end encrypted mobile relay protocol used by `@inferenco/nova-wallet-adapter` for connecting mobile browsers to Nova Wallet via the hosted nova-service relay.
+This document describes the end-to-end encrypted mobile relay protocol used by `@inferenco/infer-wallet-adapter` for connecting mobile browsers to Infer Wallet via the hosted Infer Service relay.
 
 ## Overview
 
-When the adapter detects a mobile browser, it uses a hosted relay service (nova-service) to bridge communication between the dApp and the Nova Wallet mobile app. All request and response payloads are end-to-end encrypted &mdash; the relay server never sees plaintext data.
+When the adapter detects a mobile browser, it uses a hosted relay service (Infer Service) to bridge communication between the dApp and the Infer Wallet mobile app. All request and response payloads are end-to-end encrypted &mdash; the relay server never sees plaintext data.
 
 ```
-Mobile Browser (dApp)         nova-service (relay)         Nova Wallet App
+Mobile Browser (dApp)         nova-service (relay)         Infer Wallet App
       │                            │                            │
       │◄── E2E Encrypted ────────►│◄── E2E Encrypted ────────►│
       │                            │                            │
@@ -54,14 +54,14 @@ import { sha256 } from "@noble/hashes/sha256";
 const rawSharedSecret = x25519.getSharedSecret(dappPrivateKey, walletPublicKey);
 
 // HKDF: derive a 32-byte encryption key
-const encryptionKey = hkdf(sha256, rawSharedSecret, undefined, "nova-connect-relay", 32);
+const encryptionKey = hkdf(sha256, rawSharedSecret, undefined, "infer-connect-relay", 32);
 ```
 
 **HKDF parameters:**
 - Hash: SHA-256
 - IKM (input keying material): raw X25519 shared secret
 - Salt: `undefined` (empty)
-- Info: `"nova-connect-relay"` (context string)
+- Info: `"infer-connect-relay"` (context string)
 - Output length: 32 bytes
 
 ## Encryption
@@ -157,7 +157,7 @@ Content-Type: application/json
 
 ### Step 2: Launch Deeplink
 
-The adapter opens the `walletDeeplinkUrl` to hand off to the Nova Wallet mobile app:
+The adapter opens the `walletDeeplinkUrl` to hand off to the Infer Wallet mobile app:
 
 ```
 inferenco://connect?pairingId={id}&walletClaimToken={token}&callbackUrl={url}&dappPublicKey={key}
@@ -165,7 +165,7 @@ inferenco://connect?pairingId={id}&walletClaimToken={token}&callbackUrl={url}&da
 
 ### Step 3: Wallet Claims and Approves
 
-In the Nova Wallet app:
+In the Infer Wallet app:
 1. Wallet claims the pairing with its claim token
 2. Wallet generates its own X25519 keypair
 3. Wallet derives the shared secret using `dappPublicKey`
@@ -215,10 +215,10 @@ After a session is established, signing requests use the same encryption:
 ```
 POST /v1/requests
 Content-Type: application/json
-X-Dapp-Session-Token: {dappSessionToken}
 
 {
   "sessionId": "session-uuid",
+  "dappSessionToken": "<session-token>",
   "method": "signMessage",
   "encryptedRequest": "<base64url-encoded encrypted JSON>",
   "callbackUrl": "https://your-dapp.com/current-page",
@@ -256,7 +256,7 @@ Open `walletDeeplinkUrl` for the user to approve in the wallet app.
 
 ```
 GET /v1/requests/{requestId}
-X-Dapp-Session-Token: {dappSessionToken}
+x-infer-session-token: {dappSessionToken}
 ```
 
 **WebSocket:**
@@ -276,6 +276,59 @@ pending → approved
 ### Step 4: Decrypt Result
 
 Decrypt `encryptedResult` with the session's shared secret to get the signing result.
+
+## Transaction contract and recovery
+
+Request polling and session deletion send only `x-infer-session-token`.
+The removed Nova header is not sent. Deploy the matching Infer Service header
+and CORS change before testing this adapter against the hosted relay.
+
+For prebuilt `SimpleTransaction` and `MultiAgentTransaction` input, Infer Connect
+sends compact `rawTransactionBcsHex`/`bcsHex` through both external transports
+and the injected provider. Returned `authenticatorHex` and
+`rawTransactionBcsHex` are strictly decoded: invalid hex, trailing bytes and
+noncanonical BCS fail. A prebuilt request requires byte-for-byte equality with
+the original transaction, including signer/fee-payer metadata. Real SDK result
+objects remain supported for in-process providers; plain JSON objects without
+canonical BCS do not substitute for them.
+
+`cedra:signTransaction` remains version `1.1` and returns the full
+`{ authenticator, rawTransaction }` result. Sign-only never invokes submission.
+Only a validated structured rejection becomes `USER_REJECTED`; HTTP failures,
+malformed signing output and mixed rejection/signature material remain errors.
+
+Before opening the wallet, each created request is saved in same-origin,
+same-tab `sessionStorage` with its ID, method, original relay/session/account/
+network and expiry. Sign-only handles also retain the original public transaction
+BCS for exact comparison during recovery. Handles contain no session token,
+encryption key or signature. They survive page reload; they do not survive
+closing the tab or clearing browser storage.
+
+Set `onMobileRequestCreated` in `InferWalletOptions` to durably associate your
+application action with the returned request ID before wallet launch. The adapter
+awaits this callback; a failure leaves the handle for reconciliation and does not
+open approval. This also lets concurrent actions track their own request IDs.
+
+The public recovery APIs are:
+
+- `readPendingMobileRelayRequests(session)`: enumerate unacknowledged requests
+  belonging to the original account, network and session.
+- `resumeMobileRelayRequest(requestId, session, options)`: GET the existing
+  request, validating its request ID, session and method. It never creates another
+  request, re-signs, submits or opens a deeplink. It returns the relay status and
+  encrypted result, not a blindly accepted transaction result.
+- `clearPendingMobileRelayRequest(requestId)`: acknowledge only after the dapp
+  durably records the outcome in its transaction journal.
+
+Successful normal calls also retain their handles until acknowledgement, closing
+the reload gap between receiving a result and recording it. For a recovered
+approval, decrypt with the original session secret; validate the method-specific
+result (including `deserializeSignTransactionResult(result,
+pending.expectedTransactionBcsHex)` for sign-only or the canonical hash for
+sign-and-submit) and reconcile chain status before acknowledging. Existing dapps
+must wire this recovery/acknowledgement into their journal; the adapter cannot
+decide whether an application action is safe to repeat. Lost creation responses
+have no known request ID and remain ambiguous; they are never resubmitted here.
 
 ## WebSocket Protocol
 
@@ -314,13 +367,21 @@ wss://nova-service-.../v1/ws
 
 ### Timeout
 
-The adapter waits for WebSocket responses with a configurable timeout (default: 15 seconds). If no response arrives, it falls back to HTTP polling.
+Transaction requests poll HTTP immediately and then at the configured interval.
+WebSocket events and page focus/visibility changes only wake a pending poll early.
+A missing, silent or failed WebSocket cannot block transaction polling. This does
+not change the separate pairing flow.
+
+Transient network errors, HTTP 429 and 5xx responses retry GET within the request
+deadline. Request creation is never automatically retried. An elapsed timeout is
+an unknown outcome, not proof of rejection or proof that nothing was submitted.
+A final read is allowed after server expiry to recover an already completed result.
 
 ## Persistence Across Page Reloads
 
 Mobile browsers often reload the page when returning from a deeplink. The adapter handles this by persisting state:
 
-1. **Before deeplink launch:** Pending pairing state (keypair, pairingId, tokens) is saved to `localStorage` under `inferenco:nova-pending-mobile-pairing`
+1. **Before deeplink launch:** Pending pairing state (keypair, pairingId, tokens) is saved to `localStorage` under `inferenco:infer-pending-mobile-pairing`
 2. **On page load:** The adapter checks for pending pairings and resumes polling
 3. **Callback parameters:** The wallet may redirect back with URL parameters (`address`, `publicKey`, `protocolPublicKey`, etc.) which are parsed and used to complete the session
 
@@ -344,4 +405,4 @@ Mobile browsers often reload the page when returning from a deeplink. The adapte
 | `mobileRequestTimeoutMs` | `180000` | Total request timeout (3 min) |
 | `mobileSocketTimeoutMs` | `15000` | WebSocket wait timeout (15s) |
 
-All defaults can be overridden via `NovaWalletOptions`.
+All defaults can be overridden via `InferWalletOptions`.

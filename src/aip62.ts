@@ -13,10 +13,10 @@ import {
 } from "@cedra-labs/wallet-standard";
 import { SigningScheme, type AnyRawTransaction } from "@cedra-labs/ts-sdk";
 import {
-  NOVA_CONNECT_NAME,
-  NOVA_WALLET_ICON,
-  NOVA_DESK_NAME,
-  NOVA_WALLET_NAME,
+  INFER_CONNECT_NAME,
+  INFER_WALLET_ICON,
+  INFER_DESK_NAME,
+  INFER_WALLET_NAME,
   DEFAULT_DESKTOP_REGISTRATION,
   DEFAULT_DESKTOP_WEBSITE_URL,
   DEFAULT_MOBILE_WEBSITE_URL,
@@ -24,10 +24,35 @@ import {
 } from "./constants";
 import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
 import { buildDeeplinkUrl } from "./deeplink";
-import { NovaClient } from "./NovaClient";
-import type { NovaWalletOptions } from "./types";
+import { isHostedInInferDesk } from "./hosted";
+import { InferClient } from "./InferClient";
+import { InferAdapterError, InferErrorCode } from "./errors";
+import type { InferWalletOptions } from "./types";
 
-class NovaWalletAccount implements CedraWalletAccount {
+/** v0.2.0-rc.8 (Phase 5 UX): extension to CedraFeatures for the
+ * Infer Connect–specific "cedra:onDisconnect" listener. Modeled after
+ * CedraOnAccountChangeFeature. Defined locally so callers that want
+ * to subscribe to wallet-initiated disconnects through the AIP-62
+ * surface can do so without depending on a future wallet-standard
+ * revision. Dapp code:
+ *
+ *   const wallet = getCedraWallet("Infer Connect");
+ *   if (wallet.features["cedra:onDisconnect"]) {
+ *     await wallet.features["cedra:onDisconnect"].onDisconnect(() => {
+ *       // ...
+ *     });
+ *   }
+ */
+type InferCedraOnDisconnectFeature = {
+  "cedra:onDisconnect": {
+    version: "1.0.0";
+    onDisconnect: (callback: () => void) => Promise<void>;
+  };
+};
+
+type InferCedraFeatures = CedraFeatures & InferCedraOnDisconnectFeature;
+
+class InferWalletAccount implements CedraWalletAccount {
   address: string;
   publicKey: Uint8Array;
   chains = CEDRA_CHAINS;
@@ -50,22 +75,22 @@ class NovaWalletAccount implements CedraWalletAccount {
   }
 }
 
-export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWallet {
-  const client = new NovaClient(options);
-  let accounts: NovaWalletAccount[] = [];
+export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraWallet {
+  const client = new InferClient(options);
+  let accounts: InferWalletAccount[] = [];
 
   const updateAccount = async () => {
     const account = await client.getAccount();
-    accounts = [new NovaWalletAccount(account)];
+    accounts = [new InferWalletAccount(account)];
     return account;
   };
 
-  const features: CedraFeatures = {
+  const features: InferCedraFeatures = {
     "cedra:connect": {
       version: "1.0.0",
       connect: async () => {
         const { account } = await client.connect();
-        accounts = [new NovaWalletAccount(account)];
+        accounts = [new InferWalletAccount(account)];
         return { status: UserResponseStatus.APPROVED, args: account };
       }
     },
@@ -98,6 +123,16 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
         await client.subscribe();
       }
     },
+    // v0.2.0-rc.8 (Phase 5 UX): opted-in listener for wallet-initiated
+    // (or peer-tab-initiated) disconnect events. Modeled after
+    // CedraOnAccountChangeFeature. Subscribers should drop cached state
+    // and wait for a fresh `cedra:connect` to resume.
+    "cedra:onDisconnect": {
+      version: "1.0.0",
+      onDisconnect: async (callback) => {
+        client.on("disconnect", callback);
+      }
+    },
     "cedra:signMessage": {
       version: "1.0.0",
       signMessage: async (input) => {
@@ -111,32 +146,46 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
     "cedra:signTransaction": {
       version: "1.1",
       signTransaction: (async (input: CedraSignTransactionInputV1_1 | AnyRawTransaction) => {
-        const result = await client.signTransaction(input);
-        if (result instanceof Uint8Array) {
-          throw new Error("Nova signTransaction returned bytes instead of an authenticator");
-        }
-        if (result && typeof result === "object" && "authenticator" in result) {
+        try {
+          const result = await client.signTransaction(input);
+          if (result instanceof Uint8Array) {
+            throw new Error("Infer signTransaction returned bytes instead of an authenticator");
+          }
+          if (result && typeof result === "object" && "authenticator" in result) {
+            return {
+              status: UserResponseStatus.APPROVED,
+              args: "rawTransaction" in result && result.rawTransaction
+                ? result
+                : result.authenticator
+            };
+          }
           return {
             status: UserResponseStatus.APPROVED,
-            args: "rawTransaction" in result && result.rawTransaction
-              ? result
-              : result.authenticator
+            args: result
           };
+        } catch (error) {
+          if (error instanceof InferAdapterError && error.code === InferErrorCode.UserRejected) {
+            return { status: UserResponseStatus.REJECTED };
+          }
+          throw error;
         }
-        return {
-          status: UserResponseStatus.APPROVED,
-          args: result
-        };
       }) as CedraSignTransactionMethod & CedraSignTransactionMethodV1_1
     },
     "cedra:signAndSubmitTransaction": {
       version: "1.1.0",
       signAndSubmitTransaction: async (input: CedraSignAndSubmitTransactionInput) => {
-        const result = await client.signAndSubmitTransaction(input);
-        return {
-          status: UserResponseStatus.APPROVED,
-          args: result
-        };
+        try {
+          const result = await client.signAndSubmitTransaction(input);
+          return {
+            status: UserResponseStatus.APPROVED,
+            args: result
+          };
+        } catch (error) {
+          if (error instanceof InferAdapterError && error.code === InferErrorCode.UserRejected) {
+            return { status: UserResponseStatus.REJECTED };
+          }
+          throw error;
+        }
       }
     },
     "cedra:openInMobileApp": {
@@ -151,31 +200,43 @@ export function createNovaAIP62Wallet(options: NovaWalletOptions = {}): CedraWal
 
   return {
     version: "1.0.0",
-    name: NOVA_CONNECT_NAME,
-    icon: NOVA_WALLET_ICON,
+    name: INFER_CONNECT_NAME,
+    icon: INFER_WALLET_ICON,
     url: options.websiteUrl ?? (isMobileBrowser() ? DEFAULT_MOBILE_WEBSITE_URL : DEFAULT_DESKTOP_WEBSITE_URL),
     chains: CEDRA_CHAINS,
     get accounts() {
       return accounts;
     },
     get features() {
-      return features;
+      return features as unknown as CedraFeatures;
     }
-  };
+  } as unknown as CedraWallet;
 }
 
 let registered = false;
 
-export function registerNovaWallet(options: NovaWalletOptions = {}): void {
+export function registerInferWallet(options: InferWalletOptions = {}): void {
   if (registered) return;
 
-  const client = new NovaClient(options);
+  const client = new InferClient(options);
   const forceRegistration = options.forceRegistration ?? DEFAULT_REGISTER_FORCE;
   const desktopRegistration = options.desktopRegistration ?? DEFAULT_DESKTOP_REGISTRATION;
   const shouldRegisterDesktop = desktopRegistration && typeof window !== "undefined" && !isMobileBrowser();
   const shouldRegisterMobileRelay = typeof window !== "undefined" && isMobileBrowser();
   if (!client.hasProvider() && !client.hasExternalSession() && !forceRegistration && !shouldRegisterDesktop && !shouldRegisterMobileRelay) return;
 
-  registerWallet(createNovaAIP62Wallet(options));
+  // v0.2.0-rc.12: if the dapp is already running inside Infer Desk's
+  // embedded browser, the embedded provider (window.cedra /
+  // window.nova / window.aptos, all stamped with isNovaDesk = true)
+  // is already on the page and provides identical functionality
+  // through the same IPC channel. Registering Infer Connect on top
+  // would produce a duplicate entry in the dapp's wallet-selector
+  // modal that routes to the same wallet. `forceRegistration: true`
+  // is the explicit override.
+  if (!forceRegistration && isHostedInInferDesk()) {
+    return;
+  }
+
+  registerWallet(createInferAIP62Wallet(options));
   registered = true;
 }

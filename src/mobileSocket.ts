@@ -1,4 +1,4 @@
-import type { NovaWalletOptions } from "./types";
+import type { InferWalletOptions } from "./types";
 import {
   DEFAULT_MOBILE_SOCKET_TIMEOUT_MS
 } from "./constants";
@@ -20,7 +20,7 @@ interface RelaySocketOptions {
     kind: "pairing" | "session";
     id: string;
   };
-  options?: NovaWalletOptions;
+  options?: InferWalletOptions;
   onEvent?: (event: RelayEvent) => void;
 }
 

@@ -1,4 +1,4 @@
-export enum NovaErrorCode {
+export enum InferErrorCode {
   UserRejected = "USER_REJECTED",
   Unauthorized = "UNAUTHORIZED",
   Unsupported = "UNSUPPORTED",
@@ -9,14 +9,14 @@ export enum NovaErrorCode {
   InternalError = "INTERNAL_ERROR"
 }
 
-export class NovaAdapterError extends Error {
+export class InferAdapterError extends Error {
   constructor(
-    public readonly code: NovaErrorCode,
+    public readonly code: InferErrorCode,
     message: string,
     public readonly cause?: unknown
   ) {
     super(message);
-    this.name = "NovaAdapterError";
+    this.name = "InferAdapterError";
   }
 }
 
@@ -27,30 +27,79 @@ function extractStatus(error: unknown): string | number | undefined {
   return undefined;
 }
 
-export function remapNovaError(error: unknown): never {
-  if (error instanceof NovaAdapterError) {
+export function isValidTransactionHash(value: unknown): value is string {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : "Unknown Infer wallet error";
+}
+
+export function remapInferError(error: unknown): never {
+  if (error instanceof InferAdapterError) {
     throw error;
   }
 
   const status = extractStatus(error);
-  const message =
-    error instanceof Error ? error.message : typeof error === "string" ? error : "Unknown Nova wallet error";
+  const message = errorMessage(error);
 
   if (status === "Rejected" || status === 401 || /reject/i.test(message)) {
-    throw new NovaAdapterError(NovaErrorCode.UserRejected, message, error);
+    throw new InferAdapterError(InferErrorCode.UserRejected, message, error);
   }
   if (status === "Unsupported" || status === 4200 || /unsupported/i.test(message)) {
-    throw new NovaAdapterError(NovaErrorCode.Unsupported, message, error);
+    throw new InferAdapterError(InferErrorCode.Unsupported, message, error);
   }
   if (status === "InvalidParams" || status === 400 || /invalid/i.test(message)) {
-    throw new NovaAdapterError(NovaErrorCode.InvalidParams, message, error);
+    throw new InferAdapterError(InferErrorCode.InvalidParams, message, error);
   }
-  if (status === "Timeout" || /timed out waiting for nova desk/i.test(message)) {
-    throw new NovaAdapterError(NovaErrorCode.ConnectionTimeout, message, error);
+  if (status === "Timeout" || /timed out waiting for (?:nova|infer) desk/i.test(message)) {
+    throw new InferAdapterError(InferErrorCode.ConnectionTimeout, message, error);
   }
   if (/not installed|no provider|missing provider/i.test(message)) {
-    throw new NovaAdapterError(NovaErrorCode.NotInstalled, message, error);
+    throw new InferAdapterError(InferErrorCode.NotInstalled, message, error);
   }
 
-  throw new NovaAdapterError(NovaErrorCode.InternalError, message, error);
+  throw new InferAdapterError(InferErrorCode.InternalError, message, error);
+}
+
+/**
+ * Strict normalizer for sign-and-submit. Only adapter errors that have already
+ * passed transport-specific validation retain their code. HTTP status codes,
+ * provider-shaped thrown values, and human-readable text are never proof of a
+ * user rejection.
+ */
+export function remapSignAndSubmitError(error: unknown): never {
+  if (error instanceof InferAdapterError) {
+    throw error;
+  }
+
+  throw new InferAdapterError(InferErrorCode.InternalError, errorMessage(error), error);
+}
+
+/**
+ * Thrown by `tryResumeInferWalletConnection` when the dapp passes an
+ * `expectedOrigin` option and the callback URL's `window.location.origin`
+ * does not match. Indicates the deeplink flow was redirected to a
+ * different origin than the dapp that initiated it — likely a phishing
+ * attempt.
+ */
+export class CallbackOriginMismatch extends Error {
+  readonly expected: string;
+  readonly actual: string;
+
+  constructor(expected: string, actual: string) {
+    super(
+      `Callback origin mismatch: expected ${expected}, got ${actual}. ` +
+        `Refusing to consume a session whose origin does not match the dapp's. ` +
+        `This usually indicates a phishing attempt or a misconfigured deeplink.`
+    );
+    this.name = "CallbackOriginMismatch";
+    this.expected = expected;
+    this.actual = actual;
+    Object.setPrototypeOf(this, CallbackOriginMismatch.prototype);
+  }
 }
