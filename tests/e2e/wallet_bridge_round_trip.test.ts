@@ -549,7 +549,7 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     fixture.queueSignTransaction({
       address: signer.address,
       authenticatorHex: authenticator.toString(),
-      rawTransactionBcsHex: rawTransaction.bcsToHex().toString()
+      rawTransactionBcsHex: simpleTransaction.bcsToHex().toString()
     });
 
     const output = (await client.signTransaction(
@@ -562,7 +562,7 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
 
     expect(output.authenticator).toBeDefined();
     expect(output.authenticatorHex).toBe(authenticator.toString());
-    expect(output.rawTransactionBcsHex).toBe(rawTransaction.bcsToHex().toString());
+    expect(output.rawTransactionBcsHex).toBe(simpleTransaction.bcsToHex().toString());
 
     const signPosts = fixture.captured.filter(
       (r) => r.method === "POST" && r.pathname === `/${fixture.token}/sign-transaction`

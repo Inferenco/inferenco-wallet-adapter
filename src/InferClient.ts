@@ -40,6 +40,7 @@ import {
 } from "./bridge";
 import {
   createFullMessage,
+  deserializeSignTransactionResult,
   normalizeNetwork,
   normalizeProviderAccount,
   normalizeSignMessageOutput,
@@ -808,27 +809,48 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     try {
       const provider = this.refreshProvider();
       if (provider?.signTransaction) {
-        return normalizeSignTransactionResult(
-          unwrap(
-            await provider.signTransaction(
-              transaction as AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
-              options
-            )
-          )
-        );
+        const rawInput = isSdkRawTransaction(transaction)
+          ? normalizeSdkRawTransactionInput(transaction, options)
+          : undefined;
+        const response = await provider.signTransaction(rawInput ?? transaction, options);
+        let result: unknown = response;
+        if (rawInput || (response && typeof response === "object" && "status" in response)) {
+          const record = snapshotProviderRecord(response, "Unreadable signing response");
+          if (!record) throw new InferAdapterError(InferErrorCode.InternalError, "Malformed signing response");
+          if (Object.prototype.hasOwnProperty.call(record, "status")) {
+            if (record.status === "Rejected" && hasExactKeys(record, ["status"])) {
+              throw new InferAdapterError(InferErrorCode.UserRejected, "User rejected the transaction request");
+            }
+            if (record.status !== "Approved" || !hasExactKeys(record, ["status", "args"])) {
+              throw new InferAdapterError(InferErrorCode.InternalError, "Ambiguous signing response");
+            }
+            result = record.args;
+          } else {
+            result = unwrap(record);
+          }
+        } else {
+          result = unwrap(response);
+        }
+        return rawInput
+          ? deserializeSignTransactionResult(result, rawInput.rawTransactionBcsHex)
+          : normalizeSignTransactionResult(result);
       }
 
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
         const externalInput = toExternalSignTransactionInput(transaction, options);
-        return externalSession.transport === "mobile-relay"
+        const result = await (externalSession.transport === "mobile-relay"
           ? signTransactionViaMobileRelay(externalInput, externalSession, this.options)
-          : tryLocalBridgeSignTransaction(externalInput, externalSession, this.options);
+          : tryLocalBridgeSignTransaction(externalInput, externalSession, this.options));
+        if ("rawTransactionBcsHex" in externalInput) {
+          return deserializeSignTransactionResult(result, externalInput.rawTransactionBcsHex);
+        }
+        return result;
       }
 
       throw new InferAdapterError(InferErrorCode.Unsupported, "Infer provider signTransaction() unavailable");
     } catch (error) {
-      remapInferError(error);
+      remapSignAndSubmitError(error);
     }
   }
 

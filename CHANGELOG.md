@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Transaction relay and exact signing
+
+- Use only the Infer session header for transaction polling and revocation.
+- Poll transaction results independently of WebSocket notifications and retry
+  transient read failures without recreating signing requests.
+- Preserve same-tab request handles for explicit recovery and acknowledgement
+  after the dapp records its outcome.
+- Compact prebuilt transactions before calling injected providers; strictly decode
+  returned BCS and reject changed transaction bytes across all signing transports.
+- Preserve SDK object results and structured sign-only rejection responses.
+- Add signing-byte, malformed-result, polling and recovery regression coverage.
+
+
 ### Rebrand: Nova → Infer
 
 **This is a breaking release.** The package has been renamed to align with the Infer Desk desktop wallet rebrand (Infer Desk v0.6.0+).
@@ -18,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File names: `src/NovaClient.ts` → `src/InferClient.ts`, `src/NovaWallet.ts` → `src/InferWallet.ts`
 - localStorage keys: `inferenco:nova-*` → `inferenco:infer-*` (auto-migration on next connect via dual-read)
 - PostMessage type: `nova:bridge-token` → `infer:bridge-token` (dual-listen for one release cycle)
-- HTTP header: `x-nova-session-token` → `x-infer-session-token` (dual-write during transition)
+- HTTP header: `x-nova-session-token` → `x-infer-session-token` (canonical header only)
 - HKDF info: `nova-connect-relay` → `infer-connect-relay` (dual-derive with fall-back on decrypt failure)
 - Callback URL params: `novaRequestId`/`novaStatus` → `inferRequestId`/`inferStatus` (dual-read during transition)
 - Detection: `window.nova` and the `isNovaDesk` / `isNovaWallet` legacy flags still recognised for one release cycle; remove in 0.4.0
