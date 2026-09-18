@@ -594,6 +594,42 @@ function sessionBridgeBaseUrl(
       url.search = "";
       url.hash = "";
     }
+    // 0.2.0-rc.17: graft the per-session URL token from `session.bridgeUrl`
+    // onto a bare `options.bridgeBaseUrl`. Required because the Tier 1
+    // hardening (commit 4e68273, rc.4) prefers `options.bridgeBaseUrl`
+    // over `session.bridgeUrl`, which silently strips the token for dApps
+    // that pass a bare base URL (e.g. infer-ecosystem). Without the
+    // token, every disconnect-signalling route (`/session/<id>`,
+    // `/connection`) hits the wallet's F-03 token gate, returns 404
+    // without CORS, and `validateExternalSession()` (rc.15) clears its
+    // own localStorage session on every page load.
+    //
+    // ND-WEB-001 (deeplink hardening) stays closed: the HOST still comes
+    // from `options.bridgeBaseUrl`. An attacker who substitutes
+    // `session.bridgeUrl` can only inject a forged token SEGMENT onto
+    // the dApp's own trusted host — the request goes to the dApp's
+    // server, where it 404s. No signed messages leak.
+    //
+    // We skip the graft when the configured base already carries a token
+    // (avoids double-prefix) and when no token is available in the
+    // session (mobile-relay, pre-token storage).
+    if (options.bridgeBaseUrl && session.bridgeUrl) {
+      const baseHasToken = extractBridgeTokenFromBaseUrl(
+        url.toString(),
+        options
+      );
+      if (!baseHasToken) {
+        const sessionToken = extractBridgeTokenFromBaseUrl(
+          session.bridgeUrl,
+          {}
+        );
+        if (sessionToken) {
+          url.pathname = `/${sessionToken}${
+            url.pathname === "/" ? "" : url.pathname
+          }`;
+        }
+      }
+    }
     return url.toString();
   } catch {
     return options.bridgeBaseUrl ?? bridgeBaseUrl(options);

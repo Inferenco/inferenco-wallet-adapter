@@ -5,6 +5,22 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.17] - 2026-09-18
+
+### Fixed (disconnect regression — token graft in `sessionBridgeBaseUrl`)
+
+`sessionBridgeBaseUrl()` now grafts the per-session URL token from `session.bridgeUrl` onto a bare `options.bridgeBaseUrl`. The host stays from `options.bridgeBaseUrl` — Tier 1 (ND-WEB-001) deeplink hardening is preserved: an attacker who controls `session.bridgeUrl` cannot redirect traffic to a hostile host, only inject a forged token segment that 404s harmlessly at the wallet's F-03 token gate.
+
+This closes the rc.15 + rc.16 compound failure where disconnect-signalling routes (`/session/<id>`, `/connection`) were silently losing the token, the wallet's F-03 gate was 404ing them without CORS, and the adapter's startup validation was clearing its own localStorage session on every page load.
+
+**Side effects:**
+- `validateExternalSession()` startup-validation returns 200 in external browsers with a stored session — no more spurious session-wipe on every reload.
+- `InferClient.on("disconnect", cb)` no longer fires spuriously on reload.
+- `sessionLivenessIntervalMs` (rc.8) is usable again for real disconnect detection in external browsers.
+- DApps that wire bare `bridgeBaseUrl` (e.g. infer-ecosystem) regain end-to-end disconnect in both directions.
+
+**Compatibility:** Backwards compatible. DApps that do not pass `options.bridgeBaseUrl` see no change. DApps that pass `options.bridgeBaseUrl` already carrying a token see no change (no double-prefix). DApps that pass a bare `options.bridgeBaseUrl` gain the graft as a fix.
+
 ## [Unreleased]
 
 ### Transaction relay and exact signing
