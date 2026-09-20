@@ -6,7 +6,25 @@ export enum InferErrorCode {
   ConnectionTimeout = "CONNECTION_TIMEOUT",
   InvalidParams = "INVALID_PARAMS",
   InvalidNetwork = "INVALID_NETWORK",
-  InternalError = "INTERNAL_ERROR"
+  InternalError = "INTERNAL_ERROR",
+  /**
+   * NEW in 0.2.0-rc.18 (P-04 HTTPS connect reload):
+   * the preauth-connect fetch threw `TypeError`, indicating the
+   * browser blocked the cross-origin request to the local wallet
+   * bridge. The most common cause is Chrome ≥142's Local Network
+   * Access (LNA) enforcement, which blocks public HTTPS origins
+   * from reaching loopback/private addresses without explicit
+   * user permission.
+   *
+   * DApps SHOULD match on this error code and surface an
+   * actionable message such as:
+   *   "Your browser blocked access to the local wallet bridge —
+   *    allow local network access for this site."
+   *
+   * Older Chrome (<142) and other browsers fall through to
+   * `startPreauthConnect`'s generic error path.
+   */
+  BridgePrivateNetworkBlocked = "BRIDGE_PRIVATE_NETWORK_BLOCKED"
 }
 
 export class InferAdapterError extends Error {
