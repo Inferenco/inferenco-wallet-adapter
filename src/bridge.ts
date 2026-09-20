@@ -1219,36 +1219,52 @@ export async function validateExternalSession(
 
     return refreshedSession;
   } catch (error) {
-    // Clear the stored session on either of two specific failure
-    // signals. Other errors (5xx from the bridge, AbortError from
-    // the timeout, JSON parse failures) leave the session in
-    // place — those are typically transient and the user can retry
-    // without going through fresh connect.
+    // P-04 (HTTPS connect reload): split the TypeError branch from
+    // the explicit-403/404 branch.
     //
     //   1. BridgeHttpError(403 | 404): the wallet explicitly told
     //      us the session is gone (revoked, expired, never existed
-    //      on this wallet instance).
+    //      on this wallet instance). `clearExternalSession()` is
+    //      appropriate — the session is unambiguously dead.
     //
     //   2. TypeError: the browser refused to let JS read the
-    //      response (CORS block) or the fetch hit a network failure.
-    //      Indistinguishable from JS, but the recovery is the same.
+    //      response (CORS block, PNA block, or a network failure).
+    //      Indistinguishable from JS, but the RECOVERY differs.
     //
-    //      Infer Desk's HTTP bridge intentionally returns 404
-    //      responses without CORS headers (F-03 token gate — see
-    //      `write_404_no_cors` in nova-desk-ui's external_bridge.rs).
-    //      Browsers block reading those responses, which surfaces as
-    //      `TypeError: Failed to fetch` instead of a BridgeHttpError.
-    //      Without this branch, dapps that reload inside Infer Desk's
-    //      embedded browser with a session ID from a previous
-    //      external-browser deeplink flow keep retrying the stale
-    //      session on every page load and emit a confusing
-    //      `Solicitud desde otro origen bloqueada` devtools CORS
-    //      error forever.
-    if (
-      (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) ||
-      error instanceof TypeError
-    ) {
+    //      CHANGED in 0.2.0-rc.18 (P-04): a TypeError no longer
+    //      clears the session. Instead we read it back from
+    //      localStorage via `readExternalSession()` so the
+    //      adapter can still return a usable session to the dApp.
+    //
+    //      Rationale: Chrome ≥142 enforces Local Network Access
+    //      (LNA / PNA) and blocks public HTTPS origins from
+    //      reaching loopback addresses. The fetch fails with a
+    //      `TypeError: Failed to fetch`, but the cached session
+    //      is still valid for direct calls to the bridge from
+    //      an embedded context (Infer Desk's in-app webview) or
+    //      after the user grants local-network access.
+    //
+    //      Pre-fix behaviour: every page reload on an HTTPS dApp
+    //      cleared the session → user had to re-connect every
+    //      reload, and `validateExternalSession` returned null
+    //      which fired the spurious `on("disconnect")` event.
+    //
+    //      The OTHER TypeError scenarios (genuine CORS misconfig,
+    //      DNS failure, connection refused) still get a usable
+    //      session returned — the next sign/sign-message call
+    //      will fail loudly with the real network error. We
+    //      prefer "potentially stale session, retry surfaces the
+    //      real error" over "wipe session on every transient
+    //      network blip".
+    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
       clearExternalSession();
+    } else if (error instanceof TypeError) {
+      // P-04: TypeError is now a SOFT failure — return whatever
+      // localStorage has. `readExternalSession()` returns null
+      // only if no session is stored; if one is stored, it is
+      // returned as-is (possibly stale, but the dApp can decide
+      // how to handle that via its own error path).
+      return readExternalSession();
     }
 
     return null;
@@ -1507,7 +1523,46 @@ export async function startPreauthConnect(input: {
       pollUrl: response.pollUrl,
       bridgeUrl: response.bridgeUrl,
     };
-  } catch {
+  } catch (error) {
+    // P-04 (HTTPS connect reload, 0.2.0-rc.18): when the fetch
+    // throws a TypeError, this is the canonical signal that the
+    // browser blocked the cross-origin request (most commonly
+    // Chrome ≥142's Local Network Access / PNA enforcement when
+    // a public HTTPS origin tries to reach loopback). Surface a
+    // TYPED error so dApps can match `err instanceof
+    // InferAdapterError && err.code === BRIDGE_PRIVATE_NETWORK_BLOCKED`
+    // and render an actionable message.
+    //
+    // Connection refused / ECONNREFUSED throws WITHOUT a
+    // TypeError (it's a `TypeError` from fetch on some browsers
+    // but a `DOMException` or `Error` with a different message
+    // on others). We branch on `TypeError` strictly so that
+    // connection-refused falls through to the generic error
+    // path (`return null` below) and stays backward-compatible
+    // with rc.16's "silently null on connection failure"
+    // semantics.
+    if (error instanceof TypeError) {
+      // Wrap in InferAdapterError so consumers can do
+      // `instanceof` + `err.code === BRIDGE_PRIVATE_NETWORK_BLOCKED`.
+      // We throw it (not return null) so the caller can decide
+      // how to handle it — pre-fix this function silently
+      // returned null, which masked the actual cause and
+      // triggered the spurious deeplink-fallback re-navigation
+      // (the "page reload" UX bug).
+      throw new InferAdapterError(
+        InferErrorCode.BridgePrivateNetworkBlocked,
+        "Browser blocked access to the local wallet bridge (PNA / LNA). " +
+          "Public HTTPS origins need explicit local-network permission to " +
+          "reach the loopback wallet bridge. See infer-connect skill 'Bridge " +
+          "Private Network Blocked' section for the dApp-side recovery UX.",
+        error
+      );
+    }
+
+    // Connection refused / ECONNREFUSED / 5xx / parse error:
+    // preserve the legacy "return null" semantics so existing
+    // dApps fall through to the deeplink fallback path (where
+    // appropriate).
     return null;
   }
 }
