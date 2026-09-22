@@ -52,6 +52,7 @@ import {
   INFER_EXTERNAL_SESSION_STORAGE_KEY,
   INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY,
   INFER_CONNECT_NAME,
+  INFER_WALLET_NAME,
   INFER_DESK_APP_NAME,
   INFER_PROTOCOL_KEY_STORAGE_KEY,
   LEGACY_CALLBACK_REQUEST_ID_PARAM,
@@ -299,7 +300,9 @@ function parseExternalSession(
   // Tier 1 (deeplink hardening): the wallet name is set by the wallet,
   // not the dapp. An attacker who controls the callback URL can
   // substitute any string here to confuse the dapp's UI. Reject any
-  // value other than the canonical rebrand names. The legacy aliases
+  // value other than the canonical rebrand names, including Infer Wallet
+  // returned by approved mobile pairings (Infer Connect is the adapter name).
+  // The legacy aliases
   // (`LEGACY_INFER_CONNECT_NAME` = "Nova Connect" and
   // `LEGACY_INFER_DESK_LABEL` = "Nova Desk") are also accepted during
   // the transition window for previously-stored sessions and cached
@@ -307,6 +310,7 @@ function parseExternalSession(
   if (
     typeof candidate.walletName === "string" &&
     candidate.walletName !== INFER_CONNECT_NAME &&
+    candidate.walletName !== INFER_WALLET_NAME &&
     candidate.walletName !== INFER_DESK_APP_NAME &&
     candidate.walletName !== LEGACY_INFER_DESK_LABEL &&
     candidate.walletName !== LEGACY_INFER_CONNECT_NAME

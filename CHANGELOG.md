@@ -23,6 +23,12 @@ This closes the rc.15 + rc.16 compound failure where disconnect-signalling route
 
 ## [Unreleased]
 
+### Fixed
+
+- Recognize saved mobile relay sessions named Infer Wallet, so Infer Connect
+  can sign messages and transactions after connecting or restoring a session.
+  Preserve the wallet identity and reject unrecognized wallet names.
+
 ### Transaction relay and exact signing
 
 - Use only the Infer session header for transaction polling and revocation.
