@@ -69,7 +69,7 @@ import { BRIDGE_TOKEN_PATH_REGEX } from "./bridge/token.js";
 import { forceRefreshBridgeToken } from "./bridge/token.js";
 import { bridgePathWithToken, bridgeUrlWithToken, getBridgeBaseUrlWithToken } from "./bridge/url.js";
 import { deserializeSignTransactionResult, normalizeProviderAccount } from "./conversion";
-import { storePendingDesktopBridgeRequest, readPendingDesktopBridgeRequests, type PendingDesktopBridgeRequest } from "./desktopRequests";
+import { desktopBridgeOrigin, storePendingDesktopBridgeRequest, readPendingDesktopBridgeRequests, type PendingDesktopBridgeRequest } from "./desktopRequests";
 
 type InferPendingMobilePairing = {
   pairingId: string;
@@ -1438,29 +1438,29 @@ async function pollBridge<T extends { status?: string; error?: string }>(
   options: InferWalletOptions
 ): Promise<T> {
   const deadline = Date.now() + bridgePollTimeoutMs(options);
-
   while (Date.now() < deadline) {
     const payload = await fetchJsonWithTimeout<T>(url, bridgeConnectTimeoutMs(options));
-    if (payload.status && payload.status !== "pending") {
-      return payload;
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, bridgePollIntervalMs(options)));
-  }
-
-  // A background tab may have missed the approval window. Query the same ID
-  // once after foregrounding before reporting an unknown outcome.
-  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    if (payload.status && payload.status !== "pending") return payload;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     await new Promise<void>((resolve) => {
-      const wake = () => {
-        if (document.visibilityState === "hidden") return;
-        window.removeEventListener("focus", wake);
-        document.removeEventListener("visibilitychange", wake);
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        window.removeEventListener("focus", finish);
+        document.removeEventListener("visibilitychange", finish);
         resolve();
       };
-      window.addEventListener("focus", wake);
-      document.addEventListener("visibilitychange", wake);
+      const timer = window.setTimeout(finish,
+        Math.max(1, Math.min(bridgePollIntervalMs(options), remaining)));
+      window.addEventListener("focus", finish);
+      document.addEventListener("visibilitychange", finish);
     });
   }
+  // Browser suspension can pass the deadline without running a timer. Read the
+  // same request once more on resume, then settle with an unresolved receipt.
   const finalPayload = await fetchJsonWithTimeout<T>(url, bridgeConnectTimeoutMs(options));
   if (finalPayload.status && finalPayload.status !== "pending") return finalPayload;
   throw new Error("Infer Desk outcome is unknown; recover the existing request before trying again");
@@ -1945,11 +1945,11 @@ function saveDesktopRequest(
   expectedTransactionBcsHex?: string
 ): PendingDesktopBridgeRequest {
   const pending: PendingDesktopBridgeRequest = {
-    version: 1, transport: "desktop-bridge", requestId, method,
+    version: 2, transport: "desktop-bridge", requestId, method,
     sessionId: session.sessionId, address: session.address,
     network: session.network, chainId: session.chainId,
     origin: window.location.origin,
-    bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl ?? DEFAULT_DESKTOP_BRIDGE_URL,
+    bridgeOrigin: desktopBridgeOrigin(session, options),
     ...(expectedTransactionBcsHex ? { expectedTransactionBcsHex } : {})
   };
   storePendingDesktopBridgeRequest(pending);
@@ -2009,15 +2009,14 @@ export async function readDesktopBridgeRequestOnce(
     pending.method === "signTransaction" ? "/sign-transaction-request" : "/transaction-request";
   const payload = await fetchJsonWithTimeout<InferBridgeMessagePoll | InferBridgeSignTransactionPoll | InferBridgeTransactionPoll>(
     bridgeUrlWithToken(path + "/" + encodeURIComponent(requestId), {
-      ...options, bridgeBaseUrl: pending.bridgeBaseUrl
+      ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl
     }),
     bridgeConnectTimeoutMs(options)
   );
-  if (payload.requestId !== undefined && payload.requestId !== requestId) {
-    throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned a different request");
+  if (payload.requestId !== requestId) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned a missing or different request id");
   }
   if (payload.status === "pending") return { pending, status: "pending" };
-  if (payload.status !== "approved") decodeDesktopResult(payload, pending);
   return { pending, status: "approved", output: decodeDesktopResult(payload, pending) };
 }
 
@@ -2027,7 +2026,7 @@ export async function tryLocalBridgeSignMessage(
   options: InferWalletOptions = {}
 ): Promise<CedraSignMessageOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
-  const requestOptions = { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl };
+  const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
   const requestId = await startBridgeRequest("/sign-message", {
     origin: window.location.origin,
     app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
@@ -2047,7 +2046,7 @@ export async function tryLocalBridgeSignTransaction(
   options: InferWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
-  const requestOptions = { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl };
+  const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
   const requestId = await startBridgeRequest("/sign-transaction", {
     origin: window.location.origin,
     app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
@@ -2073,7 +2072,7 @@ export async function tryLocalBridgeSignAndSubmit(
   options: InferWalletOptions = {}
 ): Promise<CedraSignAndSubmitTransactionOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectTransactionError();
-  const requestOptions = { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl };
+  const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
   const requestId = await startBridgeRequest("/transaction", {
     origin: window.location.origin,
     app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
@@ -2084,5 +2083,9 @@ export async function tryLocalBridgeSignAndSubmit(
   const payload = await pollSignedResult<InferBridgeTransactionPoll>(
     "/transaction-request", requestId, requestOptions, reconnectTransactionError()
   );
+  if (payload.requestId !== requestId) {
+    throw new InferAdapterError(InferErrorCode.InternalError,
+      "Infer Desk returned a missing or different transaction request id");
+  }
   return decodeDesktopResult(payload, pending) as CedraSignAndSubmitTransactionOutput;
 }

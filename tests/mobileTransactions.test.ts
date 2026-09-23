@@ -109,6 +109,22 @@ describe("transaction relay delivery and recovery", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("settles a hidden tab at the deadline and retains its receipt", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    mockRelay(() => outcome({ status: "pending", encryptedResult: null }));
+    const result = signAndSubmitViaMobileRelay(
+      { data: { function: "0x1::account::transfer", functionArguments: [] } },
+      session, { ...options, mobilePollIntervalMs: 10000, mobileRequestTimeoutMs: 20 }
+    );
+    const rejection = expect(result).rejects.toThrow("outcome is unknown");
+    await vi.advanceTimersByTimeAsync(25);
+    await rejection;
+    expect(reads).toBe(2);
+    expect(readPendingMobileRelayRequests(session)).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("does not retry an ambiguous creation failure", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
     await expect(submit()).rejects.toThrow("Failed to fetch");
@@ -185,7 +201,7 @@ describe("transaction relay delivery and recovery", () => {
     expiresAt = new Date(Date.now() - 1000).toISOString();
     mockRelay(() => outcome({ status: "pending", encryptedResult: null }));
     await expect(submit()).rejects.toMatchObject({ code: "CONNECTION_TIMEOUT" });
-    expect(reads).toBe(1);
+    expect(reads).toBe(2);
     vi.mocked(globalThis.fetch).mockImplementation(async () => outcome());
     await expect(resumeMobileRelayRequest("request-1", session, options)).resolves.toMatchObject({ status: "approved" });
   });

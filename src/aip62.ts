@@ -54,8 +54,10 @@ export type InferRecoveredOutcomesFeature = {
   "inferenco:recoveredOutcomes": {
     version: "1.0.0";
     list: InferClient["listRecoverableRequests"];
+    listArchived: InferClient["listArchivedRecoverableRequests"];
     read: InferClient["readRecoverableRequest"];
     acknowledge: InferClient["acknowledgeRecoverableRequest"];
+    archive: InferClient["archiveRecoverableRequest"];
   };
 };
 
@@ -145,8 +147,10 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
     "inferenco:recoveredOutcomes": {
       version: "1.0.0",
       list: () => client.listRecoverableRequests(),
+      listArchived: () => client.listArchivedRecoverableRequests(),
       read: (requestId) => client.readRecoverableRequest(requestId),
-      acknowledge: (requestId) => client.acknowledgeRecoverableRequest(requestId)
+      acknowledge: (requestId) => client.acknowledgeRecoverableRequest(requestId),
+      archive: (requestId, reference) => client.archiveRecoverableRequest(requestId, reference)
     },
     "cedra:signMessage": {
       version: "1.0.0",

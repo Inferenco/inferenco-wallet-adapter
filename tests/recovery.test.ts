@@ -1,4 +1,6 @@
 import { storeExternalSession, tryLocalBridgeSignAndSubmit } from "../src/bridge";
+import { InferClient } from "../src/InferClient";
+import { InferWallet } from "../src/InferWallet";
 import { storePendingDesktopBridgeRequest } from "../src/desktopRequests";
 import { createInferAIP62Wallet } from "../src/aip62";
 import { _setBridgeTokenForTesting, _resetBridgeTokenForTesting } from "../src/bridge/token";
@@ -7,6 +9,8 @@ import { createKeyPair, deriveSharedSecret, encryptJson } from "../src/mobileCry
 import { storePendingMobileRelayRequest } from "../src/mobileRequests";
 import {
   acknowledgeRecoverableRequest,
+  archiveRecoverableRequest,
+  listArchivedRecoverableRequests,
   listRecoverableRequests,
   readRecoverableRequest
 } from "../src/recovery";
@@ -32,6 +36,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   _resetBridgeTokenForTesting();
+  vi.useRealTimers();
 });
 
 describe("exact-ID signing recovery", () => {
@@ -143,10 +148,10 @@ describe("exact-ID signing recovery", () => {
     _setBridgeTokenForTesting(token);
     storeExternalSession(desktop);
     storePendingDesktopBridgeRequest({
-      version: 1, transport: "desktop-bridge", requestId: "offline-request",
+      version: 2, transport: "desktop-bridge", requestId: "offline-request",
       sessionId: desktop.sessionId, address: desktop.address,
       network: desktop.network, chainId: desktop.chainId,
-      origin: window.location.origin, bridgeBaseUrl: desktop.bridgeUrl!,
+      origin: window.location.origin, bridgeOrigin: new URL(desktop.bridgeUrl!).origin,
       method: "signAndSubmitTransaction"
     });
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
@@ -161,10 +166,10 @@ describe("exact-ID signing recovery", () => {
     storeExternalSession(desktop);
     for (const requestId of ["rejected-one", "mixed-two"]) {
       storePendingDesktopBridgeRequest({
-        version: 1, transport: "desktop-bridge", requestId,
+        version: 2, transport: "desktop-bridge", requestId,
         sessionId: desktop.sessionId, address: desktop.address,
         network: desktop.network, chainId: desktop.chainId,
-        origin: window.location.origin, bridgeBaseUrl: desktop.bridgeUrl!,
+        origin: window.location.origin, bridgeOrigin: new URL(desktop.bridgeUrl!).origin,
         method: "signAndSubmitTransaction"
       });
     }
@@ -207,5 +212,169 @@ describe("exact-ID signing recovery", () => {
     });
     expect(await listRecoverableRequests()).toEqual([]);
     await expect(readRecoverableRequest("foreign")).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+});
+
+describe("recovery repair boundaries", () => {
+  it("writes token-free receipts and migrates an exact-bound legacy receipt", async () => {
+    const tokenUrl = "http://127.0.0.1:21984/" + token;
+    const session = { ...desktop, bridgeUrl: tokenUrl };
+    _setBridgeTokenForTesting(token);
+    storeExternalSession(session);
+    const created = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method === "POST" && url.endsWith("/transaction")) return json({ requestId: "token-free" });
+      if (url.endsWith("/transaction-request/token-free")) return json({ status: "pending", requestId: "token-free" });
+      throw new Error("Unexpected request: " + url);
+    });
+    await expect(tryLocalBridgeSignAndSubmit({} as never, session,
+      { bridgePollTimeoutMs: 0, onRequestCreated: created })).rejects.toThrow("outcome is unknown");
+    expect(JSON.stringify(created.mock.calls[0]?.[0])).not.toContain(token);
+    const key = "inferenco:infer-pending-desktop-request:token-free";
+    expect(window.sessionStorage.getItem(key)).not.toContain(token);
+    expect(JSON.parse(window.sessionStorage.getItem(key)!)).toMatchObject({
+      version: 2, bridgeOrigin: "http://127.0.0.1:21984"
+    });
+    const oldKey = "inferenco:infer-pending-desktop-request:legacy";
+    window.sessionStorage.setItem(oldKey, JSON.stringify({
+      version: 1, transport: "desktop-bridge", requestId: "legacy",
+      sessionId: session.sessionId, address: session.address, network: session.network,
+      chainId: session.chainId, origin: window.location.origin,
+      bridgeBaseUrl: tokenUrl, method: "signAndSubmitTransaction"
+    }));
+    expect(await listRecoverableRequests()).toHaveLength(2);
+    expect(window.sessionStorage.getItem(oldKey)).not.toContain(token);
+  });
+
+  it("bounds a hidden desktop poll and leaves the request recoverable", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    _setBridgeTokenForTesting(token);
+    storeExternalSession(desktop);
+    let reads = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method === "POST" && url.endsWith("/transaction")) {
+        return json({ requestId: "hidden-desktop" });
+      }
+      if (url.endsWith("/transaction-request/hidden-desktop")) {
+        reads++;
+        return json({ requestId: "hidden-desktop", status: "pending" });
+      }
+      throw new Error("Unexpected request: " + url);
+    });
+    const result = tryLocalBridgeSignAndSubmit({} as never, desktop,
+      { bridgePollTimeoutMs: 20, bridgePollIntervalMs: 10000 });
+    const rejection = expect(result).rejects.toThrow("outcome is unknown");
+    await vi.advanceTimersByTimeAsync(25);
+    await rejection;
+    expect(reads).toBe(2);
+    expect(await listRecoverableRequests()).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it.each(["signMessage", "signTransaction", "signAndSubmitTransaction"] as const)(
+    "rejects a missing desktop request ID for %s", async (method) => {
+      _setBridgeTokenForTesting(token);
+      storeExternalSession(desktop);
+      storePendingDesktopBridgeRequest({
+        version: 2, transport: "desktop-bridge", requestId: "missing-id",
+        sessionId: desktop.sessionId, address: desktop.address,
+        network: desktop.network, chainId: desktop.chainId,
+        origin: window.location.origin, bridgeOrigin: new URL(desktop.bridgeUrl!).origin,
+        method
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input).endsWith("/session/desktop-session")) return json(desktop);
+        return json({ status: "approved", hash });
+      });
+      expect(await readRecoverableRequest("missing-id")).toMatchObject({ status: "unknown" });
+      expect(() => acknowledgeRecoverableRequest("missing-id")).toThrow("verified final outcome");
+    }
+  );
+
+  it("reads through the configured bridge host when a session URL names another host", async () => {
+    _setBridgeTokenForTesting(token);
+    const session = { ...desktop, bridgeUrl: "https://untrusted.example/" + token };
+    const options = { bridgeBaseUrl: "http://127.0.0.1:21984" };
+    storeExternalSession(session);
+    storePendingDesktopBridgeRequest({
+      version: 2, transport: "desktop-bridge", requestId: "host-bound",
+      sessionId: session.sessionId, address: session.address,
+      network: session.network, chainId: session.chainId,
+      origin: window.location.origin, bridgeOrigin: "http://127.0.0.1:21984",
+      method: "signAndSubmitTransaction"
+    });
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      expect(String(input).startsWith("http://127.0.0.1:21984/")).toBe(true);
+      if (String(input).endsWith("/session/desktop-session")) return json(session);
+      return json({ requestId: "host-bound", status: "approved", hash });
+    });
+    expect(await readRecoverableRequest("host-bound", options))
+      .toMatchObject({ status: "approved", output: { hash } });
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it("archives an unknown receipt only for the current session and retains evidence", async () => {
+    _setBridgeTokenForTesting(token);
+    storeExternalSession(desktop);
+    storePendingDesktopBridgeRequest({
+      version: 2, transport: "desktop-bridge", requestId: "unresolved",
+      sessionId: desktop.sessionId, address: desktop.address,
+      network: desktop.network, chainId: desktop.chainId,
+      origin: window.location.origin, bridgeOrigin: new URL(desktop.bridgeUrl!).origin,
+      method: "signAndSubmitTransaction"
+    });
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"));
+    expect(await readRecoverableRequest("unresolved")).toMatchObject({ status: "unknown" });
+    expect(() => archiveRecoverableRequest("unresolved", "")).toThrow();
+    archiveRecoverableRequest("unresolved", "chain:testnet:tx:checked");
+    expect(await listRecoverableRequests()).toEqual([]);
+    expect(await listArchivedRecoverableRequests()).toMatchObject([{
+      requestId: "unresolved", reconciliationReference: "chain:testnet:tx:checked"
+    }]);
+    expect(window.sessionStorage.getItem("inferenco:infer-pending-desktop-request:unresolved"))
+      .toContain("chain:testnet:tx:checked");
+    expect(() => acknowledgeRecoverableRequest("unresolved")).toThrow();
+    expect(() => archiveRecoverableRequest("unresolved", "again")).toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    storeExternalSession({ ...desktop, sessionId: "other-session" });
+    expect(await listArchivedRecoverableRequests()).toEqual([]);
+  });
+
+  it("continues startup delivery after a hook failure and skips archived requests", async () => {
+    _setBridgeTokenForTesting(token);
+    storeExternalSession(desktop);
+    for (const requestId of ["first", "second", "archived"]) {
+      storePendingDesktopBridgeRequest({
+        version: 2, transport: "desktop-bridge", requestId,
+        sessionId: desktop.sessionId, address: desktop.address,
+        network: desktop.network, chainId: desktop.chainId,
+        origin: window.location.origin, bridgeOrigin: new URL(desktop.bridgeUrl!).origin,
+        method: "signAndSubmitTransaction"
+      });
+    }
+    archiveRecoverableRequest("archived", "checked externally");
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/session/desktop-session")) return json(desktop);
+      return json({ requestId: url.split("/").at(-1), status: "approved", hash });
+    });
+    const delivered: string[] = [];
+    const client = new InferClient({
+      onRecoveredOutcome: async (outcome) => {
+        delivered.push(outcome.requestId);
+        if (outcome.requestId === "first") throw new Error("app callback failed");
+      }
+    });
+    expect(client.listArchivedRecoverableRequests).toBeTypeOf("function");
+    await vi.waitFor(() => expect(delivered).toEqual(["first", "second"]));
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith("/archived"))).toBe(false);
+    expect(await listRecoverableRequests()).toHaveLength(2);
+    const plugin = new InferWallet();
+    expect(plugin.listRecoverableRequests).toBeTypeOf("function");
+    expect(plugin.archiveRecoverableRequest).toBeTypeOf("function");
   });
 });

@@ -367,23 +367,7 @@ async function waitForRequestOutcome(
         if (!retryable) throw error;
       }
       const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        if (document.visibilityState !== "hidden") break;
-        await new Promise<void>((resolve) => {
-          const onForeground = () => {
-            if (document.visibilityState === "hidden") return;
-            window.removeEventListener("focus", onForeground);
-            document.removeEventListener("visibilitychange", onForeground);
-            resolve();
-          };
-          window.addEventListener("focus", onForeground);
-          document.addEventListener("visibilitychange", onForeground);
-        });
-        // The callback is only a wake-up. Read the authenticated request once more.
-        const finalStatus = await readRequestStatus(requestId, method, session, options, 10_000);
-        if (isFinalStatus(finalStatus.status)) return finalStatus;
-        break;
-      }
+      if (remaining <= 0) break;
       await new Promise<void>((resolve) => {
         const finish = () => {
           window.clearTimeout(timer);
@@ -393,7 +377,15 @@ async function waitForRequestOutcome(
         const timer = window.setTimeout(finish, Math.min(mobilePollInterval(options), remaining));
         wakePoll = finish;
       });
-    } while (Date.now() < deadline || document.visibilityState === "hidden");
+    } while (Date.now() < deadline);
+    // A suspended tab may resume after expiry. Read this ID once more with a
+    // bounded request before leaving its receipt unresolved.
+    try {
+      const finalStatus = await readRequestStatus(requestId, method, session, options, 10_000);
+      if (isFinalStatus(finalStatus.status)) return finalStatus;
+    } catch {
+      // The original request remains unresolved and recoverable.
+    }
   } finally {
     wakePoll?.();
     window.removeEventListener("focus", wake);

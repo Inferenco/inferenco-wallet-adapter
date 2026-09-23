@@ -311,15 +311,33 @@ failure leaves the saved receipt unresolved and does not open the mobile wallet.
 The same transport-neutral hook covers Infer Desk.
 
 Use listRecoverableRequests(), readRecoverableRequest(requestId) and
-acknowledgeRecoverableRequest(requestId) from the package, from InferClient,
-or through the optional AIP-62 inferenco:recoveredOutcomes feature. Reading
+acknowledgeRecoverableRequest(requestId) from the package, InferClient,
+InferWallet, or the optional AIP-62 inferenco:recoveredOutcomes feature. Reading
 uses the original request ID and returns pending, validated approved output,
-rejected, or unknown with a reason. It never creates or cancels a request,
-resigns, resubmits, or opens a deeplink. The adapter also invokes
-onRecoveredOutcome for final results at startup when provided. Record each
-result against the action associated with its exact ID before acknowledging.
-Acknowledge removes only that request's same-tab receipt. Repeated reads before
-acknowledgement are allowed.
+rejected, or unknown with a reason. A desktop response must include that exact
+ID for every status. Recovery never creates or cancels a request, signs,
+submits, or opens a deeplink. The original session and browser origin are
+checked on each read. Desktop receipts contain only the bridge origin; the
+current authenticated session supplies the bridge URL. Existing same-session
+legacy desktop receipts are rewritten without their saved bridge URL when read.
+
+When onRecoveredOutcome is provided, startup reads each active receipt and
+delivers verified final outcomes independently. A failed callback does not
+prevent delivery of another request. Delivery is at least once: remounting or
+reloading can deliver an unacknowledged result again. Record it idempotently
+against its exact request ID before acknowledging. Acknowledgement removes only
+that request's same-tab receipt; repeated reads before acknowledgement are
+allowed.
+
+An unknown result remains unresolved. After independently reconciling wallet,
+relay, and chain state and durably recording that conclusion, the application
+may call archiveRecoverableRequest(requestId, reconciliationReference). This
+local, session-bound action keeps the receipt and reference available through
+listArchivedRecoverableRequests() but excludes it from active lists and startup
+delivery. It is not proof of failed submission or permission to retry. There
+is no automatic expiry or dapp-side cancel. Desktop and mobile polling have
+bounded foreground waits and make one final authenticated read at the deadline;
+an unresolved outcome keeps its receipt.
 
 The older low-level readPendingMobileRelayRequests,
 resumeMobileRelayRequest, and clearPendingMobileRelayRequest exports remain
