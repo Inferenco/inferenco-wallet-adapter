@@ -1,4 +1,6 @@
 import type { PendingMobileRelayRequest } from "./mobileRequests";
+import type { PendingDesktopBridgeRequest } from "./desktopRequests";
+import type { RecoveredRequestOutcome } from "./recovery";
 import type {
   AccountAuthenticator,
   AccountAddressInput,
@@ -67,6 +69,10 @@ export interface InferSignMessageResponse {
 export interface InferWalletOptions {
   /** Persist the action/request association before wallet launch. Does not authorize a retry. */
   onMobileRequestCreated?: (request: Readonly<PendingMobileRelayRequest>) => void | Promise<void>;
+  /** Persist the request ID with the application action before awaiting approval. */
+  onRequestCreated?: (request: Readonly<PendingMobileRelayRequest | PendingDesktopBridgeRequest>) => void | Promise<void>;
+  /** Optional startup notification. Journal the outcome, then acknowledge its exact ID. */
+  onRecoveredOutcome?: (outcome: Readonly<RecoveredRequestOutcome>) => void | Promise<void>;
 
   deeplinkBaseUrl?: string;
   deeplinkScheme?: string;

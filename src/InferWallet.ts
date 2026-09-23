@@ -23,6 +23,11 @@ import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
 import { buildDeeplinkUrl } from "./deeplink";
 import { detectProvider } from "./provider";
 import { InferClient } from "./InferClient";
+import type {
+  ArchivedRecoverableRequest,
+  RecoverableRequest,
+  RecoveredRequestOutcome
+} from "./recovery";
 import {
   InferAccountKeys,
   InferNetworkInfo,
@@ -121,6 +126,26 @@ export class InferWallet
     await this.client.disconnect();
     this.cachedAccount = null;
     this.cachedNetwork = null;
+  }
+
+  listRecoverableRequests(): Promise<RecoverableRequest[]> {
+    return this.client.listRecoverableRequests();
+  }
+
+  listArchivedRecoverableRequests(): Promise<ArchivedRecoverableRequest[]> {
+    return this.client.listArchivedRecoverableRequests();
+  }
+
+  readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
+    return this.client.readRecoverableRequest(requestId);
+  }
+
+  acknowledgeRecoverableRequest(requestId: string): void {
+    this.client.acknowledgeRecoverableRequest(requestId);
+  }
+
+  archiveRecoverableRequest(requestId: string, reconciliationReference: string): void {
+    this.client.archiveRecoverableRequest(requestId, reconciliationReference);
   }
 
   async signAndSubmitTransaction(

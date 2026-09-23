@@ -10,6 +10,8 @@ import type { InferTransactionPayload } from "./types";
 import {
   CALLBACK_REQUEST_ID_PARAM,
   CALLBACK_STATUS_PARAM,
+  LEGACY_CALLBACK_REQUEST_ID_PARAM,
+  LEGACY_CALLBACK_STATUS_PARAM,
   DEFAULT_MOBILE_RELAY_BASE_URL,
   DEFAULT_MOBILE_POLL_INTERVAL_MS,
   DEFAULT_MOBILE_REQUEST_TIMEOUT_MS,
@@ -80,6 +82,8 @@ function callbackUrlWithoutMarkers(): string {
   const url = new URL(window.location.href);
   url.searchParams.delete(CALLBACK_REQUEST_ID_PARAM);
   url.searchParams.delete(CALLBACK_STATUS_PARAM);
+  url.searchParams.delete(LEGACY_CALLBACK_REQUEST_ID_PARAM);
+  url.searchParams.delete(LEGACY_CALLBACK_STATUS_PARAM);
   return url.toString();
 }
 
@@ -152,7 +156,7 @@ async function waitForPairingOutcome(
           mobileRequestTimeout(options)
         );
         if (isFinalStatus(status.status)) {
-          clearCallbackMarker();
+          if (readCallbackMarker()?.requestId === pairingId) clearCallbackMarker();
           return status;
         }
         socketSignal = false;
@@ -264,6 +268,53 @@ export async function resumeMobileRelaySessionFromCallback(
   return null;
 }
 
+async function readRequestStatus(
+  requestId: string,
+  method: PendingMobileRelayRequest["method"],
+  session: InferExternalSession,
+  options: InferWalletOptions,
+  timeoutMs: number
+): Promise<InferMobileRequestStatus> {
+  const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
+  const status = await fetchJsonWithTimeout<InferMobileRequestStatus>(
+    buildRelayUrl(relayBaseUrl, "/v1/requests/" + encodeURIComponent(requestId)),
+    Math.max(1, timeoutMs),
+    { headers: { "x-infer-session-token": session.dappSessionToken! } }
+  );
+  if (!status || status.requestId !== requestId ||
+      status.sessionId !== session.sessionId || status.method !== method ||
+      (status.accountAddress != null &&
+        status.accountAddress.toLowerCase() !== session.address.toLowerCase()) ||
+      (status.origin != null && status.origin !== window.location.origin) ||
+      (status.network != null && status.network !== session.network) ||
+      (status.chainId != null && status.chainId !== session.chainId)) {
+    throw new InferAdapterError(InferErrorCode.InternalError,
+      "Infer Connect returned a result for a different request or session");
+  }
+  if (isFinalStatus(status.status) && readCallbackMarker()?.requestId === requestId) {
+    clearCallbackMarker();
+  }
+  return status;
+}
+
+/** One authoritative read of the original request. Pending is not a rejection. */
+export async function readMobileRelayRequestOnce(
+  requestId: string,
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
+): Promise<{ pending: PendingMobileRelayRequest; status: InferMobileRequestStatus }> {
+  if (!session.dappSessionToken || !session.sharedSecret) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Missing relay session for recovery");
+  }
+  const pending = readPendingMobileRelayRequests(session).find((item) => item.requestId === requestId);
+  const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
+  if (!pending || pending.relayBaseUrl !== relayBaseUrl) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Request does not belong to this relay session");
+  }
+  const status = await readRequestStatus(requestId, pending.method, session, options, 10_000);
+  return { pending, status };
+}
+
 async function waitForRequestOutcome(
   requestId: string,
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction",
@@ -300,20 +351,11 @@ async function waitForRequestOutcome(
     do {
       storeCallbackSession();
       try {
-        const status = await fetchJsonWithTimeout<InferMobileRequestStatus>(
-          buildRelayUrl(relayBaseUrl, "/v1/requests/" + encodeURIComponent(requestId)),
-          Math.max(1, Math.min(10_000, clientDeadline - Date.now())),
-          { headers: { "x-infer-session-token": session.dappSessionToken! } }
+        const status = await readRequestStatus(
+          requestId, method, session, options,
+          Math.min(10_000, Math.max(1, clientDeadline - Date.now()))
         );
-        if (!status || status.requestId !== requestId ||
-            status.sessionId !== session.sessionId || status.method !== method) {
-          throw new InferAdapterError(InferErrorCode.InternalError,
-            "Infer Connect returned a result for a different request");
-        }
-        if (isFinalStatus(status.status)) {
-          clearCallbackMarker();
-          return status;
-        }
+        if (isFinalStatus(status.status)) return status;
         if (status.status !== "pending") {
           throw new InferAdapterError(InferErrorCode.InternalError, "Unknown relay request status");
         }
@@ -336,6 +378,14 @@ async function waitForRequestOutcome(
         wakePoll = finish;
       });
     } while (Date.now() < deadline);
+    // A suspended tab may resume after expiry. Read this ID once more with a
+    // bounded request before leaving its receipt unresolved.
+    try {
+      const finalStatus = await readRequestStatus(requestId, method, session, options, 10_000);
+      if (isFinalStatus(finalStatus.status)) return finalStatus;
+    } catch {
+      // The original request remains unresolved and recoverable.
+    }
   } finally {
     wakePoll?.();
     window.removeEventListener("focus", wake);
@@ -420,7 +470,7 @@ async function startRequest(
   payload: unknown,
   session: InferExternalSession,
   options: InferWalletOptions
-): Promise<InferMobileRequestStatus> {
+): Promise<{ status: InferMobileRequestStatus; pending: PendingMobileRelayRequest }> {
   if (!session.dappSessionToken || !session.sharedSecret) {
     throw new InferAdapterError(InferErrorCode.Unauthorized, "Missing Infer Connect mobile relay session state");
   }
@@ -460,6 +510,7 @@ async function startRequest(
     network: session.network,
     chainId: session.chainId,
     relayBaseUrl,
+    origin: window.location.origin,
     method,
     expiresAt: response.expiresAt,
     ...(method === "signTransaction" && payload && typeof payload === "object" &&
@@ -468,8 +519,62 @@ async function startRequest(
   };
   storePendingMobileRelayRequest(pending);
   await options.onMobileRequestCreated?.(Object.freeze({ ...pending }));
+  await options.onRequestCreated?.(Object.freeze({ ...pending }));
   if (Date.parse(response.expiresAt) > Date.now()) launch(response.walletDeeplinkUrl);
-  return waitForRequestOutcome(response.requestId, method, session, options, response.expiresAt);
+  const status = await waitForRequestOutcome(response.requestId, method, session, options, response.expiresAt);
+  return { status, pending };
+}
+
+export function decodeMobileRelayResult(
+  status: InferMobileRequestStatus,
+  pending: PendingMobileRelayRequest,
+  session: InferExternalSession
+): CedraSignMessageOutput | (CedraSignTransactionOutputV1_1 & {
+  authenticatorHex: string; rawTransactionBcsHex: string
+}) | CedraSignAndSubmitTransactionOutput {
+  if (!session.sharedSecret || pending.sessionId !== session.sessionId ||
+      pending.address !== session.address || pending.network !== session.network ||
+      pending.chainId !== session.chainId || pending.method !== status.method ||
+      pending.requestId !== status.requestId) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Recovery identity does not match the relay result");
+  }
+  if (status.status === "approved" &&
+      (status.errorCode != null || status.errorMessage != null)) {
+    throw new InferAdapterError(InferErrorCode.InternalError,
+      "Infer Connect returned mixed approval and error fields");
+  }
+  if (status.status !== "approved" || !status.encryptedResult) {
+    if (isCleanMobileTransactionRejection(status)) {
+      throw new InferAdapterError(InferErrorCode.UserRejected, "User rejected the request");
+    }
+    if (pending.method === "signMessage" && status.status !== "rejected" &&
+        status.encryptedResult == null) {
+      throwForStatus(status.status, status.errorMessage);
+    }
+    throw new InferAdapterError(InferErrorCode.InternalError,
+      "Infer Connect returned an ambiguous signing result");
+  }
+  const result = decryptJson<unknown>(status.encryptedResult, session.sharedSecret);
+  if (pending.method === "signMessage") {
+    if (!isRecord(result) || typeof result.address !== "string" ||
+        result.address.toLowerCase() !== session.address.toLowerCase() ||
+        typeof result.signature !== "string" ||
+        typeof result.fullMessage !== "string" || typeof result.message !== "string" ||
+        typeof result.nonce !== "string" || typeof result.prefix !== "string") {
+      throw new InferAdapterError(InferErrorCode.InternalError,
+        "Infer Connect returned an invalid signed message");
+    }
+    return result as unknown as CedraSignMessageOutput;
+  }
+  if (pending.method === "signTransaction") {
+    return deserializeSignTransactionResult(result, pending.expectedTransactionBcsHex);
+  }
+  if (!isRecord(result) || Object.keys(result).length !== 1 ||
+      !isValidTransactionHash(result.hash)) {
+    throw new InferAdapterError(InferErrorCode.InternalError,
+      "Infer Connect returned an approved transaction without a valid hash");
+  }
+  return { hash: result.hash };
 }
 
 export async function signMessageViaMobileRelay(
@@ -477,12 +582,8 @@ export async function signMessageViaMobileRelay(
   session: InferExternalSession,
   options: InferWalletOptions = {}
 ): Promise<CedraSignMessageOutput> {
-  const status = await startRequest("signMessage", input, session, options);
-  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
-    throwForStatus(status.status, status.errorMessage);
-  }
-  const result = decryptJson<CedraSignMessageOutput>(status.encryptedResult, session.sharedSecret);
-  return result;
+  const { status, pending } = await startRequest("signMessage", input, session, options);
+  return decodeMobileRelayResult(status, pending, session) as CedraSignMessageOutput;
 }
 
 export async function signTransactionViaMobileRelay(
@@ -490,18 +591,9 @@ export async function signTransactionViaMobileRelay(
   session: InferExternalSession,
   options: InferWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string }> {
-  const status = await startRequest("signTransaction", input, session, options);
-  if (isCleanMobileTransactionRejection(status)) {
-    throw new InferAdapterError(InferErrorCode.UserRejected, "User rejected the transaction request");
-  }
-  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
-    throw new InferAdapterError(InferErrorCode.InternalError, "Infer Connect returned an ambiguous signing result");
-  }
-  const result = deserializeSignTransactionResult(
-    decryptJson<unknown>(status.encryptedResult, session.sharedSecret),
-    "rawTransactionBcsHex" in input ? input.rawTransactionBcsHex : undefined
-  );
-  return result;
+  const { status, pending } = await startRequest("signTransaction", input, session, options);
+  return decodeMobileRelayResult(status, pending, session) as
+    CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string };
 }
 
 const MOBILE_REJECTION_ALLOWED_KEYS = new Set([
@@ -573,33 +665,8 @@ export async function signAndSubmitViaMobileRelay(
   session: InferExternalSession,
   options: InferWalletOptions = {}
 ): Promise<CedraSignAndSubmitTransactionOutput> {
-  const status = await startRequest("signAndSubmitTransaction", input, session, options);
-  if (isCleanMobileTransactionRejection(status)) {
-    throw new InferAdapterError(
-      InferErrorCode.UserRejected,
-      "User rejected the transaction request"
-    );
-  }
-
-  if (status.status !== "approved" || !status.encryptedResult || !session.sharedSecret) {
-    throw new InferAdapterError(
-      InferErrorCode.InternalError,
-      "Infer Connect returned an ambiguous transaction result"
-    );
-  }
-
-  const result = decryptJson<unknown>(status.encryptedResult, session.sharedSecret);
-  if (
-    !isRecord(result) ||
-    Object.keys(result).length !== 1 ||
-    !isValidTransactionHash(result.hash)
-  ) {
-    throw new InferAdapterError(
-      InferErrorCode.InternalError,
-      "Infer Connect returned an approved transaction without a valid hash"
-    );
-  }
-  return { hash: result.hash };
+  const { status, pending } = await startRequest("signAndSubmitTransaction", input, session, options);
+  return decodeMobileRelayResult(status, pending, session) as CedraSignAndSubmitTransactionOutput;
 }
 
 type AnyMobileTransactionLike = InferTransactionPayload | CedraSignAndSubmitTransactionInput;

@@ -5,6 +5,20 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.20] - 2026-09-23
+
+### Fixed
+
+- Preserve desktop and mobile signing request receipts across reloads so apps can read and acknowledge exact-ID outcomes without another signing or submission attempt.
+- Bound hidden-tab polling and perform one final authenticated read before reporting an unknown outcome.
+- Keep desktop receipts free of bridge URL tokens and migrate matching legacy receipts; require exact desktop request IDs on recovery and sign-and-submit responses.
+- Isolate startup recovered-outcome callbacks per request and expose recovery operations on InferWallet.
+- Report invalid archive reconciliation references as typed INVALID_PARAMS errors.
+
+### Added
+
+- Explicit, session-bound local archiving after an app reconciles an unknown outcome externally. Archived receipts retain their evidence and are excluded from automatic recovery.
+
 ## [0.2.0-rc.17] - 2026-09-18
 
 ### Fixed (disconnect regression — token graft in `sessionBridgeBaseUrl`)

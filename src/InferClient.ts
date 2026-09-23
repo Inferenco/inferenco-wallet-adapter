@@ -62,6 +62,18 @@ import {
   signMessageViaMobileRelay,
   signTransactionViaMobileRelay
 } from "./mobileRelay";
+import {
+  acknowledgeRecoverableRequest,
+  archiveRecoverableRequest,
+  listArchivedRecoverableRequests,
+  listRecoverableRequests,
+  readRecoverableRequest
+} from "./recovery";
+import type {
+  ArchivedRecoverableRequest,
+  RecoveredRequestOutcome,
+  RecoverableRequest
+} from "./recovery";
 import { detectProvider } from "./provider";
 import type {
   InferExternalAccountInput,
@@ -412,6 +424,60 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     this.provider = detectProvider(options);
     this.installDisconnectBridgeListeners();
     this.maybeStartSessionLiveness();
+    if (typeof window !== "undefined" && options.onRecoveredOutcome) {
+      queueMicrotask(() => { void this.reconcileRecoverableRequests(); });
+    }
+  }
+
+  /** Application-facing exact-ID recovery; no request creation or wallet launch. */
+  listRecoverableRequests(): Promise<RecoverableRequest[]> {
+    return listRecoverableRequests(this.options);
+  }
+
+  listArchivedRecoverableRequests(): Promise<ArchivedRecoverableRequest[]> {
+    return listArchivedRecoverableRequests(this.options);
+  }
+
+  readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
+    return readRecoverableRequest(requestId, this.options);
+  }
+
+  acknowledgeRecoverableRequest(requestId: string): void {
+    acknowledgeRecoverableRequest(requestId, this.options);
+  }
+
+  archiveRecoverableRequest(requestId: string, reconciliationReference: string): void {
+    archiveRecoverableRequest(requestId, reconciliationReference, this.options);
+  }
+
+  private async reconcileRecoverableRequests(): Promise<void> {
+    const startingSession = readExternalSession();
+    if (!startingSession) return;
+    const identity = (session: InferExternalSession) => JSON.stringify([
+      session.transport, session.sessionId, session.address, session.network,
+      session.chainId, session.bridgeUrl, session.relayBaseUrl
+    ]);
+    let pending: RecoverableRequest[];
+    try {
+      pending = await this.listRecoverableRequests();
+    } catch {
+      return;
+    }
+    for (const request of pending) {
+      try {
+        const outcome = await this.readRecoverableRequest(request.requestId);
+        if (outcome.status !== "approved" && outcome.status !== "rejected") continue;
+        const currentSession = readExternalSession();
+        if (!currentSession || identity(currentSession) !== identity(startingSession)) return;
+        const stillActive = (await this.listRecoverableRequests()).some((item) =>
+          item.requestId === request.requestId &&
+          item.transport === request.transport && item.method === request.method
+        );
+        if (stillActive) await this.options.onRecoveredOutcome?.(Object.freeze(outcome));
+      } catch {
+        // Keep this receipt for a later read and continue to other requests.
+      }
+    }
   }
 
   /** v0.2.0-rc.8 (Phase 5 UX): wire `bridge.ts`'s disconnect
