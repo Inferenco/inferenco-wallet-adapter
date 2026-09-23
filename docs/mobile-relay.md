@@ -304,31 +304,33 @@ BCS for exact comparison during recovery. Handles contain no session token,
 encryption key or signature. They survive page reload; they do not survive
 closing the tab or clearing browser storage.
 
-Set `onMobileRequestCreated` in `InferWalletOptions` to durably associate your
-application action with the returned request ID before wallet launch. The adapter
-awaits this callback; a failure leaves the handle for reconciliation and does not
-open approval. This also lets concurrent actions track their own request IDs.
+Set onRequestCreated in InferWalletOptions to durably associate an
+application action with its request ID before waiting for wallet approval.
+onMobileRequestCreated remains available for existing integrations. A hook
+failure leaves the saved receipt unresolved and does not open the mobile wallet.
+The same transport-neutral hook covers Infer Desk.
 
-The public recovery APIs are:
+Use listRecoverableRequests(), readRecoverableRequest(requestId) and
+acknowledgeRecoverableRequest(requestId) from the package, from InferClient,
+or through the optional AIP-62 inferenco:recoveredOutcomes feature. Reading
+uses the original request ID and returns pending, validated approved output,
+rejected, or unknown with a reason. It never creates or cancels a request,
+resigns, resubmits, or opens a deeplink. The adapter also invokes
+onRecoveredOutcome for final results at startup when provided. Record each
+result against the action associated with its exact ID before acknowledging.
+Acknowledge removes only that request's same-tab receipt. Repeated reads before
+acknowledgement are allowed.
 
-- `readPendingMobileRelayRequests(session)`: enumerate unacknowledged requests
-  belonging to the original account, network and session.
-- `resumeMobileRelayRequest(requestId, session, options)`: GET the existing
-  request, validating its request ID, session and method. It never creates another
-  request, re-signs, submits or opens a deeplink. It returns the relay status and
-  encrypted result, not a blindly accepted transaction result.
-- `clearPendingMobileRelayRequest(requestId)`: acknowledge only after the dapp
-  durably records the outcome in its transaction journal.
-
-Successful normal calls also retain their handles until acknowledgement, closing
-the reload gap between receiving a result and recording it. For a recovered
-approval, decrypt with the original session secret; validate the method-specific
-result (including `deserializeSignTransactionResult(result,
-pending.expectedTransactionBcsHex)` for sign-only or the canonical hash for
-sign-and-submit) and reconcile chain status before acknowledging. Existing dapps
-must wire this recovery/acknowledgement into their journal; the adapter cannot
-decide whether an application action is safe to repeat. Lost creation responses
-have no known request ID and remain ambiguous; they are never resubmitted here.
+The older low-level readPendingMobileRelayRequests,
+resumeMobileRelayRequest, and clearPendingMobileRelayRequest exports remain
+available for existing callers. The unified reader handles authenticated relay
+lookup, decryption, and method-specific validation. Treat unknown as
+unresolved: reconcile the wallet, relay, and chain before deciding whether an
+action can be retried. A lost creation response has no known request ID and
+cannot be automatically recovered. Receipts depend on same-tab
+sessionStorage and the original session; they do not survive tab closure,
+storage clearing, or a lost session. Infer Desk currently keeps bridge results
+in process memory, so its restart can make a desktop outcome irretrievable.
 
 ## WebSocket Protocol
 

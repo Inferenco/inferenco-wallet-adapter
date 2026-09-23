@@ -50,7 +50,16 @@ type InferCedraOnDisconnectFeature = {
   };
 };
 
-type InferCedraFeatures = CedraFeatures & InferCedraOnDisconnectFeature;
+export type InferRecoveredOutcomesFeature = {
+  "inferenco:recoveredOutcomes": {
+    version: "1.0.0";
+    list: InferClient["listRecoverableRequests"];
+    read: InferClient["readRecoverableRequest"];
+    acknowledge: InferClient["acknowledgeRecoverableRequest"];
+  };
+};
+
+export type InferCedraFeatures = CedraFeatures & InferCedraOnDisconnectFeature & InferRecoveredOutcomesFeature;
 
 class InferWalletAccount implements CedraWalletAccount {
   address: string;
@@ -75,7 +84,7 @@ class InferWalletAccount implements CedraWalletAccount {
   }
 }
 
-export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraWallet {
+export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraWallet & { features: InferCedraFeatures } {
   const client = new InferClient(options);
   let accounts: InferWalletAccount[] = [];
 
@@ -132,6 +141,12 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
       onDisconnect: async (callback) => {
         client.on("disconnect", callback);
       }
+    },
+    "inferenco:recoveredOutcomes": {
+      version: "1.0.0",
+      list: () => client.listRecoverableRequests(),
+      read: (requestId) => client.readRecoverableRequest(requestId),
+      acknowledge: (requestId) => client.acknowledgeRecoverableRequest(requestId)
     },
     "cedra:signMessage": {
       version: "1.0.0",
@@ -210,7 +225,7 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
     get features() {
       return features as unknown as CedraFeatures;
     }
-  } as unknown as CedraWallet;
+  } as unknown as CedraWallet & { features: InferCedraFeatures };
 }
 
 let registered = false;

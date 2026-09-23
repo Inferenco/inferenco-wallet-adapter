@@ -11,6 +11,8 @@ export interface PendingMobileRelayRequest {
   network: string;
   chainId: number;
   relayBaseUrl: string;
+  /** Added to new receipts; old version-1 receipts remain origin-scoped by sessionStorage. */
+  origin?: string;
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
   expiresAt: string;
   expectedTransactionBcsHex?: string;
@@ -29,7 +31,8 @@ export function storePendingMobileRelayRequest(request: PendingMobileRelayReques
 /** Pending requests survive a same-tab reload and remain bound to the original session. */
 export function readPendingMobileRelayRequests(session: InferExternalSession): PendingMobileRelayRequest[] {
   const requests: PendingMobileRelayRequest[] = [];
-  for (let i = 0; i < window.sessionStorage.length; i++) {
+  try {
+    for (let i = 0; i < window.sessionStorage.length; i++) {
     const key = window.sessionStorage.key(i);
     if (!key?.startsWith(STORAGE_PREFIX)) continue;
     try {
@@ -41,6 +44,7 @@ export function readPendingMobileRelayRequests(session: InferExternalSession): P
           item.sessionId !== session.sessionId || item.address !== session.address ||
           item.network !== session.network || item.chainId !== session.chainId ||
           typeof item.relayBaseUrl !== "string" ||
+          (item.origin !== undefined && item.origin !== window.location.origin) ||
           !["signMessage", "signTransaction", "signAndSubmitTransaction"].includes(item.method ?? "") ||
           typeof item.expiresAt !== "string" || !Number.isFinite(Date.parse(item.expiresAt)) ||
           (item.expectedTransactionBcsHex !== undefined && typeof item.expectedTransactionBcsHex !== "string")) continue;
@@ -48,6 +52,10 @@ export function readPendingMobileRelayRequests(session: InferExternalSession): P
     } catch {
       // An invalid record is never sufficient authority to issue a relay request.
     }
+    }
+  } catch (cause) {
+    throw new InferAdapterError(InferErrorCode.InternalError,
+      "Unable to inspect saved relay requests; outcomes remain unresolved", cause);
   }
   return requests;
 }

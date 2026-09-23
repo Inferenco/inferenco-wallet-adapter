@@ -62,6 +62,8 @@ import {
   signMessageViaMobileRelay,
   signTransactionViaMobileRelay
 } from "./mobileRelay";
+import { acknowledgeRecoverableRequest, listRecoverableRequests, readRecoverableRequest } from "./recovery";
+import type { RecoveredRequestOutcome, RecoverableRequest } from "./recovery";
 import { detectProvider } from "./provider";
 import type {
   InferExternalAccountInput,
@@ -412,6 +414,35 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     this.provider = detectProvider(options);
     this.installDisconnectBridgeListeners();
     this.maybeStartSessionLiveness();
+    if (typeof window !== "undefined" && options.onRecoveredOutcome) {
+      queueMicrotask(() => { void this.reconcileRecoverableRequests(); });
+    }
+  }
+
+  /** Application-facing exact-ID recovery; no request creation or wallet launch. */
+  listRecoverableRequests(): Promise<RecoverableRequest[]> {
+    return listRecoverableRequests(this.options);
+  }
+
+  readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
+    return readRecoverableRequest(requestId, this.options);
+  }
+
+  acknowledgeRecoverableRequest(requestId: string): void {
+    acknowledgeRecoverableRequest(requestId, this.options);
+  }
+
+  private async reconcileRecoverableRequests(): Promise<void> {
+    try {
+      for (const request of await this.listRecoverableRequests()) {
+        const outcome = await this.readRecoverableRequest(request.requestId);
+        if (outcome.status === "approved" || outcome.status === "rejected") {
+          await this.options.onRecoveredOutcome?.(Object.freeze(outcome));
+        }
+      }
+    } catch {
+      // A startup read never authorizes a new signing request or acknowledgement.
+    }
   }
 
   /** v0.2.0-rc.8 (Phase 5 UX): wire `bridge.ts`'s disconnect
