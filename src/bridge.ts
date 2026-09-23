@@ -1960,6 +1960,9 @@ function decodeDesktopResult(
   payload: InferBridgeMessagePoll | InferBridgeSignTransactionPoll | InferBridgeTransactionPoll,
   pending: PendingDesktopBridgeRequest
 ): CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput {
+  // Infer Desk sign-only poll payloads can omit requestId. Their GET route
+  // already names the original request; reject any conflicting ID if present.
+  // Recovery separately requires an echoed exact ID before trusting a final read.
   if (payload.requestId !== undefined && payload.requestId !== pending.requestId) {
     throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned a different request");
   }

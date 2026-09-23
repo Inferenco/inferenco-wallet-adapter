@@ -1,4 +1,9 @@
-import { storeExternalSession, tryLocalBridgeSignAndSubmit } from "../src/bridge";
+import {
+  storeExternalSession,
+  tryLocalBridgeSignAndSubmit,
+  tryLocalBridgeSignMessage,
+  tryLocalBridgeSignTransaction
+} from "../src/bridge";
 import { InferClient } from "../src/InferClient";
 import { InferWallet } from "../src/InferWallet";
 import { storePendingDesktopBridgeRequest } from "../src/desktopRequests";
@@ -317,6 +322,26 @@ describe("recovery repair boundaries", () => {
     expect(fetch).toHaveBeenCalled();
   });
 
+  it.each(["signMessage", "signTransaction"] as const)(
+    "rejects a wrong direct desktop ID for %s while retaining the receipt", async (method) => {
+      _setBridgeTokenForTesting(token);
+      storeExternalSession(desktop);
+      const startPath = method === "signMessage" ? "/sign-message" : "/sign-transaction";
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (init?.method === "POST" && url.endsWith(startPath)) {
+          return json({ requestId: "direct-request" });
+        }
+        return json({ status: "approved", requestId: "other-request" });
+      });
+      const result = method === "signMessage"
+        ? tryLocalBridgeSignMessage({ message: "test" } as never, desktop)
+        : tryLocalBridgeSignTransaction({} as never, desktop);
+      await expect(result).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+      expect(await listRecoverableRequests()).toMatchObject([{ requestId: "direct-request" }]);
+    }
+  );
+
   it("archives an unknown receipt only for the current session and retains evidence", async () => {
     _setBridgeTokenForTesting(token);
     storeExternalSession(desktop);
@@ -329,7 +354,10 @@ describe("recovery repair boundaries", () => {
     });
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"));
     expect(await readRecoverableRequest("unresolved")).toMatchObject({ status: "unknown" });
-    expect(() => archiveRecoverableRequest("unresolved", "")).toThrow();
+    let invalidReferenceError: unknown;
+    try { archiveRecoverableRequest("unresolved", ""); }
+    catch (error) { invalidReferenceError = error; }
+    expect(invalidReferenceError).toMatchObject({ code: "INVALID_PARAMS" });
     archiveRecoverableRequest("unresolved", "chain:testnet:tx:checked");
     expect(await listRecoverableRequests()).toEqual([]);
     expect(await listArchivedRecoverableRequests()).toMatchObject([{

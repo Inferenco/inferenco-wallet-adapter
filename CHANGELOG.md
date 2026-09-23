@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bound hidden-tab polling and perform one final authenticated read before reporting an unknown outcome.
 - Keep desktop receipts free of bridge URL tokens and migrate matching legacy receipts; require exact desktop request IDs on recovery and sign-and-submit responses.
 - Isolate startup recovered-outcome callbacks per request and expose recovery operations on InferWallet.
+- Report invalid archive reconciliation references as typed INVALID_PARAMS errors.
 
 ### Added
 
