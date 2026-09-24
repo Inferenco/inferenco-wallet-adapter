@@ -54,6 +54,8 @@ export type InferRecoveredOutcomesFeature = {
   "inferenco:recoveredOutcomes": {
     version: "1.0.0";
     list: InferClient["listRecoverableRequests"];
+    listInvocations: InferClient["listRecoverableInvocations"];
+    subscribe: InferClient["subscribeRecoveredOutcomes"];
     listArchived: InferClient["listArchivedRecoverableRequests"];
     read: InferClient["readRecoverableRequest"];
     acknowledge: InferClient["acknowledgeRecoverableRequest"];
@@ -61,7 +63,16 @@ export type InferRecoveredOutcomesFeature = {
   };
 };
 
-export type InferCedraFeatures = CedraFeatures & InferCedraOnDisconnectFeature & InferRecoveredOutcomesFeature;
+export type InferConnectionHealthFeature = {
+  "inferenco:connectionHealth": {
+    version: "1.0.0";
+    get: InferClient["checkConnectionHealth"];
+    onChange: (callback: (health: InferClient["connectionHealth"]) => void) => () => void;
+  };
+};
+
+export type InferCedraFeatures = CedraFeatures & InferCedraOnDisconnectFeature &
+  InferRecoveredOutcomesFeature & InferConnectionHealthFeature;
 
 class InferWalletAccount implements CedraWalletAccount {
   address: string;
@@ -144,9 +155,19 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
         client.on("disconnect", callback);
       }
     },
+    "inferenco:connectionHealth": {
+      version: "1.0.0",
+      get: () => client.checkConnectionHealth(),
+      onChange: (callback) => {
+        client.on("connectionHealth", callback);
+        return () => { client.off("connectionHealth", callback); };
+      }
+    },
     "inferenco:recoveredOutcomes": {
       version: "1.0.0",
       list: () => client.listRecoverableRequests(),
+      listInvocations: () => client.listRecoverableInvocations(),
+      subscribe: (callback) => client.subscribeRecoveredOutcomes(callback),
       listArchived: () => client.listArchivedRecoverableRequests(),
       read: (requestId) => client.readRecoverableRequest(requestId),
       acknowledge: (requestId) => client.acknowledgeRecoverableRequest(requestId),

@@ -4,30 +4,59 @@ import type {
   CedraSignTransactionOutputV1_1
 } from "@cedra-labs/wallet-standard";
 import { readExternalSession, readDesktopBridgeRequestOnce } from "./bridge";
+import { archivePendingDesktopBridgeRequest, clearPendingDesktopBridgeRequest, desktopBridgeOrigin, readPendingDesktopBridgeRequests, type RecoverableMethod } from "./desktopRequests";
 import {
-  archivePendingDesktopBridgeRequest,
-  clearPendingDesktopBridgeRequest,
-  desktopBridgeOrigin,
-  readPendingDesktopBridgeRequests,
-  type RecoverableMethod
-} from "./desktopRequests";
-import { InferAdapterError, InferErrorCode } from "./errors";
+  listDurableRequests, listDurableInvocations, saveDurableRequest, saveDurableFinal, serializeStoredFinal, transitionDurableRequest,
+  type DurableRequest, type DurableInvocation, type StoredFinal
+} from "./durableRecovery";
+import { deserializeSignTransactionResult } from "./conversion";
+import { InferAdapterError, InferErrorCode, isValidTransactionHash } from "./errors";
 import { decodeMobileRelayResult, readMobileRelayRequestOnce } from "./mobileRelay";
-import {
-  archivePendingMobileRelayRequest,
-  clearPendingMobileRelayRequest,
-  readPendingMobileRelayRequests
-} from "./mobileRequests";
+import { archivePendingMobileRelayRequest, clearPendingMobileRelayRequest, readPendingMobileRelayRequests } from "./mobileRequests";
 import { makeRecoveryArchive, type RecoveryArchive } from "./requestArchive";
 import type { InferExternalSession, InferWalletOptions } from "./types";
 
 export interface RecoverableRequest {
+  /** Opaque, stable handle for this original invocation and session. */
+  recoveryId: string;
   requestId: string;
   method: RecoverableMethod;
   transport: "mobile-relay" | "desktop-bridge";
+  sessionId: string;
+  address: string;
+  network: string;
+  chainId: number;
+  invocationId?: string;
 }
 
 export interface ArchivedRecoverableRequest extends RecoverableRequest, RecoveryArchive {}
+export interface RecoverableInvocation {
+  invocationId: string;
+  transport: "mobile-relay" | "desktop-bridge";
+  sessionId: string;
+  address: string;
+  network: string;
+  chainId: number;
+  method: RecoverableMethod;
+  /** Prepared means dispatch may be unknown after a crash; never infer no submission. */
+  state: "prepared" | "created" | "unknown" | "not-invoked";
+  requestId?: string;
+}
+
+export function invocationDescriptor(row: DurableInvocation): RecoverableInvocation {
+  return {
+    invocationId: row.id, transport: row.transport, sessionId: row.sessionId,
+    address: row.address, network: row.network, chainId: row.chainId,
+    method: row.method, state: row.state,
+    ...(row.requestId ? { requestId: row.requestId } : {})
+  };
+}
+
+export async function listRecoverableInvocations(): Promise<RecoverableInvocation[]> {
+  if (typeof window === "undefined") return [];
+  return (await listDurableInvocations()).map(invocationDescriptor);
+}
+
 
 export type RecoveredRequestOutcome =
   | (RecoverableRequest & { status: "pending" })
@@ -36,166 +65,219 @@ export type RecoveredRequestOutcome =
   | (RecoverableRequest & { status: "rejected" })
   | (RecoverableRequest & { status: "unknown"; reason: string });
 
-type BoundReceipt = RecoverableRequest & { archive?: RecoveryArchive };
+const inFlight = new Map<string, Promise<RecoveredRequestOutcome>>();
 
-function receipts(session: InferExternalSession, options: InferWalletOptions): BoundReceipt[] {
-  return session.transport === "mobile-relay"
-    ? readPendingMobileRelayRequests(session).map(({ requestId, method, archive }) =>
-        ({ requestId, method, transport: "mobile-relay" as const, archive }))
-    : readPendingDesktopBridgeRequests(session, options).map(({ requestId, method, archive }) =>
-        ({ requestId, method, transport: "desktop-bridge" as const, archive }));
+function descriptor(row: DurableRequest): RecoverableRequest {
+  return {
+    recoveryId: row.id, requestId: row.requestId, method: row.method,
+    transport: row.transport, sessionId: row.sessionId, address: row.address,
+    network: row.network, chainId: row.chainId,
+    ...(row.invocationId ? { invocationId: row.invocationId } : {})
+  };
 }
 
-function sessionKey(session: InferExternalSession, options: InferWalletOptions): string {
-  return JSON.stringify([
-    window.location.origin, session.transport, session.sessionId, session.address,
-    session.network, session.chainId,
-    session.transport === "desktop-bridge"
-      ? desktopBridgeOrigin(session, options)
-      : session.relayBaseUrl ?? options.relayBaseUrl
-  ]);
+function matchingSession(row: DurableRequest, session: InferExternalSession | null, options: InferWalletOptions = {}): session is InferExternalSession {
+  if (!session || session.transport !== row.transport || session.sessionId !== row.sessionId ||
+      session.address !== row.address || session.network !== row.network ||
+      session.chainId !== row.chainId) return false;
+  if (row.transport === "mobile-relay") {
+    return row.endpoint === session.relayBaseUrl &&
+      typeof session.dappSessionToken === "string" && typeof session.sharedSecret === "string";
+  }
+  try {
+    return desktopBridgeOrigin(session, options) === row.endpoint;
+  } catch {
+    return false;
+  }
 }
 
-function receiptKey(session: InferExternalSession, request: RecoverableRequest, options: InferWalletOptions): string {
-  return sessionKey(session, options) + ":" + request.transport + ":" + request.requestId;
+async function migrateCurrentTab(session: InferExternalSession | null, options: InferWalletOptions): Promise<void> {
+  if (!session) return;
+  let legacy: Array<DurableRequest["pending"]>;
+  try {
+    legacy = session.transport === "mobile-relay"
+      ? readPendingMobileRelayRequests(session)
+      : readPendingDesktopBridgeRequests(session, options);
+  } catch (error) {
+    // Existing durable records remain usable if old tab storage is unavailable.
+    if (error instanceof InferAdapterError) return;
+    throw error;
+  }
+  for (const pending of legacy) {
+    await saveDurableRequest({ ...pending, origin: window.location.origin }, pending.invocationId);
+  }
 }
 
-/** Active receipts bound to the current session and browser origin. */
-export async function listRecoverableRequests(options: InferWalletOptions = {}): Promise<RecoverableRequest[]> {
+async function records(options: InferWalletOptions): Promise<DurableRequest[]> {
   if (typeof window === "undefined") return [];
-  const session = readExternalSession();
-  return session ? receipts(session, options).filter((item) => !item.archive)
-    .map(({ requestId, method, transport }) => ({ requestId, method, transport })) : [];
+  await migrateCurrentTab(readExternalSession(), options);
+  return listDurableRequests();
 }
 
-/** Inspect archived evidence without restarting automatic recovery. */
+function findExact(rows: DurableRequest[], id: string): DurableRequest {
+  const matches = rows.filter((row) => row.id === id || row.requestId === id);
+  if (matches.length !== 1) {
+    throw new InferAdapterError(
+      matches.length > 1 ? InferErrorCode.InvalidParams : InferErrorCode.Unauthorized,
+      matches.length > 1
+        ? "Request ID is ambiguous across wallet sessions; use its recoveryId"
+        : "Request is not bound to this browser origin"
+    );
+  }
+  return matches[0];
+}
+
+function replay(row: DurableRequest): RecoveredRequestOutcome | null {
+  const final = row.final;
+  if (!final) return null;
+  const base = descriptor(row);
+  if (final.status === "rejected") return { ...base, status: "rejected" };
+  if (final.method !== row.method) {
+    return { ...base, status: "unknown", reason: "Stored result method does not match its request" };
+  }
+  try {
+    if (final.method === "signAndSubmitTransaction") {
+      if (!isValidTransactionHash(final.hash)) throw new Error("Invalid saved transaction hash");
+      return { ...base, status: "approved", output: { hash: final.hash } };
+    }
+    if (final.method === "signMessage") {
+      if (typeof final.output.address !== "string" ||
+          typeof final.output.signature !== "string" ||
+          typeof final.output.fullMessage !== "string" ||
+          typeof final.output.message !== "string") throw new Error("Invalid saved signed message");
+      return { ...base, status: "approved",
+        output: final.output as unknown as CedraSignMessageOutput };
+    }
+    return { ...base, status: "approved",
+      output: deserializeSignTransactionResult({
+        authenticatorHex: final.authenticatorHex,
+        rawTransactionBcsHex: final.rawTransactionBcsHex
+      }, row.pending.expectedTransactionBcsHex) };
+  } catch {
+    return { ...base, status: "unknown", reason: "Stored final outcome could not be validated" };
+  }
+}
+
+/** List all active same-origin receipts, including those from an older wallet session. */
+export async function listRecoverableRequests(options: InferWalletOptions = {}): Promise<RecoverableRequest[]> {
+  return (await records(options)).filter((row) => row.state === "active").map(descriptor);
+}
+
 export async function listArchivedRecoverableRequests(
   options: InferWalletOptions = {}
 ): Promise<ArchivedRecoverableRequest[]> {
-  if (typeof window === "undefined") return [];
-  const session = readExternalSession();
-  return session ? receipts(session, options).flatMap(({ requestId, method, transport, archive }) =>
-    archive ? [{ requestId, method, transport, ...archive }] : []) : [];
+  return (await records(options)).flatMap((row) =>
+    row.state === "archived" && row.archive ? [{ ...descriptor(row), ...row.archive }] : []);
 }
 
-const inFlight = new Map<string, Promise<RecoveredRequestOutcome>>();
-const verifiedFinal = new Set<string>();
-
-/** One authenticated read of an existing request; it never signs, submits, or cancels. */
+/** Read only the original request. A locally verified final result replays without network access. */
 export async function readRecoverableRequest(
-  requestId: string,
+  requestIdOrRecoveryId: string,
   options: InferWalletOptions = {}
 ): Promise<RecoveredRequestOutcome> {
   if (typeof window === "undefined") {
     throw new InferAdapterError(InferErrorCode.Unsupported, "Recovery requires a browser");
   }
+  const row = findExact(await records(options), requestIdOrRecoveryId);
+  const locallyVerified = replay(row);
+  if (locallyVerified) return locallyVerified;
+  const base = descriptor(row);
   const session = readExternalSession();
-  if (!session) {
-    throw new InferAdapterError(InferErrorCode.Unauthorized, "No current wallet session for recovery");
+  if (!matchingSession(row, session, options)) {
+    return { ...base, status: "unknown",
+      reason: "Original wallet session cannot authenticate a remote read; reconnect or reconcile externally" };
   }
-  const descriptor = receipts(session, options).find((request) => request.requestId === requestId);
-  if (!descriptor) {
-    throw new InferAdapterError(InferErrorCode.Unauthorized, "Request is not bound to this wallet session");
-  }
-  const key = receiptKey(session, descriptor, options);
-  const publicDescriptor: RecoverableRequest = {
-    requestId: descriptor.requestId, method: descriptor.method, transport: descriptor.transport
-  };
-  const existing = inFlight.get(key);
+  const existing = inFlight.get(row.id);
   if (existing) return existing;
   const task = (async (): Promise<RecoveredRequestOutcome> => {
+    let outcome: RecoveredRequestOutcome;
     try {
-      if (descriptor.transport === "mobile-relay") {
-        const { pending, status } = await readMobileRelayRequestOnce(requestId, session, options);
-        if (status.status === "pending") return { ...publicDescriptor, status: "pending" };
+      if (row.transport === "mobile-relay") {
+        const { pending, status } = await readMobileRelayRequestOnce(
+          row.requestId, session, options, row.pending as Extract<DurableRequest["pending"], { version: 1 }>
+        );
+        if (status.status === "pending") return { ...base, status: "pending" };
         if (status.status !== "approved" && status.status !== "rejected") {
-          return { ...publicDescriptor, status: "unknown", reason: "Relay returned " + status.status };
+          return { ...base, status: "unknown", reason: "Relay returned " + status.status };
         }
-        return { ...publicDescriptor, status: "approved",
+        outcome = { ...base, status: "approved",
           output: decodeMobileRelayResult(status, pending, session) };
+      } else {
+        const result = await readDesktopBridgeRequestOnce(
+          row.requestId, session, options, row.pending as Extract<DurableRequest["pending"], { version: 2 }>
+        );
+        if (result.status === "pending") return { ...base, status: "pending" };
+        if (!result.output) return { ...base, status: "unknown", reason: "Missing approved output" };
+        outcome = { ...base, status: "approved", output: result.output };
       }
-      const result = await readDesktopBridgeRequestOnce(requestId, session, options);
-      if (result.status === "pending") return { ...publicDescriptor, status: "pending" };
-      if (!result.output) return { ...publicDescriptor, status: "unknown", reason: "Missing approved output" };
-      return { ...publicDescriptor, status: "approved", output: result.output };
     } catch (error) {
       if (error instanceof InferAdapterError && error.code === InferErrorCode.UserRejected) {
-        return { ...publicDescriptor, status: "rejected" };
+        outcome = { ...base, status: "rejected" };
+      } else {
+        return { ...base, status: "unknown", reason:
+          error instanceof Error ? error.message : "Result could not be validated" };
       }
-      return { ...publicDescriptor, status: "unknown", reason:
-        error instanceof Error ? error.message : "Result could not be validated" };
+    }
+    try {
+      await saveDurableFinal(row.id, outcome.status === "rejected"
+        ? { status: "rejected" }
+        : serializeStoredFinal(row.method, outcome.output));
+      return outcome;
+    } catch {
+      return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
     }
   })();
-  inFlight.set(key, task);
-  try {
-    const outcome = await task;
-    const currentSession = readExternalSession();
-    const currentReceipt = currentSession && sessionKey(currentSession, options) === sessionKey(session, options)
-      ? receipts(currentSession, options).find((item) =>
-          item.requestId === requestId && item.transport === descriptor.transport &&
-          item.method === descriptor.method)
-      : undefined;
-    if (!currentReceipt || Boolean(currentReceipt.archive) !== Boolean(descriptor.archive)) {
-      return { requestId, method: descriptor.method, transport: descriptor.transport,
-        status: "unknown", reason: "Wallet session or request receipt changed during recovery" };
-    }
-    if (outcome.status === "approved" || outcome.status === "rejected") verifiedFinal.add(key);
-    return outcome;
-  } finally {
-    inFlight.delete(key);
-  }
+  inFlight.set(row.id, task);
+  try { return await task; }
+  finally { inFlight.delete(row.id); }
 }
 
-/** Call after the application has durably recorded a verified final outcome. */
-export function acknowledgeRecoverableRequest(
-  requestId: string,
+/** Acknowledgement is an awaitable exact-record CAS after durable app acceptance. */
+export async function acknowledgeRecoverableRequest(
+  requestIdOrRecoveryId: string,
   options: InferWalletOptions = {}
-): void {
-  if (typeof window === "undefined") return;
-  const session = readExternalSession();
-  if (!session) {
-    throw new InferAdapterError(InferErrorCode.Unauthorized, "No current wallet session for acknowledgement");
-  }
-  const descriptor = receipts(session, options).find((request) => request.requestId === requestId && !request.archive);
-  if (!descriptor) {
-    throw new InferAdapterError(InferErrorCode.Unauthorized, "Active request is not bound to this wallet session");
-  }
-  const key = receiptKey(session, descriptor, options);
-  if (!verifiedFinal.has(key)) {
+): Promise<void> {
+  const row = findExact(await records(options), requestIdOrRecoveryId);
+  if (!row.final) {
     throw new InferAdapterError(InferErrorCode.InternalError,
       "Read a verified final outcome before acknowledging this request");
   }
-  if (descriptor.transport === "mobile-relay") clearPendingMobileRelayRequest(requestId);
-  else clearPendingDesktopBridgeRequest(requestId);
-  verifiedFinal.delete(key);
+  await transitionDurableRequest(row.id, "acknowledge");
+  if (matchingSession(row, readExternalSession(), options)) {
+    try {
+      if (row.transport === "mobile-relay") clearPendingMobileRelayRequest(row.requestId);
+      else clearPendingDesktopBridgeRequest(row.requestId);
+    } catch {
+      // The committed IDB tombstone is authoritative.
+    }
+  }
 }
 
-/**
- * Archive a receipt only after the application has durably reconciled the
- * outcome elsewhere. The reference is an application assertion, not proof
- * of failure or permission to retry.
- */
-export function archiveRecoverableRequest(
-  requestId: string,
+/** Archive only after independent reconciliation; this never proves non-submission. */
+export async function archiveRecoverableRequest(
+  requestIdOrRecoveryId: string,
   reconciliationReference: string,
   options: InferWalletOptions = {}
-): void {
-  if (typeof window === "undefined") {
-    throw new InferAdapterError(InferErrorCode.Unsupported, "Archiving requires a browser");
+): Promise<void> {
+  const row = findExact(await records(options), requestIdOrRecoveryId);
+  if (row.state !== "active") {
+    throw new InferAdapterError(InferErrorCode.Unauthorized,
+      "Request is not active in this browser origin");
   }
-  const session = readExternalSession();
-  if (!session) {
-    throw new InferAdapterError(InferErrorCode.Unauthorized, "No current wallet session for archiving");
-  }
-  const descriptor = receipts(session, options).find((request) => request.requestId === requestId && !request.archive);
-  if (!descriptor) {
-    throw new InferAdapterError(InferErrorCode.Unauthorized, "Active request is not bound to this wallet session");
+  if (row.final) {
+    throw new InferAdapterError(InferErrorCode.InvalidParams,
+      "Verified final outcomes must be acknowledged after durable acceptance");
   }
   const archive = makeRecoveryArchive(reconciliationReference);
-  if (descriptor.transport === "mobile-relay") {
-    archivePendingMobileRelayRequest(requestId, session, archive);
-  } else {
-    archivePendingDesktopBridgeRequest(requestId, session, archive, options);
+  await transitionDurableRequest(row.id, "archive", archive);
+  try {
+    const session = readExternalSession()!;
+    if (row.transport === "mobile-relay") {
+      archivePendingMobileRelayRequest(row.requestId, session, archive);
+    } else {
+      archivePendingDesktopBridgeRequest(row.requestId, session, archive, options);
+    }
+  } catch {
+    // The committed IndexedDB archive remains authoritative.
   }
-  verifiedFinal.delete(receiptKey(session, descriptor, options));
 }

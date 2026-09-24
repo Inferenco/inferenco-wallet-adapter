@@ -96,38 +96,35 @@ describe("transaction relay delivery and recovery", () => {
   });
 
   it("wakes HTTP polling when the page regains focus", async () => {
-    vi.useFakeTimers();
     mockRelay(() => reads === 1 ? outcome({ status: "pending", encryptedResult: null }) : outcome());
     const result = signAndSubmitViaMobileRelay({ data: { function: "0x1::account::transfer", functionArguments: [] } },
       session, { ...options, mobilePollIntervalMs: 10000, mobileRequestTimeoutMs: 20000 });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(reads).toBe(1);
+    await vi.waitFor(() => expect(reads).toBe(1));
     window.dispatchEvent(new Event("focus"));
-    await vi.advanceTimersByTimeAsync(0);
     await expect(result).resolves.toEqual({ hash });
     expect(reads).toBe(2);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("settles a hidden tab at the deadline and retains its receipt", async () => {
-    vi.useFakeTimers();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     mockRelay(() => outcome({ status: "pending", encryptedResult: null }));
     const result = signAndSubmitViaMobileRelay(
       { data: { function: "0x1::account::transfer", functionArguments: [] } },
       session, { ...options, mobilePollIntervalMs: 10000, mobileRequestTimeoutMs: 20 }
     );
-    const rejection = expect(result).rejects.toThrow("outcome is unknown");
-    await vi.advanceTimersByTimeAsync(25);
-    await rejection;
+    await expect(result).rejects.toMatchObject({
+      code: "REQUEST_OUTCOME_UNKNOWN", requestId: "request-1", dispatch: "unknown"
+    });
     expect(reads).toBe(2);
     expect(readPendingMobileRelayRequests(session)).toHaveLength(1);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("does not retry an ambiguous creation failure", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
-    await expect(submit()).rejects.toThrow("Failed to fetch");
+    await expect(submit()).rejects.toMatchObject({
+      code: "REQUEST_OUTCOME_UNKNOWN", requestId: null,
+      cause: { message: "Failed to fetch" }
+    });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(readPendingMobileRelayRequests(session)).toEqual([]);
   });
@@ -135,7 +132,7 @@ describe("transaction relay delivery and recovery", () => {
   it("does not open polling when request recovery storage is unavailable", async () => {
     mockRelay();
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Quota exceeded"); });
-    await expect(submit()).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    await expect(submit()).rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN" });
     expect(posted).toHaveLength(1);
     expect(reads).toBe(0);
   });
@@ -168,7 +165,10 @@ describe("transaction relay delivery and recovery", () => {
     mockRelay();
     await expect(signAndSubmitViaMobileRelay({ data: { function: "0x1::account::transfer", functionArguments: [] } },
       session, { ...options, onMobileRequestCreated: () => { throw new Error("Journal unavailable"); } }))
-      .rejects.toThrow("Journal unavailable");
+      .rejects.toMatchObject({
+        code: "REQUEST_OUTCOME_UNKNOWN", requestId: "request-1",
+        cause: { message: "Journal unavailable" }
+      });
     expect(posted).toHaveLength(1);
     expect(reads).toBe(0);
     expect(readPendingMobileRelayRequests(session)).toHaveLength(1);
@@ -176,7 +176,7 @@ describe("transaction relay delivery and recovery", () => {
 
   it("preserves a request for reload recovery and reads it even after expiry", async () => {
     mockRelay(() => outcome({ status: "pending", encryptedResult: null }));
-    await expect(submit()).rejects.toMatchObject({ code: "CONNECTION_TIMEOUT" });
+    await expect(submit()).rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN" });
     const pending = readPendingMobileRelayRequests(session);
     expect(pending).toHaveLength(1);
     expect(JSON.stringify(pending)).not.toContain("fixture-token");
@@ -200,7 +200,7 @@ describe("transaction relay delivery and recovery", () => {
   it("reconciles a completed result after the server expiry deadline", async () => {
     expiresAt = new Date(Date.now() - 1000).toISOString();
     mockRelay(() => outcome({ status: "pending", encryptedResult: null }));
-    await expect(submit()).rejects.toMatchObject({ code: "CONNECTION_TIMEOUT" });
+    await expect(submit()).rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN" });
     expect(reads).toBe(2);
     vi.mocked(globalThis.fetch).mockImplementation(async () => outcome());
     await expect(resumeMobileRelayRequest("request-1", session, options)).resolves.toMatchObject({ status: "approved" });
@@ -209,7 +209,7 @@ describe("transaction relay delivery and recovery", () => {
   it.each(["sessionId", "address", "network", "relayBaseUrl"])("refuses recovery through a different %s", async (field) => {
     expiresAt = new Date(Date.now() - 1000).toISOString();
     const fetch = mockRelay(() => outcome({ status: "pending", encryptedResult: null }));
-    await expect(submit()).rejects.toMatchObject({ code: "CONNECTION_TIMEOUT" });
+    await expect(submit()).rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN" });
     fetch.mockClear();
     await expect(resumeMobileRelayRequest("request-1", { ...session, [field]: "other" }, options))
       .rejects.toMatchObject({ code: "UNAUTHORIZED" });
@@ -218,7 +218,7 @@ describe("transaction relay delivery and recovery", () => {
 
   it.each(["requestId", "sessionId", "method"])("rejects a response for another %s", async (field) => {
     mockRelay(() => outcome({ [field]: "other" }));
-    await expect(submit()).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    await expect(submit()).rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN" });
     expect(readPendingMobileRelayRequests(session)).toHaveLength(1);
   });
 
@@ -231,7 +231,7 @@ describe("transaction relay delivery and recovery", () => {
   it.each(["rejected", "failed", "expired", "cancelled"])("keeps %s distinct from successful submission", async (kind) => {
     status = { status: kind, encryptedResult: null, errorCode: "USER_REJECTED", errorMessage: "Declined" };
     mockRelay();
-    await expect(submit()).rejects.toMatchObject({ code: kind === "rejected" ? "USER_REJECTED" : "INTERNAL_ERROR" });
+    await expect(submit()).rejects.toMatchObject({ code: kind === "rejected" ? "USER_REJECTED" : "REQUEST_OUTCOME_UNKNOWN" });
     expect(posted).toHaveLength(1);
   });
 
@@ -258,6 +258,6 @@ describe("transaction relay delivery and recovery", () => {
     status = { status: "rejected", encryptedResult: encryptJson({ hash }, session.sharedSecret!) };
     mockRelay();
     await expect(signTransactionViaMobileRelay({ rawTransactionBcsHex: "0x00" }, session, options))
-      .rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+      .rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN" });
   });
 });

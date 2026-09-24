@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _setBridgeTokenForTesting, _resetBridgeTokenForTesting } from "../src/bridge/token";
 import {
   readExternalSession,
+  checkExternalConnectionHealth,
   storeExternalSession,
   validateExternalSession
 } from "../src/bridge";
@@ -77,15 +78,10 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
     }) as unknown as typeof fetch;
 
     const result = await validateExternalSession(session, {});
-    // TypeError is now SOFT — return whatever localStorage has
-    // (the session we just stored). This is the P-04 fix: the dApp
-    // can decide what to do with a possibly-stale session rather
-    // than being forced through fresh connect on every transient
-    // network blip / CORS block.
-    expect(result).not.toBeNull();
-    expect(result?.sessionId).toBe(SAMPLE_SESSION_ID);
-    // Session is preserved (NOT wiped).
+    // TypeError is ambiguous: preserve identity, but do not certify transport health.
+    expect(result).toBeNull();
     expect(readExternalSession()).not.toBeNull();
+    expect((await checkExternalConnectionHealth(readExternalSession(), {})).state).toBe("unreachable");
   });
 
   it("preserves_session_on_real_network_failure_too", async () => {
@@ -101,8 +97,8 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
     }) as unknown as typeof fetch;
 
     const result = await validateExternalSession(makeStaleDesktopSession(), {});
-    // P-04: return whatever localStorage has; session preserved.
-    expect(result).not.toBeNull();
+    // Preserve identity, while declining to certify transport health.
+    expect(result).toBeNull();
     expect(readExternalSession()).not.toBeNull();
   });
 
@@ -139,8 +135,7 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
     }) as unknown as typeof fetch;
 
     const result = await validateExternalSession(session, {});
-    expect(result).not.toBeNull();
-    expect(result?.sessionId).toBe(SAMPLE_SESSION_ID);
+    expect(result).toBeNull();
     // The session is preserved on disk.
     expect(readExternalSession()).not.toBeNull();
   });

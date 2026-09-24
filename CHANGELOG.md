@@ -5,6 +5,24 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.21] - 2026-09-23
+
+### Added
+
+- Persist exact request receipts, original invocation identities, and verified final outcomes in origin-scoped IndexedDB before returning results or notifying consumers. Valid rc.20 tab receipts migrate on use. New same-origin tabs can recover while the original session remains available.
+- Expose a pre-dispatch invocation hook, structured invocation/request errors, durable invocation listing, late outcome subscriptions, and connection-health checks through InferClient, InferWallet, and the Infer Wallet Standard feature.
+- Wake recovery on startup, focus, visibility return, pageshow, storage changes, and cross-tab record changes; dispose client listeners explicitly.
+
+### Fixed
+
+- A failed Infer Desk session validation no longer certifies a cached account as connected. Ambiguous network/CORS failures preserve the cached identity and recovery evidence, while an explicit session rejection requires reconnection.
+- Keep verified results replayable until exact acknowledgement and preserve unresolved old-session requests for external reconciliation. Recovery never creates or resubmits a wallet request.
+
+### Limits
+
+- An old request without its original read credential remains unknown until Desk or relay provides an explicitly authorized original-request read contract. Infer Desk must persist its own results across restart; this adapter cannot infer a missing hash.
+- IndexedDB is same-origin browser storage, not isolation from same-origin script. Clearing browser data removes local recovery evidence. The adapter does not retain old signing credentials after session replacement or logout.
+
 ## [0.2.0-rc.20] - 2026-09-23
 
 ### Fixed

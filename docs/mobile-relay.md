@@ -297,58 +297,69 @@ canonical BCS do not substitute for them.
 Only a validated structured rejection becomes `USER_REJECTED`; HTTP failures,
 malformed signing output and mixed rejection/signature material remain errors.
 
-Before opening the wallet, each created request is saved in same-origin,
-same-tab `sessionStorage` with its ID, method, original relay/session/account/
-network and expiry. Sign-only handles also retain the original public transaction
-BCS for exact comparison during recovery. Handles contain no session token,
-encryption key or signature. They survive page reload; they do not survive
-closing the tab or clearing browser storage.
+Before request creation, Infer Connect stores an opaque invocation identity in
+same-origin IndexedDB. Set onInvocationPrepared to durably associate that
+identity with an application action before the outbound POST. A failure in this
+awaited hook is definitely not invoked. Once POST starts, a lost response is
+unknown: inspect listRecoverableInvocations() and never issue an automatic
+replacement. The creation endpoint does not yet offer a coordinated idempotency
+key.
 
-Set onRequestCreated in InferWalletOptions to durably associate an
-application action with its request ID before waiting for wallet approval.
-onMobileRequestCreated remains available for existing integrations. A hook
-failure leaves the saved receipt unresolved and does not open the mobile wallet.
-The same transport-neutral hook covers Infer Desk.
+After the response supplies a request ID, the adapter writes an exact-scoped
+receipt to IndexedDB before wallet launch or onRequestCreated delivery. The
+existing same-tab sessionStorage receipt remains for rc.20 compatibility and is
+migrated when read. Set onRequestCreated to associate the exact request ID with
+the application action. These public hooks and the IndexedDB records contain
+no bridge token, relay session token, shared secret, or signing key. Active
+session credentials remain in the existing adapter-owned localStorage session.
+Other JavaScript on the same origin can access browser storage; this is not an
+XSS boundary.
 
-Use listRecoverableRequests(), readRecoverableRequest(requestId) and
-acknowledgeRecoverableRequest(requestId) from the package, InferClient,
-InferWallet, or the optional AIP-62 inferenco:recoveredOutcomes feature. Reading
-uses the original request ID and returns pending, validated approved output,
-rejected, or unknown with a reason. A desktop response must include that exact
-ID for every status. Recovery never creates or cancels a request, signs,
-submits, or opens a deeplink. The original session and browser origin are
-checked on each read. Desktop receipts contain only the bridge origin; the
-current authenticated session supplies the bridge URL. Existing same-session
-legacy desktop receipts are rewritten without their saved bridge URL when read.
+Use listRecoverableRequests(), readRecoverableRequest(recoveryId), and
+acknowledgeRecoverableRequest(recoveryId) from the package, InferClient,
+InferWallet, or the optional AIP-62 inferenco:recoveredOutcomes feature. The
+opaque recoveryId disambiguates reused request IDs across sessions; the exact
+requestId remains available for existing callers where unique. List and
+acknowledge are asynchronous. Read returns pending, validated approved output,
+rejected, or unknown. Recovery never creates or cancels a request, signs,
+submits, or opens a wallet. The original origin, session, account, network,
+method, and request ID are checked before remote reads. A verified final result
+is persisted before a direct signing call returns or a recovery callback fires,
+and replayed locally after a tab or session change.
 
-When onRecoveredOutcome is provided, startup reads each active receipt and
-delivers verified final outcomes independently. A failed callback does not
-prevent delivery of another request. Delivery is at least once: remounting or
-reloading can deliver an unacknowledged result again. Record it idempotently
-against its exact request ID before acknowledging. Acknowledgement removes only
-that request's same-tab receipt; repeated reads before acknowledgement are
-allowed.
+Set onRecoveredOutcome for optional startup notification, or call
+subscribeRecoveredOutcomes() at any time. The coordinator wakes on startup,
+focus/visibility return, pageshow, reconnection, and cross-tab record changes.
+A subscriber receives each retained final outcome once per client instance;
+a failed callback can be retried at a later wake. Application writes must be
+idempotent by recoveryId. Acknowledge only after the application durably records
+the verified result. Acknowledgement uses an exact-record transaction and
+retains a tombstone for 30 days. Call dispose() when replacing an InferClient
+or InferWallet instance.
 
-An unknown result remains unresolved. After independently reconciling wallet,
-relay, and chain state and durably recording that conclusion, the application
-may call archiveRecoverableRequest(requestId, reconciliationReference). This
-local, session-bound action keeps the receipt and reference available through
-listArchivedRecoverableRequests() but excludes it from active lists and startup
-delivery. It is not proof of failed submission or permission to retry. There
-is no automatic expiry or dapp-side cancel. Desktop and mobile polling have
-bounded foreground waits and make one final authenticated read at the deadline;
-an unresolved outcome keeps its receipt.
+If the original active session is lost, a previously verified final result can
+still replay from IndexedDB. An unverified old-session request stays unknown;
+a new session is never used as if it owned the original request. After
+independent wallet/relay/chain reconciliation, archive it with an explicit
+reference and inspect it through listArchivedRecoverableRequests(). Archiving
+is not proof of non-submission or permission to retry. Unknown active evidence
+does not expire automatically; acknowledged tombstones and explicit archives
+are eligible for cleanup after 30 and 180 days respectively. Browser data
+deletion, a different origin/browser/device, or loss of required keys can make
+recovery impossible. Infer Desk currently keeps request results in process
+memory, so a Desk restart can still make a desktop outcome irretrievable until
+Desk implements durable original-request access.
 
-The older low-level readPendingMobileRelayRequests,
-resumeMobileRelayRequest, and clearPendingMobileRelayRequest exports remain
-available for existing callers. The unified reader handles authenticated relay
-lookup, decryption, and method-specific validation. Treat unknown as
-unresolved: reconcile the wallet, relay, and chain before deciding whether an
-action can be retried. A lost creation response has no known request ID and
-cannot be automatically recovered. Receipts depend on same-tab
-sessionStorage and the original session; they do not survive tab closure,
-storage clearing, or a lost session. Infer Desk currently keeps bridge results
-in process memory, so its restart can make a desktop outcome irretrievable.
+The optional inferenco:connectionHealth feature exposes checking, connected,
+unreachable, and reconnect-required states for external sessions. A browser
+TypeError is ambiguous: the cached identity is retained for recovery, but
+cannot validate the bridge as live. A cached mobile relay session reports
+checking with a reason because the relay currently has no authenticated
+session-health read route; possession of a token alone is not proof of liveness. External-browser reconnect must use the
+approved inferenco:// and PKCE callback path to obtain a fresh endpoint; do
+not discover URL tokens publicly or repeat an uncertain transaction. The
+lower-level readPendingMobileRelayRequests, resumeMobileRelayRequest, and
+clearPendingMobileRelayRequest exports remain for existing integrations.
 
 ## WebSocket Protocol
 

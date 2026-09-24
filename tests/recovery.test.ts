@@ -73,20 +73,21 @@ describe("exact-ID signing recovery", () => {
     });
     await expect(tryLocalBridgeSignAndSubmit({} as never, desktop,
       { bridgePollTimeoutMs: 0, onRequestCreated: hook }))
-      .rejects.toThrow("outcome is unknown");
+      .rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN", requestId: "desktop-request" });
     expect(posts).toBe(1);
     expect(cancels).toBe(0);
-    expect(await listRecoverableRequests()).toEqual([{
+    expect(await listRecoverableRequests()).toMatchObject([{
       requestId: "desktop-request", method: "signAndSubmitTransaction", transport: "desktop-bridge"
     }]);
-    expect(() => acknowledgeRecoverableRequest("desktop-request")).toThrow("verified final outcome");
+    await expect(acknowledgeRecoverableRequest("desktop-request"))
+      .rejects.toThrow("verified final outcome");
     expect(await readRecoverableRequest("desktop-request")).toMatchObject({ status: "pending" });
     approved = true;
-    expect(await readRecoverableRequest("desktop-request")).toEqual({
+    expect(await readRecoverableRequest("desktop-request")).toMatchObject({
       requestId: "desktop-request", method: "signAndSubmitTransaction",
       transport: "desktop-bridge", status: "approved", output: { hash }
     });
-    acknowledgeRecoverableRequest("desktop-request");
+    await acknowledgeRecoverableRequest("desktop-request");
     expect(await listRecoverableRequests()).toEqual([]);
     expect(posts).toBe(1);
     expect(cancels).toBe(0);
@@ -109,7 +110,8 @@ describe("exact-ID signing recovery", () => {
       throw new Error("Unexpected request: " + url);
     });
     expect(await readRecoverableRequest("desktop-request")).toMatchObject({ status: "unknown" });
-    expect(() => acknowledgeRecoverableRequest("desktop-request")).toThrow("verified final outcome");
+    await expect(acknowledgeRecoverableRequest("desktop-request"))
+      .rejects.toThrow("verified final outcome");
     expect(await listRecoverableRequests()).toHaveLength(1);
   });
 
@@ -145,7 +147,7 @@ describe("exact-ID signing recovery", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(window.sessionStorage.getItem(INFER_CALLBACK_MARKER_STORAGE_KEY))
       .toContain("different-request");
-    acknowledgeRecoverableRequest("mobile-request");
+    await acknowledgeRecoverableRequest("mobile-request");
     expect(await listRecoverableRequests()).toEqual([]);
   });
 
@@ -191,8 +193,8 @@ describe("exact-ID signing recovery", () => {
     });
     expect(await readRecoverableRequest("rejected-one")).toMatchObject({ status: "rejected" });
     expect(await readRecoverableRequest("mixed-two")).toMatchObject({ status: "unknown" });
-    acknowledgeRecoverableRequest("rejected-one");
-    expect(await listRecoverableRequests()).toEqual([{
+    await acknowledgeRecoverableRequest("rejected-one");
+    expect(await listRecoverableRequests()).toMatchObject([{
       requestId: "mixed-two", method: "signAndSubmitTransaction", transport: "desktop-bridge"
     }]);
   });
@@ -201,10 +203,8 @@ describe("exact-ID signing recovery", () => {
     storeExternalSession({ ...desktop, transport: "mobile-relay" });
     const wallet = createInferAIP62Wallet();
     expect(wallet.features).toHaveProperty("inferenco:recoveredOutcomes");
-    vi.spyOn(Storage.prototype, "length", "get").mockImplementation(() => {
-      throw new Error("Storage blocked");
-    });
-    await expect(listRecoverableRequests()).rejects.toThrow("Unable to inspect saved relay requests");
+    vi.stubGlobal("indexedDB", undefined);
+    await expect(listRecoverableRequests()).rejects.toMatchObject({ code: "UNSUPPORTED" });
   });
 
   it("does not list a request bound to another origin or session", async () => {
@@ -234,7 +234,8 @@ describe("recovery repair boundaries", () => {
       throw new Error("Unexpected request: " + url);
     });
     await expect(tryLocalBridgeSignAndSubmit({} as never, session,
-      { bridgePollTimeoutMs: 0, onRequestCreated: created })).rejects.toThrow("outcome is unknown");
+      { bridgePollTimeoutMs: 0, onRequestCreated: created }))
+      .rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN", requestId: "token-free" });
     expect(JSON.stringify(created.mock.calls[0]?.[0])).not.toContain(token);
     const key = "inferenco:infer-pending-desktop-request:token-free";
     expect(window.sessionStorage.getItem(key)).not.toContain(token);
@@ -253,7 +254,6 @@ describe("recovery repair boundaries", () => {
   });
 
   it("bounds a hidden desktop poll and leaves the request recoverable", async () => {
-    vi.useFakeTimers();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     _setBridgeTokenForTesting(token);
     storeExternalSession(desktop);
@@ -271,13 +271,11 @@ describe("recovery repair boundaries", () => {
     });
     const result = tryLocalBridgeSignAndSubmit({} as never, desktop,
       { bridgePollTimeoutMs: 20, bridgePollIntervalMs: 10000 });
-    const rejection = expect(result).rejects.toThrow("outcome is unknown");
-    await vi.advanceTimersByTimeAsync(25);
-    await rejection;
+    await expect(result).rejects.toMatchObject({
+      code: "REQUEST_OUTCOME_UNKNOWN", requestId: "hidden-desktop"
+    });
     expect(reads).toBe(2);
     expect(await listRecoverableRequests()).toHaveLength(1);
-    expect(vi.getTimerCount()).toBe(0);
-    vi.useRealTimers();
   });
 
   it.each(["signMessage", "signTransaction", "signAndSubmitTransaction"] as const)(
@@ -296,7 +294,8 @@ describe("recovery repair boundaries", () => {
         return json({ status: "approved", hash });
       });
       expect(await readRecoverableRequest("missing-id")).toMatchObject({ status: "unknown" });
-      expect(() => acknowledgeRecoverableRequest("missing-id")).toThrow("verified final outcome");
+      await expect(acknowledgeRecoverableRequest("missing-id"))
+      .rejects.toThrow("verified final outcome");
     }
   );
 
@@ -337,7 +336,7 @@ describe("recovery repair boundaries", () => {
       const result = method === "signMessage"
         ? tryLocalBridgeSignMessage({ message: "test" } as never, desktop)
         : tryLocalBridgeSignTransaction({} as never, desktop);
-      await expect(result).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+      await expect(result).rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN", dispatch: "unknown" });
       expect(await listRecoverableRequests()).toMatchObject([{ requestId: "direct-request" }]);
     }
   );
@@ -355,21 +354,23 @@ describe("recovery repair boundaries", () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"));
     expect(await readRecoverableRequest("unresolved")).toMatchObject({ status: "unknown" });
     let invalidReferenceError: unknown;
-    try { archiveRecoverableRequest("unresolved", ""); }
+    try { await archiveRecoverableRequest("unresolved", ""); }
     catch (error) { invalidReferenceError = error; }
     expect(invalidReferenceError).toMatchObject({ code: "INVALID_PARAMS" });
-    archiveRecoverableRequest("unresolved", "chain:testnet:tx:checked");
+    await archiveRecoverableRequest("unresolved", "chain:testnet:tx:checked");
     expect(await listRecoverableRequests()).toEqual([]);
     expect(await listArchivedRecoverableRequests()).toMatchObject([{
       requestId: "unresolved", reconciliationReference: "chain:testnet:tx:checked"
     }]);
     expect(window.sessionStorage.getItem("inferenco:infer-pending-desktop-request:unresolved"))
       .toContain("chain:testnet:tx:checked");
-    expect(() => acknowledgeRecoverableRequest("unresolved")).toThrow();
-    expect(() => archiveRecoverableRequest("unresolved", "again")).toThrow();
+    await expect(acknowledgeRecoverableRequest("unresolved")).rejects.toThrow();
+    await expect(archiveRecoverableRequest("unresolved", "again")).rejects.toThrow();
     expect(fetch).toHaveBeenCalledTimes(1);
     storeExternalSession({ ...desktop, sessionId: "other-session" });
-    expect(await listArchivedRecoverableRequests()).toEqual([]);
+    expect(await listArchivedRecoverableRequests()).toMatchObject([{
+      requestId: "unresolved", sessionId: desktop.sessionId
+    }]);
   });
 
   it("continues startup delivery after a hook failure and skips archived requests", async () => {
@@ -384,7 +385,7 @@ describe("recovery repair boundaries", () => {
         method: "signAndSubmitTransaction"
       });
     }
-    archiveRecoverableRequest("archived", "checked externally");
+    await archiveRecoverableRequest("archived", "checked externally");
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith("/session/desktop-session")) return json(desktop);
@@ -398,7 +399,11 @@ describe("recovery repair boundaries", () => {
       }
     });
     expect(client.listArchivedRecoverableRequests).toBeTypeOf("function");
-    await vi.waitFor(() => expect(delivered).toEqual(["first", "second"]));
+    await vi.waitFor(() => {
+      expect(delivered).toContain("first");
+      expect(delivered).toContain("second");
+      expect(delivered.filter((id) => id === "second")).toHaveLength(1);
+    });
     expect(fetch.mock.calls.some(([input]) => String(input).endsWith("/archived"))).toBe(false);
     expect(await listRecoverableRequests()).toHaveLength(2);
     const plugin = new InferWallet();

@@ -44,9 +44,12 @@ import {
 import {
   isValidTransactionHash,
   InferAdapterError,
+  InferRequestError,
+  unresolvedRequestError,
   InferErrorCode
 } from "./errors";
 import { deserializeSignTransactionResult } from "./conversion";
+import { prepareDurableInvocation, saveDurableRequest, saveDurableFinal, serializeStoredFinal, updateDurableInvocation } from "./durableRecovery";
 import type {
   InferExternalSignTransactionInput,
   InferExternalSession,
@@ -301,14 +304,18 @@ async function readRequestStatus(
 export async function readMobileRelayRequestOnce(
   requestId: string,
   session: InferExternalSession,
-  options: InferWalletOptions = {}
+  options: InferWalletOptions = {},
+  durablePending?: PendingMobileRelayRequest
 ): Promise<{ pending: PendingMobileRelayRequest; status: InferMobileRequestStatus }> {
   if (!session.dappSessionToken || !session.sharedSecret) {
     throw new InferAdapterError(InferErrorCode.Unauthorized, "Missing relay session for recovery");
   }
-  const pending = readPendingMobileRelayRequests(session).find((item) => item.requestId === requestId);
+  const pending = durablePending ?? readPendingMobileRelayRequests(session).find((item) => item.requestId === requestId);
   const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
-  if (!pending || pending.relayBaseUrl !== relayBaseUrl) {
+  if (!pending || pending.requestId !== requestId ||
+      pending.sessionId !== session.sessionId || pending.address !== session.address ||
+      pending.network !== session.network || pending.chainId !== session.chainId ||
+      pending.origin !== window.location.origin || pending.relayBaseUrl !== relayBaseUrl) {
     throw new InferAdapterError(InferErrorCode.Unauthorized, "Request does not belong to this relay session");
   }
   const status = await readRequestStatus(requestId, pending.method, session, options, 10_000);
@@ -470,41 +477,71 @@ async function startRequest(
   payload: unknown,
   session: InferExternalSession,
   options: InferWalletOptions
-): Promise<{ status: InferMobileRequestStatus; pending: PendingMobileRelayRequest }> {
+): Promise<{ status: InferMobileRequestStatus; pending: PendingMobileRelayRequest; durableId: string }> {
   if (!session.dappSessionToken || !session.sharedSecret) {
     throw new InferAdapterError(InferErrorCode.Unauthorized, "Missing Infer Connect mobile relay session state");
   }
 
   const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
-  const response = await fetchJsonWithTimeout<InferMobileRequestCreateResponse>(
-    buildRelayUrl(relayBaseUrl, "/v1/requests"),
-    mobileRequestTimeout(options),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        sessionId: session.sessionId,
-        dappSessionToken: session.dappSessionToken,
-        method,
-        callbackUrl: callbackUrlWithoutMarkers(),
-        encryptedRequest: encryptJson(payload, session.sharedSecret),
-        requestMetadata: {
-          origin: window.location.origin,
-          appName: appName()
-        }
-      })
-    }
-  );
+  let invocation;
+  try {
+    invocation = await prepareDurableInvocation(session, method);
+  } catch (cause) {
+    throw new InferRequestError(InferErrorCode.RequestNotInvoked,
+      "Wallet request was not sent because its invocation could not be saved",
+      null, null, cause);
+  }
+  try {
+    await options.onInvocationPrepared?.(Object.freeze({
+      invocationId: invocation.id, transport: invocation.transport,
+      sessionId: invocation.sessionId, address: invocation.address,
+      network: invocation.network, chainId: invocation.chainId,
+      method: invocation.method, state: invocation.state
+    }));
+  } catch (cause) {
+    await updateDurableInvocation(invocation.id, "not-invoked").catch(() => undefined);
+    throw new InferRequestError(InferErrorCode.RequestNotInvoked,
+      "Wallet request was not sent because invocation persistence failed",
+      invocation.id, null, cause);
+  }
+  let response: InferMobileRequestCreateResponse;
+  try {
+    response = await fetchJsonWithTimeout<InferMobileRequestCreateResponse>(
+      buildRelayUrl(relayBaseUrl, "/v1/requests"),
+      mobileRequestTimeout(options),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: session.sessionId,
+          dappSessionToken: session.dappSessionToken,
+          method,
+          callbackUrl: callbackUrlWithoutMarkers(),
+          encryptedRequest: encryptJson(payload, session.sharedSecret),
+          requestMetadata: {
+            origin: window.location.origin,
+            appName: appName()
+          }
+        })
+      }
+    );
+  } catch (cause) {
+    await updateDurableInvocation(invocation.id, "unknown").catch(() => undefined);
+    throw unresolvedRequestError(
+      "Relay request creation may have succeeded; reconcile before retrying",
+      invocation.id, null, cause);
+  }
 
   if (typeof response.requestId !== "string" || !response.requestId ||
       typeof response.expiresAt !== "string" || !Number.isFinite(Date.parse(response.expiresAt))) {
-    throw new InferAdapterError(InferErrorCode.InternalError, "Invalid relay request receipt");
+    await updateDurableInvocation(invocation.id, "unknown").catch(() => undefined);
+    throw new InferRequestError(InferErrorCode.RequestOutcomeUnknown,
+      "Relay request creation returned an invalid receipt", invocation.id, null);
   }
   const pending: PendingMobileRelayRequest = {
     version: 1,
     requestId: response.requestId,
+    invocationId: invocation.id,
     sessionId: session.sessionId,
     address: session.address,
     network: session.network,
@@ -517,12 +554,29 @@ async function startRequest(
         "rawTransactionBcsHex" in payload && typeof payload.rawTransactionBcsHex === "string"
       ? { expectedTransactionBcsHex: payload.rawTransactionBcsHex } : {})
   };
-  storePendingMobileRelayRequest(pending);
-  await options.onMobileRequestCreated?.(Object.freeze({ ...pending }));
-  await options.onRequestCreated?.(Object.freeze({ ...pending }));
+  let durableId: string;
+  try {
+    storePendingMobileRelayRequest(pending);
+    durableId = (await saveDurableRequest(pending, invocation.id)).id;
+    await updateDurableInvocation(invocation.id, "created", response.requestId);
+    await options.onMobileRequestCreated?.(Object.freeze({ ...pending }));
+    await options.onRequestCreated?.(Object.freeze({ ...pending }));
+  } catch (cause) {
+    await updateDurableInvocation(invocation.id, "unknown", response.requestId).catch(() => undefined);
+    throw unresolvedRequestError(
+      "Relay request exists but its receipt could not be fully recorded",
+      invocation.id, response.requestId, cause);
+  }
   if (Date.parse(response.expiresAt) > Date.now()) launch(response.walletDeeplinkUrl);
-  const status = await waitForRequestOutcome(response.requestId, method, session, options, response.expiresAt);
-  return { status, pending };
+  let status: InferMobileRequestStatus;
+  try {
+    status = await waitForRequestOutcome(response.requestId, method, session, options, response.expiresAt);
+  } catch (cause) {
+    throw unresolvedRequestError(
+      "Relay request outcome is unresolved; read the original request before retrying",
+      invocation.id, response.requestId, cause);
+  }
+  return { status, pending, durableId };
 }
 
 export function decodeMobileRelayResult(
@@ -577,13 +631,45 @@ export function decodeMobileRelayResult(
   return { hash: result.hash };
 }
 
+async function completeMobileResult(
+  status: InferMobileRequestStatus,
+  pending: PendingMobileRelayRequest,
+  session: InferExternalSession,
+  durableId: string
+): Promise<CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput> {
+  const invocationId = pending.invocationId!;
+  let output: CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput;
+  try {
+    output = decodeMobileRelayResult(status, pending, session);
+  } catch (cause) {
+    if (cause instanceof InferAdapterError && cause.code === InferErrorCode.UserRejected) {
+      try {
+        await saveDurableFinal(durableId, { status: "rejected" });
+      } catch (storageCause) {
+        throw unresolvedRequestError("Wallet rejection could not be saved durably",
+          invocationId, pending.requestId, storageCause);
+      }
+      throw cause;
+    }
+    throw unresolvedRequestError("Wallet result could not be validated",
+      invocationId, pending.requestId, cause);
+  }
+  try {
+    await saveDurableFinal(durableId, serializeStoredFinal(pending.method, output));
+  } catch (cause) {
+    throw unresolvedRequestError("Verified wallet result could not be saved durably",
+      invocationId, pending.requestId, cause);
+  }
+  return output;
+}
+
 export async function signMessageViaMobileRelay(
   input: CedraSignMessageInput,
   session: InferExternalSession,
   options: InferWalletOptions = {}
 ): Promise<CedraSignMessageOutput> {
-  const { status, pending } = await startRequest("signMessage", input, session, options);
-  return decodeMobileRelayResult(status, pending, session) as CedraSignMessageOutput;
+  const { status, pending, durableId } = await startRequest("signMessage", input, session, options);
+  return completeMobileResult(status, pending, session, durableId) as Promise<CedraSignMessageOutput>;
 }
 
 export async function signTransactionViaMobileRelay(
@@ -591,9 +677,10 @@ export async function signTransactionViaMobileRelay(
   session: InferExternalSession,
   options: InferWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string }> {
-  const { status, pending } = await startRequest("signTransaction", input, session, options);
-  return decodeMobileRelayResult(status, pending, session) as
-    CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string };
+  const { status, pending, durableId } = await startRequest("signTransaction", input, session, options);
+  return completeMobileResult(status, pending, session, durableId) as Promise<
+    CedraSignTransactionOutputV1_1 & { authenticatorHex: string; rawTransactionBcsHex: string }
+  >;
 }
 
 const MOBILE_REJECTION_ALLOWED_KEYS = new Set([
@@ -665,8 +752,8 @@ export async function signAndSubmitViaMobileRelay(
   session: InferExternalSession,
   options: InferWalletOptions = {}
 ): Promise<CedraSignAndSubmitTransactionOutput> {
-  const { status, pending } = await startRequest("signAndSubmitTransaction", input, session, options);
-  return decodeMobileRelayResult(status, pending, session) as CedraSignAndSubmitTransactionOutput;
+  const { status, pending, durableId } = await startRequest("signAndSubmitTransaction", input, session, options);
+  return completeMobileResult(status, pending, session, durableId) as Promise<CedraSignAndSubmitTransactionOutput>;
 }
 
 type AnyMobileTransactionLike = InferTransactionPayload | CedraSignAndSubmitTransactionInput;

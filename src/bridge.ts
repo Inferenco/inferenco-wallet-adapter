@@ -5,6 +5,8 @@ import {
   CallbackOriginMismatch,
   isValidTransactionHash,
   InferAdapterError,
+  InferRequestError,
+  unresolvedRequestError,
   InferErrorCode
 } from "./errors.js";
 import { MissingBridgeTokenError } from "./bridge/token.js";
@@ -69,6 +71,7 @@ import { BRIDGE_TOKEN_PATH_REGEX } from "./bridge/token.js";
 import { forceRefreshBridgeToken } from "./bridge/token.js";
 import { bridgePathWithToken, bridgeUrlWithToken, getBridgeBaseUrlWithToken } from "./bridge/url.js";
 import { deserializeSignTransactionResult, normalizeProviderAccount } from "./conversion";
+import { prepareDurableInvocation, saveDurableRequest, saveDurableFinal, serializeStoredFinal, updateDurableInvocation } from "./durableRecovery";
 import { desktopBridgeOrigin, storePendingDesktopBridgeRequest, readPendingDesktopBridgeRequests, type PendingDesktopBridgeRequest } from "./desktopRequests";
 
 type InferPendingMobilePairing = {
@@ -1198,84 +1201,63 @@ export async function waitForExternalSession(
   });
 }
 
+function publicSessionIdentity(session: InferExternalSession): import("./types").InferConnectionIdentity {
+  return {
+    transport: session.transport, sessionId: session.sessionId,
+    address: session.address, network: session.network, chainId: session.chainId
+  };
+}
+
+/** A cached identity is never itself evidence that the transport is usable. */
+export async function checkExternalConnectionHealth(
+  session: InferExternalSession | null = readExternalSession(),
+  options: InferWalletOptions = {}
+): Promise<import("./types").InferConnectionHealth> {
+  if (!isBrowser() || !session) return { state: "disconnected", identity: null };
+  const identity = publicSessionIdentity(session);
+  if (session.transport === "mobile-relay") {
+    return session.dappSessionToken && session.sharedSecret
+      ? { state: "checking", identity,
+          reason: "The relay has no authenticated session-health read endpoint" }
+      : { state: "reconnect-required", identity,
+          reason: "Mobile session credentials are unavailable" };
+  }
+  try {
+    const payload = await fetchJsonWithTimeout<Partial<InferExternalSession>>(
+      sessionEndpointUrl(session, options), bridgeConnectTimeoutMs(options)
+    );
+    const parsed = parseExternalSession(payload);
+    if (!parsed || parsed.sessionId !== session.sessionId ||
+        parsed.address !== session.address || parsed.network !== session.network ||
+        parsed.chainId !== session.chainId) {
+      return { state: "unreachable", identity, reason: "Infer Desk returned an invalid session response" };
+    }
+    storeExternalSession({
+      ...session, ...parsed, bridgeUrl: parsed.bridgeUrl ?? session.bridgeUrl,
+      protocolPublicKey: parsed.protocolPublicKey ?? session.protocolPublicKey,
+      walletName: parsed.walletName ?? session.walletName
+    });
+    return { state: "connected", identity };
+  } catch (error) {
+    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+      clearExternalSession();
+      return { state: "reconnect-required", identity, reason: "Infer Desk rejected the cached session" };
+    }
+    return { state: "unreachable", identity,
+      reason: error instanceof TypeError ? "Infer Desk could not be reached or the browser blocked access"
+        : "Infer Desk session validation could not complete" };
+  }
+}
+
 export async function validateExternalSession(
   session: InferExternalSession,
   options: InferWalletOptions = {}
 ): Promise<InferExternalSession | null> {
-  if (!isBrowser()) return null;
-  if (session.transport === "mobile-relay") {
-    return session;
+  const health = await checkExternalConnectionHealth(session, options);
+  if (session.transport === "mobile-relay" && health.state === "checking") {
+    return readExternalSession();
   }
-
-  try {
-    const sessionUrl = sessionEndpointUrl(session, options);
-    const payload = await fetchJsonWithTimeout<Partial<InferExternalSession>>(
-      sessionUrl,
-      bridgeConnectTimeoutMs(options)
-    );
-    const validatedSession = parseExternalSession(payload) ?? session;
-    const refreshedSession: InferExternalSession = {
-      ...session,
-      ...validatedSession,
-      bridgeUrl: validatedSession.bridgeUrl ?? session.bridgeUrl,
-      protocolPublicKey: validatedSession.protocolPublicKey ?? session.protocolPublicKey,
-      walletName: validatedSession.walletName ?? session.walletName
-    };
-
-    storeExternalSession(refreshedSession);
-
-    return refreshedSession;
-  } catch (error) {
-    // P-04 (HTTPS connect reload): split the TypeError branch from
-    // the explicit-403/404 branch.
-    //
-    //   1. BridgeHttpError(403 | 404): the wallet explicitly told
-    //      us the session is gone (revoked, expired, never existed
-    //      on this wallet instance). `clearExternalSession()` is
-    //      appropriate — the session is unambiguously dead.
-    //
-    //   2. TypeError: the browser refused to let JS read the
-    //      response (CORS block, PNA block, or a network failure).
-    //      Indistinguishable from JS, but the RECOVERY differs.
-    //
-    //      CHANGED in 0.2.0-rc.18 (P-04): a TypeError no longer
-    //      clears the session. Instead we read it back from
-    //      localStorage via `readExternalSession()` so the
-    //      adapter can still return a usable session to the dApp.
-    //
-    //      Rationale: Chrome ≥142 enforces Local Network Access
-    //      (LNA / PNA) and blocks public HTTPS origins from
-    //      reaching loopback addresses. The fetch fails with a
-    //      `TypeError: Failed to fetch`, but the cached session
-    //      is still valid for direct calls to the bridge from
-    //      an embedded context (Infer Desk's in-app webview) or
-    //      after the user grants local-network access.
-    //
-    //      Pre-fix behaviour: every page reload on an HTTPS dApp
-    //      cleared the session → user had to re-connect every
-    //      reload, and `validateExternalSession` returned null
-    //      which fired the spurious `on("disconnect")` event.
-    //
-    //      The OTHER TypeError scenarios (genuine CORS misconfig,
-    //      DNS failure, connection refused) still get a usable
-    //      session returned — the next sign/sign-message call
-    //      will fail loudly with the real network error. We
-    //      prefer "potentially stale session, retry surfaces the
-    //      real error" over "wipe session on every transient
-    //      network blip".
-    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
-      clearExternalSession();
-    } else if (error instanceof TypeError) {
-      // P-04: TypeError is now a SOFT failure — return whatever
-      // localStorage has. `readExternalSession()` returns null
-      // only if no session is stored; if one is stored, it is
-      // returned as-is (possibly stale, but the dApp can decide
-      // how to handle that via its own error path).
-      return readExternalSession();
-    }
-
-    return null;
-  }
+  return health.state === "connected" ? readExternalSession() : null;
 }
 
 export async function revokeExternalSession(
@@ -1942,10 +1924,12 @@ function saveDesktopRequest(
   method: PendingDesktopBridgeRequest["method"],
   session: InferExternalSession,
   options: InferWalletOptions,
-  expectedTransactionBcsHex?: string
+  expectedTransactionBcsHex?: string,
+  invocationId?: string
 ): PendingDesktopBridgeRequest {
   const pending: PendingDesktopBridgeRequest = {
     version: 2, transport: "desktop-bridge", requestId, method,
+    ...(invocationId ? { invocationId } : {}),
     sessionId: session.sessionId, address: session.address,
     network: session.network, chainId: session.chainId,
     origin: window.location.origin,
@@ -1954,6 +1938,112 @@ function saveDesktopRequest(
   };
   storePendingDesktopBridgeRequest(pending);
   return pending;
+}
+
+async function startDurableDesktopRequest(
+  path: string,
+  body: unknown,
+  method: PendingDesktopBridgeRequest["method"],
+  session: InferExternalSession,
+  options: InferWalletOptions,
+  requestOptions: InferWalletOptions,
+  reconnectError: Error,
+  expectedTransactionBcsHex?: string
+): Promise<{ requestId: string; pending: PendingDesktopBridgeRequest; durableId: string }> {
+  let invocation;
+  try {
+    invocation = await prepareDurableInvocation(session, method);
+  } catch (cause) {
+    throw new InferRequestError(InferErrorCode.RequestNotInvoked,
+      "Wallet request was not sent because its invocation could not be saved",
+      null, null, cause);
+  }
+  try {
+    await options.onInvocationPrepared?.(Object.freeze({
+      invocationId: invocation.id, transport: invocation.transport,
+      sessionId: invocation.sessionId, address: invocation.address,
+      network: invocation.network, chainId: invocation.chainId,
+      method: invocation.method, state: invocation.state
+    }));
+  } catch (cause) {
+    await updateDurableInvocation(invocation.id, "not-invoked").catch(() => undefined);
+    throw new InferRequestError(InferErrorCode.RequestNotInvoked,
+      "Wallet request was not sent because invocation persistence failed",
+      invocation.id, null, cause);
+  }
+  let requestId: string;
+  try {
+    requestId = await startBridgeRequest(path, body, requestOptions, reconnectError);
+  } catch (cause) {
+    await updateDurableInvocation(invocation.id, "unknown").catch(() => undefined);
+    throw unresolvedRequestError(
+      "Wallet request creation may have reached Infer Desk; reconcile before retrying",
+      invocation.id, null, cause);
+  }
+  try {
+    const pending = saveDesktopRequest(requestId, method, session, options,
+      expectedTransactionBcsHex, invocation.id);
+    const durable = await saveDurableRequest(pending, invocation.id);
+    await updateDurableInvocation(invocation.id, "created", requestId);
+    await options.onRequestCreated?.(Object.freeze({ ...pending }));
+    return { requestId, pending, durableId: durable.id };
+  } catch (cause) {
+    await updateDurableInvocation(invocation.id, "unknown", requestId).catch(() => undefined);
+    throw unresolvedRequestError(
+      "Wallet request exists but its receipt could not be fully recorded",
+      invocation.id, requestId, cause);
+  }
+}
+
+async function pollDurableDesktopResult<T extends { status?: string; error?: string }>(
+  path: string,
+  requestId: string,
+  invocationId: string,
+  options: InferWalletOptions,
+  reconnectError: Error
+): Promise<T> {
+  try {
+    return await pollSignedResult<T>(path, requestId, options, reconnectError);
+  } catch (cause) {
+    throw unresolvedRequestError(
+      "Wallet request outcome is unresolved; read the original request before retrying",
+      invocationId, requestId, cause);
+  }
+}
+
+async function completeDesktopResult(
+  payload: InferBridgeMessagePoll | InferBridgeSignTransactionPoll | InferBridgeTransactionPoll,
+  pending: PendingDesktopBridgeRequest,
+  durableId: string
+): Promise<CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput> {
+  const invocationId = pending.invocationId!;
+  let output: CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput;
+  try {
+    if (pending.method === "signAndSubmitTransaction" && payload.requestId !== pending.requestId) {
+      throw new InferAdapterError(InferErrorCode.InternalError,
+        "Infer Desk returned a missing or different transaction request id");
+    }
+    output = decodeDesktopResult(payload, pending);
+  } catch (cause) {
+    if (cause instanceof InferAdapterError && cause.code === InferErrorCode.UserRejected) {
+      try {
+        await saveDurableFinal(durableId, { status: "rejected" });
+      } catch (storageCause) {
+        throw unresolvedRequestError("Wallet rejection could not be saved durably",
+          invocationId, pending.requestId, storageCause);
+      }
+      throw cause;
+    }
+    throw unresolvedRequestError("Wallet result could not be validated",
+      invocationId, pending.requestId, cause);
+  }
+  try {
+    await saveDurableFinal(durableId, serializeStoredFinal(pending.method, output));
+  } catch (cause) {
+    throw unresolvedRequestError("Verified wallet result could not be saved durably",
+      invocationId, pending.requestId, cause);
+  }
+  return output;
 }
 
 function decodeDesktopResult(
@@ -2002,10 +2092,15 @@ function decodeDesktopResult(
 export async function readDesktopBridgeRequestOnce(
   requestId: string,
   session: InferExternalSession,
-  options: InferWalletOptions = {}
+  options: InferWalletOptions = {},
+  durablePending?: PendingDesktopBridgeRequest
 ): Promise<{ pending: PendingDesktopBridgeRequest; status: "pending" | "approved"; output?: CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput }> {
-  const pending = readPendingDesktopBridgeRequests(session, options).find((item) => item.requestId === requestId);
-  if (!pending) {
+  const pending = durablePending ?? readPendingDesktopBridgeRequests(session, options).find((item) => item.requestId === requestId);
+  if (!pending || pending.requestId !== requestId ||
+      pending.sessionId !== session.sessionId || pending.address !== session.address ||
+      pending.network !== session.network || pending.chainId !== session.chainId ||
+      pending.origin !== window.location.origin ||
+      pending.bridgeOrigin !== desktopBridgeOrigin(session, options)) {
     throw new InferAdapterError(InferErrorCode.Unauthorized, "Request does not belong to this Infer Desk session");
   }
   const path = pending.method === "signMessage" ? "/message-request" :
@@ -2030,17 +2125,15 @@ export async function tryLocalBridgeSignMessage(
 ): Promise<CedraSignMessageOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
   const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
-  const requestId = await startBridgeRequest("/sign-message", {
+  const { requestId, pending, durableId } = await startDurableDesktopRequest("/sign-message", {
     origin: window.location.origin,
     app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
     sessionId: session.sessionId, message: input
-  }, requestOptions, reconnectSigningError());
-  const pending = saveDesktopRequest(requestId, "signMessage", session, options);
-  await options.onRequestCreated?.(Object.freeze({ ...pending }));
-  const payload = await pollSignedResult<InferBridgeMessagePoll>(
-    "/message-request", requestId, requestOptions, reconnectSigningError()
+  }, "signMessage", session, options, requestOptions, reconnectSigningError());
+  const payload = await pollDurableDesktopResult<InferBridgeMessagePoll>(
+    "/message-request", requestId, pending.invocationId!, requestOptions, reconnectSigningError()
   );
-  return decodeDesktopResult(payload, pending) as CedraSignMessageOutput;
+  return completeDesktopResult(payload, pending, durableId) as Promise<CedraSignMessageOutput>;
 }
 
 export async function tryLocalBridgeSignTransaction(
@@ -2050,18 +2143,16 @@ export async function tryLocalBridgeSignTransaction(
 ): Promise<CedraSignTransactionOutputV1_1> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
   const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
-  const requestId = await startBridgeRequest("/sign-transaction", {
+  const { requestId, pending, durableId } = await startDurableDesktopRequest("/sign-transaction", {
     origin: window.location.origin,
     app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
     sessionId: session.sessionId, transaction: input
-  }, requestOptions, reconnectSigningError());
-  const pending = saveDesktopRequest(requestId, "signTransaction", session, options,
+  }, "signTransaction", session, options, requestOptions, reconnectSigningError(),
     "rawTransactionBcsHex" in input ? input.rawTransactionBcsHex : undefined);
-  await options.onRequestCreated?.(Object.freeze({ ...pending }));
-  const payload = await pollSignedResult<InferBridgeSignTransactionPoll>(
-    "/sign-transaction-request", requestId, requestOptions, reconnectSigningError()
+  const payload = await pollDurableDesktopResult<InferBridgeSignTransactionPoll>(
+    "/sign-transaction-request", requestId, pending.invocationId!, requestOptions, reconnectSigningError()
   );
-  return decodeDesktopResult(payload, pending) as CedraSignTransactionOutputV1_1;
+  return completeDesktopResult(payload, pending, durableId) as Promise<CedraSignTransactionOutputV1_1>;
 }
 
 function hasOnlyKeys(value: object, allowedKeys: readonly string[]): boolean {
@@ -2076,19 +2167,13 @@ export async function tryLocalBridgeSignAndSubmit(
 ): Promise<CedraSignAndSubmitTransactionOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectTransactionError();
   const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
-  const requestId = await startBridgeRequest("/transaction", {
+  const { requestId, pending, durableId } = await startDurableDesktopRequest("/transaction", {
     origin: window.location.origin,
     app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
     sessionId: session.sessionId, transaction: input
-  }, requestOptions, reconnectTransactionError());
-  const pending = saveDesktopRequest(requestId, "signAndSubmitTransaction", session, options);
-  await options.onRequestCreated?.(Object.freeze({ ...pending }));
-  const payload = await pollSignedResult<InferBridgeTransactionPoll>(
-    "/transaction-request", requestId, requestOptions, reconnectTransactionError()
+  }, "signAndSubmitTransaction", session, options, requestOptions, reconnectTransactionError());
+  const payload = await pollDurableDesktopResult<InferBridgeTransactionPoll>(
+    "/transaction-request", requestId, pending.invocationId!, requestOptions, reconnectTransactionError()
   );
-  if (payload.requestId !== requestId) {
-    throw new InferAdapterError(InferErrorCode.InternalError,
-      "Infer Desk returned a missing or different transaction request id");
-  }
-  return decodeDesktopResult(payload, pending) as CedraSignAndSubmitTransactionOutput;
+  return completeDesktopResult(payload, pending, durableId) as Promise<CedraSignAndSubmitTransactionOutput>;
 }
