@@ -18,6 +18,7 @@ import {
   buildDesktopOrMobileConnectUrlWithRequest,
   clearPendingMobilePairing,
   clearExternalSession,
+  checkExternalConnectionHealth,
   consumeExternalCallbackIfPresent,
   installExternalSessionResumeListeners,
   isMobileBrowser,
@@ -47,6 +48,7 @@ import {
   normalizeSignTransactionResult
 } from "./conversion";
 import { DEFAULT_SESSION_LIVENESS_INTERVAL_MS, INFER_SESSION_CLEARED_MESSAGE_TYPE } from "./constants";
+import { RECOVERY_CHANNEL, pruneDurableEvidence } from "./durableRecovery";
 import {
   isValidTransactionHash,
   InferAdapterError,
@@ -62,12 +64,27 @@ import {
   signMessageViaMobileRelay,
   signTransactionViaMobileRelay
 } from "./mobileRelay";
+import {
+  acknowledgeRecoverableRequest,
+  archiveRecoverableRequest,
+  listArchivedRecoverableRequests,
+  listRecoverableInvocations,
+  listRecoverableRequests,
+  readRecoverableRequest
+} from "./recovery";
+import type {
+  ArchivedRecoverableRequest,
+  RecoveredRequestOutcome,
+  RecoverableRequest,
+  RecoverableInvocation
+} from "./recovery";
 import { detectProvider } from "./provider";
 import type {
   InferExternalAccountInput,
   InferExternalSignTransactionInput,
   InferSignMessageResponse,
   InferExternalSession,
+  InferConnectionHealth,
   InferProvider,
   InferRawTransactionSignInput,
   InferSignTransactionResult,
@@ -90,6 +107,7 @@ type InferClientEvents = {
    * route the user back through the connect flow.
    */
   disconnect: [];
+  connectionHealth: [InferConnectionHealth];
 };
 
 function isWalletStandardSignTransactionInput(
@@ -404,14 +422,182 @@ export class InferClient extends EventEmitter<InferClientEvents> {
    * a disconnect this generation, so a duplicate `disconnect` event
    * (e.g., storage event in peer tab + direct emit) doesn't double-clear. */
   private disconnectEmitted = false;
+  private healthState: InferConnectionHealth = { state: "disconnected", identity: null };
+  private readonly recoveredSubscribers = new Map<
+    (outcome: RecoveredRequestOutcome) => void | Promise<void>, Set<string>
+  >();
+  private recoveryRun: Promise<void> | null = null;
+  private recoveryRescan = false;
+  private recoveryChannel: BroadcastChannel | null = null;
+  private disconnectChannel: BroadcastChannel | null = null;
+  private readonly recoveryWake = () => { this.scheduleRecovery(); };
+  private readonly onSessionCleared = () => { this.handleExternalSessionCleared(); };
+  private readonly onPeerDisconnect = (event: MessageEvent) => {
+    if (parseDisconnectPayload(event.data)) this.handleExternalSessionCleared();
+  };
+  private readonly onWindowDisconnect = (event: MessageEvent) => {
+    if (event.origin === window.location.origin && parseDisconnectPayload(event.data)) {
+      this.handleExternalSessionCleared();
+    }
+  };
+  private disposed = false;
 
   constructor(private readonly options: InferWalletOptions = {}) {
     super();
     installExternalSessionResumeListeners();
     storeCallbackSession();
     this.provider = detectProvider(options);
+    const cached = readExternalSession();
+    if (cached) {
+      this.healthState = {
+        state: "checking",
+        identity: { transport: cached.transport, sessionId: cached.sessionId,
+          address: cached.address, network: cached.network, chainId: cached.chainId }
+      };
+    }
     this.installDisconnectBridgeListeners();
     this.maybeStartSessionLiveness();
+    if (options.onRecoveredOutcome) {
+      this.recoveredSubscribers.set(options.onRecoveredOutcome, new Set());
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", this.recoveryWake);
+      window.addEventListener("pageshow", this.recoveryWake);
+      window.addEventListener("storage", this.recoveryWake);
+      if (typeof document !== "undefined") document.addEventListener("visibilitychange", this.recoveryWake);
+      if (typeof BroadcastChannel !== "undefined") {
+        try {
+          this.recoveryChannel = new BroadcastChannel(RECOVERY_CHANNEL);
+          this.recoveryChannel.addEventListener("message", this.recoveryWake);
+        } catch {
+          // Reads remain available if cross-tab notification is unavailable.
+        }
+      }
+      // Capture valid rc.20 tab receipts before any health check can clear
+      // a stale signing session. Durable records then remain origin-scoped.
+      const storageReady = this.listRecoverableRequests();
+      void storageReady.then(() => this.scheduleRecovery()).catch(() => undefined);
+      queueMicrotask(() => { void pruneDurableEvidence().catch(() => undefined); });
+    }
+  }
+
+  get connectionHealth(): InferConnectionHealth {
+    return this.healthState;
+  }
+
+  async checkConnectionHealth(): Promise<InferConnectionHealth> {
+    const next = await checkExternalConnectionHealth(readExternalSession(), this.options);
+    if (JSON.stringify(next) !== JSON.stringify(this.healthState)) {
+      this.healthState = next;
+      this.emit("connectionHealth", next);
+    }
+    if (next.state === "unreachable" || next.state === "reconnect-required") {
+      this.accountInfo = null;
+      this.networkInfo = null;
+    }
+    return next;
+  }
+
+  /** Application-facing exact-ID recovery; no request creation or wallet launch. */
+  listRecoverableRequests(): Promise<RecoverableRequest[]> {
+    return listRecoverableRequests(this.options);
+  }
+
+  listRecoverableInvocations(): Promise<RecoverableInvocation[]> {
+    return listRecoverableInvocations();
+  }
+
+  listArchivedRecoverableRequests(): Promise<ArchivedRecoverableRequest[]> {
+    return listArchivedRecoverableRequests(this.options);
+  }
+
+  readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
+    return readRecoverableRequest(requestId, this.options);
+  }
+
+  acknowledgeRecoverableRequest(requestId: string): Promise<void> {
+    return acknowledgeRecoverableRequest(requestId, this.options);
+  }
+
+  archiveRecoverableRequest(requestId: string, reconciliationReference: string): Promise<void> {
+    return archiveRecoverableRequest(requestId, reconciliationReference, this.options);
+  }
+
+  /** Late subscribers receive retained final outcomes; delivery is advisory until acknowledged. */
+  subscribeRecoveredOutcomes(
+    callback: (outcome: RecoveredRequestOutcome) => void | Promise<void>
+  ): () => void {
+    this.recoveredSubscribers.set(callback, new Set());
+    this.scheduleRecovery();
+    return () => { this.recoveredSubscribers.delete(callback); };
+  }
+
+  /** Stop coordinator listeners when an application replaces this client. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.livenessHandle !== null) clearInterval(this.livenessHandle);
+    this.livenessHandle = null;
+    if (typeof window !== "undefined") {
+      window.removeEventListener("focus", this.recoveryWake);
+      window.removeEventListener("pageshow", this.recoveryWake);
+      window.removeEventListener("storage", this.recoveryWake);
+      window.removeEventListener(INFER_SESSION_CLEARED_MESSAGE_TYPE, this.onSessionCleared);
+      window.removeEventListener("message", this.onWindowDisconnect);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.recoveryWake);
+    }
+    this.recoveryChannel?.removeEventListener("message", this.recoveryWake);
+    this.recoveryChannel?.close();
+    this.recoveryChannel = null;
+    this.disconnectChannel?.removeEventListener("message", this.onPeerDisconnect);
+    this.disconnectChannel?.close();
+    this.disconnectChannel = null;
+    this.recoveredSubscribers.clear();
+  }
+
+  private scheduleRecovery(): void {
+    if (this.disposed || this.recoveredSubscribers.size === 0) return;
+    if (this.recoveryRun) {
+      this.recoveryRescan = true;
+      return;
+    }
+    this.recoveryRun = (async () => {
+      do {
+        this.recoveryRescan = false;
+        await this.reconcileRecoverableRequests();
+      } while (this.recoveryRescan && !this.disposed);
+    })().finally(() => { this.recoveryRun = null; });
+  }
+
+  private async reconcileRecoverableRequests(): Promise<void> {
+    let pending: RecoverableRequest[];
+    try {
+      pending = await this.listRecoverableRequests();
+    } catch {
+      return;
+    }
+    for (const request of pending) {
+      if (this.disposed || this.recoveredSubscribers.size === 0) return;
+      try {
+        const outcome = await this.readRecoverableRequest(request.recoveryId);
+        if (outcome.status !== "approved" && outcome.status !== "rejected") continue;
+        const stillActive = (await this.listRecoverableRequests()).some((item) =>
+          item.recoveryId === request.recoveryId && item.method === request.method
+        );
+        if (!stillActive) continue;
+        for (const [callback, delivered] of this.recoveredSubscribers) {
+          if (delivered.has(request.recoveryId) || this.disposed) continue;
+          try {
+            await callback(Object.freeze(outcome));
+            delivered.add(request.recoveryId);
+          } catch {
+            // Failed consumer persistence leaves the final outcome replayable.
+          }
+        }
+      } catch {
+        // An unreadable request remains available for a later wake or explicit read.
+      }
+    }
   }
 
   /** v0.2.0-rc.8 (Phase 5 UX): wire `bridge.ts`'s disconnect
@@ -422,32 +608,16 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   private installDisconnectBridgeListeners(): void {
     if (typeof window === "undefined") return;
 
-    // Same-window CustomEvent delivery.
-    window.addEventListener(INFER_SESSION_CLEARED_MESSAGE_TYPE, () => {
-      this.handleExternalSessionCleared();
-    });
-
-    // Cross-tab BroadcastChannel delivery — only relevant for tabs that
-    // join after the first one installed its channel listener.
+    window.addEventListener(INFER_SESSION_CLEARED_MESSAGE_TYPE, this.onSessionCleared);
     if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel(INFER_SESSION_CLEARED_MESSAGE_TYPE);
-      channel.addEventListener("message", (event) => {
-        if (parseDisconnectPayload(event.data)) {
-          this.handleExternalSessionCleared();
-        }
-      });
-      // We intentionally let the channel be garbage-collected with
-      // the tab; no manual cleanup required.
-    }
-
-    // window.opener delivery — dapp callback scenarios where a popup
-    // hands control back to the opener tab.
-    window.addEventListener("message", (event) => {
-      if (event.origin !== window.location.origin) return;
-      if (parseDisconnectPayload(event.data)) {
-        this.handleExternalSessionCleared();
+      try {
+        this.disconnectChannel = new BroadcastChannel(INFER_SESSION_CLEARED_MESSAGE_TYPE);
+        this.disconnectChannel.addEventListener("message", this.onPeerDisconnect);
+      } catch {
+        // The same-window and storage routes remain available.
       }
-    });
+    }
+    window.addEventListener("message", this.onWindowDisconnect);
   }
 
   /** v0.2.0-rc.8 (Phase 5 UX): unified cleanup path. Clears cached
@@ -465,6 +635,8 @@ export class InferClient extends EventEmitter<InferClientEvents> {
 
     this.accountInfo = null;
     this.networkInfo = null;
+    this.healthState = { state: "disconnected", identity: null };
+    this.emit("connectionHealth", this.healthState);
     this.emit("disconnect");
   }
 
@@ -488,15 +660,10 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   /** v0.2.0-rc.8 (Phase 5 UX): one tick of the liveness heartbeat. */
   private async pollSessionLiveness(): Promise<void> {
     try {
-      const session = await readValidatedExternalSession(this.options);
-      if (session === null) {
-        // 403/404 from the bridge — wallet revoked our session.
-        this.handleExternalSessionCleared();
-      }
+      const health = await this.checkConnectionHealth();
+      if (health.state === "reconnect-required") this.handleExternalSessionCleared();
     } catch {
-      // Transient errors (network blip, wallet restarting) are
-      // tolerated; the next tick will retry. We don't want the
-      // heartbeat to surface false positives.
+      // A failed health check is not proof of revocation.
     }
   }
 
@@ -532,6 +699,17 @@ export class InferClient extends EventEmitter<InferClientEvents> {
 
     this.accountInfo = account;
     this.networkInfo = network;
+    const identity = {
+      transport: externalSession.transport, sessionId: externalSession.sessionId,
+      address: externalSession.address, network: externalSession.network,
+      chainId: externalSession.chainId
+    };
+    this.healthState = externalSession.transport === "mobile-relay"
+      ? { state: "checking", identity,
+          reason: "The relay has no authenticated session-health read endpoint" }
+      : { state: "connected", identity };
+    this.emit("connectionHealth", this.healthState);
+    this.scheduleRecovery();
 
     return { account, network };
   }
@@ -581,7 +759,7 @@ export class InferClient extends EventEmitter<InferClientEvents> {
         // PKCE flow is in progress it'll arrive via storeCallbackSession
         // within a few ticks.
         for (let i = 0; i < 20; i += 1) {
-          const pending = readExternalSession();
+          const pending = await readValidatedExternalSession(this.options);
           if (pending) {
             return this.connectResultFromExternalSession(pending);
           }

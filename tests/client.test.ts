@@ -338,6 +338,12 @@ describe("InferClient", () => {
 
   it("completes cold-start desktop connect during the retry window", async () => {
     const signer = Account.generate();
+    // P-04 (0.2.0-rc.18): startPreauthConnect now throws a typed
+    // InferAdapterError on TypeError. Tests that exercise the
+    // retry/legacy-deeplink path need to mock preauth to null so
+    // the connect flow falls through to tryLocalBridgeConnect as
+    // before.
+    vi.spyOn(bridge, "startPreauthConnect").mockResolvedValue(null);
     const bridgeConnectSpy = vi
       .spyOn(bridge, "tryLocalBridgeConnect")
       .mockResolvedValueOnce(null)
@@ -375,6 +381,10 @@ describe("InferClient", () => {
 
   it("falls back to callback handoff only after the retry window expires", async () => {
     vi.useFakeTimers();
+    // P-04 (0.2.0-rc.18): preauth now throws a typed error on
+    // TypeError — this test is about the retry window timing, so
+    // we bypass preauth to focus on tryLocalBridgeConnect + deeplink.
+    vi.spyOn(bridge, "startPreauthConnect").mockResolvedValue(null);
     const bridgeConnectSpy = vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
     const launchSpy = vi.spyOn(bridge, "launchDesktopOrMobileConnect").mockReturnValue(
       "inferenco://login?redirect=https%3A%2F%2Fexample.com"
@@ -405,6 +415,10 @@ describe("InferClient", () => {
 
   it("reports a connection timeout when retries exhaust and deeplink handoff never returns", async () => {
     vi.useFakeTimers();
+    // P-04 (0.2.0-rc.18): preauth now throws a typed error on
+    // TypeError — bypass preauth to focus on the retry-exhaustion
+    // / deeplink-handoff timeout path.
+    vi.spyOn(bridge, "startPreauthConnect").mockResolvedValue(null);
     const bridgeConnectSpy = vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
     vi.spyOn(bridge, "launchDesktopOrMobileConnect").mockReturnValue(
       "inferenco://login?redirect=https%3A%2F%2Fexample.com"
@@ -424,6 +438,10 @@ describe("InferClient", () => {
   });
 
   it("surfaces bridge errors immediately during the retry window", async () => {
+    // P-04 (0.2.0-rc.18): preauth now throws a typed error on
+    // TypeError — bypass preauth to focus on the retry-loop error
+    // surfacing.
+    vi.spyOn(bridge, "startPreauthConnect").mockResolvedValue(null);
     vi.spyOn(bridge, "tryLocalBridgeConnect")
       .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error("Nova Desk rejected the browser bridge request"));
@@ -712,6 +730,20 @@ describe("InferClient", () => {
       .spyOn(bridge, "launchDesktopOrMobileConnect")
       .mockImplementation(() => "");
 
+    // P-04 (0.2.0-rc.18): startPreauthConnect now throws a typed
+    // InferAdapterError on TypeError. Pre-rc.18 this test relied on
+    // startPreauthConnect silently returning null on fetch failure
+    // and falling through to the legacy deeplink. In rc.18 that
+    // silent-fallthrough is GONE — preauth blocking is the typed
+    // signal the dApp is supposed to surface.
+    //
+    // To preserve the deeplink-fallback test scope, we explicitly
+    // mock preauth to return null (simulating "wallet build is
+    // pre-0.6.0-rc.6 or preauth route not available") so the
+    // fallback path is exercised. The new typed-error behaviour
+    // is covered by start_preauth_connect_p04.test.ts.
+    vi.spyOn(bridge, "startPreauthConnect").mockResolvedValue(null);
+
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new TypeError("MissingBridgeTokenError: token unavailable")
     );
@@ -745,8 +777,19 @@ describe("InferClient", () => {
     // Ensure /<token>/connection responds OK so disconnect() doesn't throw.
     // Each fetch must return a fresh Response object so its body can be
     // read exactly once.
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      new Response(JSON.stringify({ status: "revoked" }), {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) =>
+      new Response(JSON.stringify(init?.method === "DELETE"
+        ? { status: "revoked" }
+        : {
+            transport: "desktop-bridge",
+            address: signer.accountAddress.toString(),
+            publicKey: signer.publicKey.toString(),
+            network: "testnet",
+            chainId: 2,
+            sessionId: "session-self-disconnect",
+            bridgeUrl: "http://127.0.0.1:21984",
+            walletName: "Nova Desk"
+          }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       })

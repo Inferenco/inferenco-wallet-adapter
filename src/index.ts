@@ -29,3 +29,6 @@ export * from "./mobileRelay";
 export { readPendingMobileRelayRequests, clearPendingMobileRelayRequest } from "./mobileRequests";
 export type { PendingMobileRelayRequest } from "./mobileRequests";
 export * from "./mobileSocket";
+
+export * from "./recovery";
+export type { PendingDesktopBridgeRequest } from "./desktopRequests";

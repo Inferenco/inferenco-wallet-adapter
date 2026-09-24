@@ -5,6 +5,8 @@ import {
   CallbackOriginMismatch,
   isValidTransactionHash,
   InferAdapterError,
+  InferRequestError,
+  unresolvedRequestError,
   InferErrorCode
 } from "./errors.js";
 import { MissingBridgeTokenError } from "./bridge/token.js";
@@ -52,6 +54,7 @@ import {
   INFER_EXTERNAL_SESSION_STORAGE_KEY,
   INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY,
   INFER_CONNECT_NAME,
+  INFER_WALLET_NAME,
   INFER_DESK_APP_NAME,
   INFER_PROTOCOL_KEY_STORAGE_KEY,
   LEGACY_CALLBACK_REQUEST_ID_PARAM,
@@ -68,6 +71,8 @@ import { BRIDGE_TOKEN_PATH_REGEX } from "./bridge/token.js";
 import { forceRefreshBridgeToken } from "./bridge/token.js";
 import { bridgePathWithToken, bridgeUrlWithToken, getBridgeBaseUrlWithToken } from "./bridge/url.js";
 import { deserializeSignTransactionResult, normalizeProviderAccount } from "./conversion";
+import { prepareDurableInvocation, saveDurableRequest, saveDurableFinal, serializeStoredFinal, updateDurableInvocation } from "./durableRecovery";
+import { desktopBridgeOrigin, storePendingDesktopBridgeRequest, readPendingDesktopBridgeRequests, type PendingDesktopBridgeRequest } from "./desktopRequests";
 
 type InferPendingMobilePairing = {
   pairingId: string;
@@ -299,7 +304,9 @@ function parseExternalSession(
   // Tier 1 (deeplink hardening): the wallet name is set by the wallet,
   // not the dapp. An attacker who controls the callback URL can
   // substitute any string here to confuse the dapp's UI. Reject any
-  // value other than the canonical rebrand names. The legacy aliases
+  // value other than the canonical rebrand names, including Infer Wallet
+  // returned by approved mobile pairings (Infer Connect is the adapter name).
+  // The legacy aliases
   // (`LEGACY_INFER_CONNECT_NAME` = "Nova Connect" and
   // `LEGACY_INFER_DESK_LABEL` = "Nova Desk") are also accepted during
   // the transition window for previously-stored sessions and cached
@@ -307,6 +314,7 @@ function parseExternalSession(
   if (
     typeof candidate.walletName === "string" &&
     candidate.walletName !== INFER_CONNECT_NAME &&
+    candidate.walletName !== INFER_WALLET_NAME &&
     candidate.walletName !== INFER_DESK_APP_NAME &&
     candidate.walletName !== LEGACY_INFER_DESK_LABEL &&
     candidate.walletName !== LEGACY_INFER_CONNECT_NAME
@@ -593,6 +601,42 @@ function sessionBridgeBaseUrl(
       url.pathname = "/";
       url.search = "";
       url.hash = "";
+    }
+    // 0.2.0-rc.17: graft the per-session URL token from `session.bridgeUrl`
+    // onto a bare `options.bridgeBaseUrl`. Required because the Tier 1
+    // hardening (commit 4e68273, rc.4) prefers `options.bridgeBaseUrl`
+    // over `session.bridgeUrl`, which silently strips the token for dApps
+    // that pass a bare base URL (e.g. infer-ecosystem). Without the
+    // token, every disconnect-signalling route (`/session/<id>`,
+    // `/connection`) hits the wallet's F-03 token gate, returns 404
+    // without CORS, and `validateExternalSession()` (rc.15) clears its
+    // own localStorage session on every page load.
+    //
+    // ND-WEB-001 (deeplink hardening) stays closed: the HOST still comes
+    // from `options.bridgeBaseUrl`. An attacker who substitutes
+    // `session.bridgeUrl` can only inject a forged token SEGMENT onto
+    // the dApp's own trusted host — the request goes to the dApp's
+    // server, where it 404s. No signed messages leak.
+    //
+    // We skip the graft when the configured base already carries a token
+    // (avoids double-prefix) and when no token is available in the
+    // session (mobile-relay, pre-token storage).
+    if (options.bridgeBaseUrl && session.bridgeUrl) {
+      const baseHasToken = extractBridgeTokenFromBaseUrl(
+        url.toString(),
+        options
+      );
+      if (!baseHasToken) {
+        const sessionToken = extractBridgeTokenFromBaseUrl(
+          session.bridgeUrl,
+          {}
+        );
+        if (sessionToken) {
+          url.pathname = `/${sessionToken}${
+            url.pathname === "/" ? "" : url.pathname
+          }`;
+        }
+      }
     }
     return url.toString();
   } catch {
@@ -988,7 +1032,9 @@ export function storeCallbackSession(): void {
     CALLBACK_PROTOCOL_PUBLIC_KEY_PARAM,
     CALLBACK_WALLET_NAME_PARAM,
     CALLBACK_REQUEST_ID_PARAM,
-    CALLBACK_STATUS_PARAM
+    CALLBACK_STATUS_PARAM,
+    LEGACY_CALLBACK_REQUEST_ID_PARAM,
+    LEGACY_CALLBACK_STATUS_PARAM
   ]) {
     url.searchParams.delete(key);
   }
@@ -1155,68 +1201,63 @@ export async function waitForExternalSession(
   });
 }
 
+function publicSessionIdentity(session: InferExternalSession): import("./types").InferConnectionIdentity {
+  return {
+    transport: session.transport, sessionId: session.sessionId,
+    address: session.address, network: session.network, chainId: session.chainId
+  };
+}
+
+/** A cached identity is never itself evidence that the transport is usable. */
+export async function checkExternalConnectionHealth(
+  session: InferExternalSession | null = readExternalSession(),
+  options: InferWalletOptions = {}
+): Promise<import("./types").InferConnectionHealth> {
+  if (!isBrowser() || !session) return { state: "disconnected", identity: null };
+  const identity = publicSessionIdentity(session);
+  if (session.transport === "mobile-relay") {
+    return session.dappSessionToken && session.sharedSecret
+      ? { state: "checking", identity,
+          reason: "The relay has no authenticated session-health read endpoint" }
+      : { state: "reconnect-required", identity,
+          reason: "Mobile session credentials are unavailable" };
+  }
+  try {
+    const payload = await fetchJsonWithTimeout<Partial<InferExternalSession>>(
+      sessionEndpointUrl(session, options), bridgeConnectTimeoutMs(options)
+    );
+    const parsed = parseExternalSession(payload);
+    if (!parsed || parsed.sessionId !== session.sessionId ||
+        parsed.address !== session.address || parsed.network !== session.network ||
+        parsed.chainId !== session.chainId) {
+      return { state: "unreachable", identity, reason: "Infer Desk returned an invalid session response" };
+    }
+    storeExternalSession({
+      ...session, ...parsed, bridgeUrl: parsed.bridgeUrl ?? session.bridgeUrl,
+      protocolPublicKey: parsed.protocolPublicKey ?? session.protocolPublicKey,
+      walletName: parsed.walletName ?? session.walletName
+    });
+    return { state: "connected", identity };
+  } catch (error) {
+    if (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) {
+      clearExternalSession();
+      return { state: "reconnect-required", identity, reason: "Infer Desk rejected the cached session" };
+    }
+    return { state: "unreachable", identity,
+      reason: error instanceof TypeError ? "Infer Desk could not be reached or the browser blocked access"
+        : "Infer Desk session validation could not complete" };
+  }
+}
+
 export async function validateExternalSession(
   session: InferExternalSession,
   options: InferWalletOptions = {}
 ): Promise<InferExternalSession | null> {
-  if (!isBrowser()) return null;
-  if (session.transport === "mobile-relay") {
-    return session;
+  const health = await checkExternalConnectionHealth(session, options);
+  if (session.transport === "mobile-relay" && health.state === "checking") {
+    return readExternalSession();
   }
-
-  try {
-    const sessionUrl = sessionEndpointUrl(session, options);
-    const payload = await fetchJsonWithTimeout<Partial<InferExternalSession>>(
-      sessionUrl,
-      bridgeConnectTimeoutMs(options)
-    );
-    const validatedSession = parseExternalSession(payload) ?? session;
-    const refreshedSession: InferExternalSession = {
-      ...session,
-      ...validatedSession,
-      bridgeUrl: validatedSession.bridgeUrl ?? session.bridgeUrl,
-      protocolPublicKey: validatedSession.protocolPublicKey ?? session.protocolPublicKey,
-      walletName: validatedSession.walletName ?? session.walletName
-    };
-
-    storeExternalSession(refreshedSession);
-
-    return refreshedSession;
-  } catch (error) {
-    // Clear the stored session on either of two specific failure
-    // signals. Other errors (5xx from the bridge, AbortError from
-    // the timeout, JSON parse failures) leave the session in
-    // place — those are typically transient and the user can retry
-    // without going through fresh connect.
-    //
-    //   1. BridgeHttpError(403 | 404): the wallet explicitly told
-    //      us the session is gone (revoked, expired, never existed
-    //      on this wallet instance).
-    //
-    //   2. TypeError: the browser refused to let JS read the
-    //      response (CORS block) or the fetch hit a network failure.
-    //      Indistinguishable from JS, but the recovery is the same.
-    //
-    //      Infer Desk's HTTP bridge intentionally returns 404
-    //      responses without CORS headers (F-03 token gate — see
-    //      `write_404_no_cors` in nova-desk-ui's external_bridge.rs).
-    //      Browsers block reading those responses, which surfaces as
-    //      `TypeError: Failed to fetch` instead of a BridgeHttpError.
-    //      Without this branch, dapps that reload inside Infer Desk's
-    //      embedded browser with a session ID from a previous
-    //      external-browser deeplink flow keep retrying the stale
-    //      session on every page load and emit a confusing
-    //      `Solicitud desde otro origen bloqueada` devtools CORS
-    //      error forever.
-    if (
-      (error instanceof BridgeHttpError && (error.status === 403 || error.status === 404)) ||
-      error instanceof TypeError
-    ) {
-      clearExternalSession();
-    }
-
-    return null;
-  }
+  return health.state === "connected" ? readExternalSession() : null;
 }
 
 export async function revokeExternalSession(
@@ -1379,16 +1420,32 @@ async function pollBridge<T extends { status?: string; error?: string }>(
   options: InferWalletOptions
 ): Promise<T> {
   const deadline = Date.now() + bridgePollTimeoutMs(options);
-
   while (Date.now() < deadline) {
     const payload = await fetchJsonWithTimeout<T>(url, bridgeConnectTimeoutMs(options));
-    if (payload.status && payload.status !== "pending") {
-      return payload;
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, bridgePollIntervalMs(options)));
+    if (payload.status && payload.status !== "pending") return payload;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        window.removeEventListener("focus", finish);
+        document.removeEventListener("visibilitychange", finish);
+        resolve();
+      };
+      const timer = window.setTimeout(finish,
+        Math.max(1, Math.min(bridgePollIntervalMs(options), remaining)));
+      window.addEventListener("focus", finish);
+      document.addEventListener("visibilitychange", finish);
+    });
   }
-
-  throw new Error("Timed out waiting for Infer Desk approval");
+  // Browser suspension can pass the deadline without running a timer. Read the
+  // same request once more on resume, then settle with an unresolved receipt.
+  const finalPayload = await fetchJsonWithTimeout<T>(url, bridgeConnectTimeoutMs(options));
+  if (finalPayload.status && finalPayload.status !== "pending") return finalPayload;
+  throw new Error("Infer Desk outcome is unknown; recover the existing request before trying again");
 }
 
 /**
@@ -1471,7 +1528,46 @@ export async function startPreauthConnect(input: {
       pollUrl: response.pollUrl,
       bridgeUrl: response.bridgeUrl,
     };
-  } catch {
+  } catch (error) {
+    // P-04 (HTTPS connect reload, 0.2.0-rc.18): when the fetch
+    // throws a TypeError, this is the canonical signal that the
+    // browser blocked the cross-origin request (most commonly
+    // Chrome ≥142's Local Network Access / PNA enforcement when
+    // a public HTTPS origin tries to reach loopback). Surface a
+    // TYPED error so dApps can match `err instanceof
+    // InferAdapterError && err.code === BRIDGE_PRIVATE_NETWORK_BLOCKED`
+    // and render an actionable message.
+    //
+    // Connection refused / ECONNREFUSED throws WITHOUT a
+    // TypeError (it's a `TypeError` from fetch on some browsers
+    // but a `DOMException` or `Error` with a different message
+    // on others). We branch on `TypeError` strictly so that
+    // connection-refused falls through to the generic error
+    // path (`return null` below) and stays backward-compatible
+    // with rc.16's "silently null on connection failure"
+    // semantics.
+    if (error instanceof TypeError) {
+      // Wrap in InferAdapterError so consumers can do
+      // `instanceof` + `err.code === BRIDGE_PRIVATE_NETWORK_BLOCKED`.
+      // We throw it (not return null) so the caller can decide
+      // how to handle it — pre-fix this function silently
+      // returned null, which masked the actual cause and
+      // triggered the spurious deeplink-fallback re-navigation
+      // (the "page reload" UX bug).
+      throw new InferAdapterError(
+        InferErrorCode.BridgePrivateNetworkBlocked,
+        "Browser blocked access to the local wallet bridge (PNA / LNA). " +
+          "Public HTTPS origins need explicit local-network permission to " +
+          "reach the loopback wallet bridge. See infer-connect skill 'Bridge " +
+          "Private Network Blocked' section for the dApp-side recovery UX.",
+        error
+      );
+    }
+
+    // Connection refused / ECONNREFUSED / 5xx / parse error:
+    // preserve the legacy "return null" semantics so existing
+    // dApps fall through to the deeplink fallback path (where
+    // appropriate).
     return null;
   }
 }
@@ -1697,39 +1793,6 @@ function reconnectTransactionError(): Error {
   return new Error("Infer Desk is not reachable for transaction approval. Reconnect the wallet and try again.");
 }
 
-/**
- * Tell the wallet to drop a `Pending` request that the dapp no longer cares
- * about (user hit "Cancel" in the dapp UI, dapp navigated, or the request
- * timed out). Fire-and-forget: a failure here is harmless because the wallet
- * also lazy-sweeps expired requests on its own.
- *
- * Without this, a cancelled dapp request would block the wallet's
- * "Another Infer Desk ... approval is already pending." guard for the
- * lifetime of the wallet process.
- */
-function cancelPendingRequest(
-  requestId: string,
-  session: InferExternalSession,
-  options: InferWalletOptions,
-  reason: string
-): void {
-  if (!isBrowser() || !session.bridgeUrl) return;
-  const url = bridgeUrlWithToken(`/cancel/${requestId}`, {
-    ...options,
-    bridgeBaseUrl: session.bridgeUrl
-  });
-  // Don't await — we don't want a network blip to delay the caller.
-  // Fire-and-forget, with best-effort error suppression.
-  void fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reason }),
-    mode: "cors"
-  }).catch(() => {
-    /* wallet unreachable — the lazy sweep will eventually clear it */
-  });
-}
-
 function normalizeBridgeSignMessageOutput(payload: InferBridgeMessagePoll): CedraSignMessageOutput {
   const address = payload.address;
   const signature = payload.signature;
@@ -1805,11 +1868,11 @@ async function startBridgeRequest<T>(
         forceRefreshBridgeToken();
         start = await tryOnce();
       } catch (retryError) {
-        clearExternalSession();
-        throw reconnectError;
+        if (retryError instanceof BridgeHttpError &&
+            (retryError.status === 403 || retryError.status === 404)) throw reconnectError;
+        throw retryError;
       }
-    } else if (error instanceof BridgeHttpError && (error.status === 403 || error.status >= 500)) {
-      clearExternalSession();
+    } else if (error instanceof BridgeHttpError && error.status === 403) {
       throw reconnectError;
     } else {
       throw error;
@@ -1844,16 +1907,403 @@ async function pollSignedResult<T extends { status?: string; error?: string }>(
         forceRefreshBridgeToken();
         return await tryOnce();
       } catch (retryError) {
-        clearExternalSession();
-        throw reconnectError;
+        if (retryError instanceof BridgeHttpError &&
+            (retryError.status === 403 || retryError.status === 404)) throw reconnectError;
+        throw retryError;
       }
     }
-    if (error instanceof BridgeHttpError && (error.status === 403 || error.status >= 500)) {
-      clearExternalSession();
+    if (error instanceof BridgeHttpError && error.status === 403) {
       throw reconnectError;
     }
     throw error;
   }
+}
+
+function saveDesktopRequest(
+  requestId: string,
+  method: PendingDesktopBridgeRequest["method"],
+  session: InferExternalSession,
+  options: InferWalletOptions,
+  expectedTransactionBcsHex?: string,
+  invocationId?: string
+): PendingDesktopBridgeRequest {
+  const pending: PendingDesktopBridgeRequest = {
+    version: 2, transport: "desktop-bridge", requestId, method,
+    ...(invocationId ? { invocationId } : {}),
+    sessionId: session.sessionId, address: session.address,
+    network: session.network, chainId: session.chainId,
+    origin: window.location.origin,
+    bridgeOrigin: desktopBridgeOrigin(session, options),
+    ...(expectedTransactionBcsHex ? { expectedTransactionBcsHex } : {})
+  };
+  storePendingDesktopBridgeRequest(pending);
+  return pending;
+}
+
+async function startDurableDesktopRequest(
+  path: string,
+  body: unknown,
+  method: PendingDesktopBridgeRequest["method"],
+  session: InferExternalSession,
+  options: InferWalletOptions,
+  requestOptions: InferWalletOptions,
+  reconnectError: Error,
+  expectedTransactionBcsHex?: string
+): Promise<{ requestId: string; pending: PendingDesktopBridgeRequest; durableId: string }> {
+  let invocation;
+  try {
+    invocation = await prepareDurableInvocation(session, method);
+  } catch (cause) {
+    throw new InferRequestError(InferErrorCode.RequestNotInvoked,
+      "Wallet request was not sent because its invocation could not be saved",
+      null, null, cause);
+  }
+  try {
+    await options.onInvocationPrepared?.(Object.freeze({
+      invocationId: invocation.id, transport: invocation.transport,
+      sessionId: invocation.sessionId, address: invocation.address,
+      network: invocation.network, chainId: invocation.chainId,
+      method: invocation.method, state: invocation.state
+    }));
+  } catch (cause) {
+    await updateDurableInvocation(invocation.id, "not-invoked").catch(() => undefined);
+    throw new InferRequestError(InferErrorCode.RequestNotInvoked,
+      "Wallet request was not sent because invocation persistence failed",
+      invocation.id, null, cause);
+  }
+  let requestId: string;
+  try {
+    requestId = await startBridgeRequest(path, body, requestOptions, reconnectError);
+  } catch (cause) {
+    await updateDurableInvocation(invocation.id, "unknown").catch(() => undefined);
+    throw unresolvedRequestError(
+      "Wallet request creation may have reached Infer Desk; reconcile before retrying",
+      invocation.id, null, cause);
+  }
+  try {
+    const pending = saveDesktopRequest(requestId, method, session, options,
+      expectedTransactionBcsHex, invocation.id);
+    const durable = await saveDurableRequest(pending, invocation.id);
+    await updateDurableInvocation(invocation.id, "created", requestId);
+    await options.onRequestCreated?.(Object.freeze({ ...pending }));
+    return { requestId, pending, durableId: durable.id };
+  } catch (cause) {
+    await updateDurableInvocation(invocation.id, "unknown", requestId).catch(() => undefined);
+    throw unresolvedRequestError(
+      "Wallet request exists but its receipt could not be fully recorded",
+      invocation.id, requestId, cause);
+  }
+}
+
+async function pollDurableDesktopResult<T extends { status?: string; error?: string }>(
+  path: string,
+  requestId: string,
+  invocationId: string,
+  options: InferWalletOptions,
+  reconnectError: Error
+): Promise<T> {
+  try {
+    return await pollSignedResult<T>(path, requestId, options, reconnectError);
+  } catch (cause) {
+    throw unresolvedRequestError(
+      "Wallet request outcome is unresolved; read the original request before retrying",
+      invocationId, requestId, cause);
+  }
+}
+
+async function completeDesktopResult(
+  payload: InferBridgeMessagePoll | InferBridgeSignTransactionPoll | InferBridgeTransactionPoll,
+  pending: PendingDesktopBridgeRequest,
+  durableId: string
+): Promise<CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput> {
+  const invocationId = pending.invocationId!;
+  let output: CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput;
+  try {
+    if (pending.method === "signAndSubmitTransaction" && payload.requestId !== pending.requestId) {
+      throw new InferAdapterError(InferErrorCode.InternalError,
+        "Infer Desk returned a missing or different transaction request id");
+    }
+    output = decodeDesktopResult(payload, pending);
+  } catch (cause) {
+    if (cause instanceof InferAdapterError && cause.code === InferErrorCode.UserRejected) {
+      try {
+        await saveDurableFinal(durableId, { status: "rejected" });
+      } catch (storageCause) {
+        throw unresolvedRequestError("Wallet rejection could not be saved durably",
+          invocationId, pending.requestId, storageCause);
+      }
+      throw cause;
+    }
+    throw unresolvedRequestError("Wallet result could not be validated",
+      invocationId, pending.requestId, cause);
+  }
+  try {
+    await saveDurableFinal(durableId, serializeStoredFinal(pending.method, output));
+  } catch (cause) {
+    throw unresolvedRequestError("Verified wallet result could not be saved durably",
+      invocationId, pending.requestId, cause);
+  }
+  return output;
+}
+
+function decodeDesktopResult(
+  payload: InferBridgeMessagePoll | InferBridgeSignTransactionPoll | InferBridgeTransactionPoll,
+  pending: PendingDesktopBridgeRequest
+): CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput {
+  // Infer Desk sign-only poll payloads can omit requestId. Their GET route
+  // already names the original request; reject any conflicting ID if present.
+  // Recovery separately requires an echoed exact ID before trusting a final read.
+  if (payload.requestId !== undefined && payload.requestId !== pending.requestId) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned a different request");
+  }
+  if (payload.status === "approved") {
+    if (payload.error !== undefined) {
+      throw new InferAdapterError(InferErrorCode.InternalError,
+        "Infer Desk returned mixed approval and error fields");
+    }
+    if (pending.method === "signMessage") {
+      const result = normalizeBridgeSignMessageOutput(payload as InferBridgeMessagePoll);
+      if (String(result.address).toLowerCase() !== pending.address.toLowerCase()) {
+        throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk signed for a different account");
+      }
+      return result;
+    }
+    if (pending.method === "signTransaction") {
+      return normalizeBridgeSignTransactionOutput(
+        payload as InferBridgeSignTransactionPoll, pending.expectedTransactionBcsHex
+      );
+    }
+    const submitted = payload as InferBridgeTransactionPoll;
+    if (submitted.requestId === pending.requestId &&
+        hasOnlyKeys(submitted, ["status", "requestId", "hash"]) &&
+        isValidTransactionHash(submitted.hash)) {
+      return { hash: submitted.hash };
+    }
+  }
+  if (payload.status === "rejected" &&
+      hasOnlyKeys(payload, ["status", "requestId", "error"]) &&
+      (payload.error === undefined || typeof payload.error === "string")) {
+    throw new InferAdapterError(InferErrorCode.UserRejected, "User rejected the request");
+  }
+  throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned an ambiguous signing result");
+}
+
+/** One read of the original bridge request; never POSTs or cancels. */
+export async function readDesktopBridgeRequestOnce(
+  requestId: string,
+  session: InferExternalSession,
+  options: InferWalletOptions = {},
+  durablePending?: PendingDesktopBridgeRequest
+): Promise<{ pending: PendingDesktopBridgeRequest; status: "pending" | "approved"; output?: CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput }> {
+  const pending = durablePending ?? readPendingDesktopBridgeRequests(session, options).find((item) => item.requestId === requestId);
+  if (!pending || pending.requestId !== requestId ||
+      pending.sessionId !== session.sessionId || pending.address !== session.address ||
+      pending.network !== session.network || pending.chainId !== session.chainId ||
+      pending.origin !== window.location.origin ||
+      pending.bridgeOrigin !== desktopBridgeOrigin(session, options)) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Request does not belong to this Infer Desk session");
+  }
+  const path = pending.method === "signMessage" ? "/message-request" :
+    pending.method === "signTransaction" ? "/sign-transaction-request" : "/transaction-request";
+  const payload = await fetchJsonWithTimeout<InferBridgeMessagePoll | InferBridgeSignTransactionPoll | InferBridgeTransactionPoll>(
+    bridgeUrlWithToken(path + "/" + encodeURIComponent(requestId), {
+      ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl
+    }),
+    bridgeConnectTimeoutMs(options)
+  );
+  if (payload.requestId !== requestId) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned a missing or different request id");
+  }
+  if (payload.status === "pending") return { pending, status: "pending" };
+  return { pending, status: "approved", output: decodeDesktopResult(payload, pending) };
+}
+
+/* ===================================================================
+ * v0.2.0-rc.22 (Phase 2 / A1): desktop-bridge authorized original-request
+ * read (D2 contract).
+ *
+ * After the original wallet session is gone, the dapp may still hold an
+ * active `DurableRequest` whose original `sessionId` does not match the
+ * current session. Infer Desk (>= 0.6.0-rc.7 / D2) persists the original
+ * request results in its redb store; this helper calls the new
+ * `GET /read-result/<requestId>` endpoint scoped to (origin,
+ * newSessionId, address, network, chainId) so the dapp can recover a
+ * previously-unverified old-session receipt through a fresh session.
+ *
+ * The Desk endpoint returns plaintext results because Desk is the
+ * durable authority for the desktop-bridge path — there is no
+ * re-encryption layer between Desk and the new session (the IPC bridge
+ * authenticates per-session URL token).
+ *
+ * Fallback contract (rc.22): older Desk without the new endpoint
+ * returns 404 → caller falls back to current rc.21 behavior.
+ * =================================================================== */
+
+export interface ReadResultForSessionScope {
+  origin: string;
+  transport: "desktop-bridge";
+  accountAddress: string;
+  network: string;
+  chainId: number;
+  /** Exact method of the original request — the Desk-side D2 dispatch
+   * (`read_result_for_session`) requires it and its `ResultScope`
+   * (bridge_origin, address, network, method) validates against it. */
+  method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
+}
+
+export interface ReadResultForSessionArgs {
+  /** Base URL of the Infer Desk IPC bridge (NOT the session URL token path). */
+  bridgeOrigin: string;
+  requestId: string;
+  /** The new session id; Desk verifies the new session has matching scope. */
+  newSessionId: string;
+  scope: ReadResultForSessionScope;
+  /** InferWalletOptions propagated from the caller (token, timeouts). */
+  options?: InferWalletOptions;
+}
+
+/** Mirrors `RecoveredRequestOutcome` minus `recoveryId` / `transport` /
+ * `sessionId` / `address` / `network` / `chainId` (those are returned
+ * via the outer wrapper in `recovery.ts`). The `hash` is the
+ * `hash` field on the wire; `payload` is the typed decoding of the
+ * wire payload into the AIP-63 / `cedra:signAndSubmitTransaction`
+ * shape Desk stored. */
+export type ReadResultForSessionResult =
+  | {
+      ok: true;
+      status: "approved" | "rejected";
+      hash?: string;
+      payload:
+        | CedraSignMessageOutput
+        | CedraSignTransactionOutputV1_1
+        | CedraSignAndSubmitTransactionOutput;
+      finalizedAt: string;
+    }
+  | { ok: false; reason: "scope_mismatch" | "not_found" | "unavailable" };
+
+function parseReadResultScope(value: unknown): ReadResultForSessionScope | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.origin !== "string" || !record.origin) return null;
+  if (record.transport !== "desktop-bridge") return null;
+  if (typeof record.accountAddress !== "string" || !record.accountAddress) return null;
+  if (typeof record.network !== "string" || !record.network) return null;
+  if (typeof record.chainId !== "number" || !Number.isInteger(record.chainId)) return null;
+  if (typeof record.method !== "string" || !record.method) return null;
+  return {
+    origin: record.origin,
+    transport: "desktop-bridge",
+    accountAddress: record.accountAddress,
+    network: record.network,
+    chainId: record.chainId,
+    method: record.method as ReadResultForSessionScope["method"]
+  };
+}
+
+/**
+ * Authorized read of an old unverified desktop-bridge request through
+ * a fresh session. Hits `GET /read-result/<requestId>?newSessionId=...`
+ * on the Infer Desk IPC bridge.
+ *
+ * The Desk endpoint returns the original session's result envelope
+ * (or its durable equivalent in redb) so the dapp can finalize a
+ * previously-unverified request via the new session. The caller MUST
+ * pass a scope that exactly matches the original row's
+ * `(origin, transport, address, network, chainId)`. Scope mismatch
+ * returns `{ ok: false, reason: "scope_mismatch" }`.
+ */
+export async function readResultForSession(
+  args: ReadResultForSessionArgs
+): Promise<ReadResultForSessionResult> {
+  const opts = args.options ?? {};
+  if (typeof window === "undefined") {
+    return { ok: false, reason: "unavailable" };
+  }
+  let path: string;
+  try {
+    path = bridgePathWithToken("/read-result/" + encodeURIComponent(args.requestId), opts);
+  } catch {
+    // Missing bridge token → unavailable (no token-gated path can work).
+    return { ok: false, reason: "unavailable" };
+  }
+  const url = new URL(path, args.bridgeOrigin);
+  url.searchParams.set("newSessionId", args.newSessionId);
+  url.searchParams.set("origin", args.scope.origin);
+  url.searchParams.set("accountAddress", args.scope.accountAddress);
+  url.searchParams.set("network", args.scope.network);
+  url.searchParams.set("chainId", String(args.scope.chainId));
+  url.searchParams.set("method", args.scope.method);
+
+  let payload: unknown;
+  try {
+    payload = await fetchJsonWithTimeout<{
+      requestId?: unknown;
+      sessionId?: unknown;
+      scope?: unknown;
+      status?: unknown;
+      hash?: unknown;
+      payload?: unknown;
+      finalizedAt?: unknown;
+    }>(url.toString(), bridgeConnectTimeoutMs(opts));
+  } catch (error) {
+    if (error instanceof BridgeHttpError) {
+      if (error.status === 404 || error.status === 403) return { ok: false, reason: "unavailable" };
+      if (error.status === 422) return { ok: false, reason: "scope_mismatch" };
+      return { ok: false, reason: "unavailable" };
+    }
+    return { ok: false, reason: "unavailable" };
+  }
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, reason: "unavailable" };
+  }
+  const record = payload as {
+    requestId?: unknown;
+    sessionId?: unknown;
+    scope?: unknown;
+    status?: unknown;
+    hash?: unknown;
+    payload?: unknown;
+    finalizedAt?: unknown;
+  };
+  if (typeof record.requestId !== "string" || record.requestId !== args.requestId ||
+      typeof record.sessionId !== "string" || record.sessionId !== args.newSessionId ||
+      typeof record.finalizedAt !== "string" ||
+      (record.status !== "approved" && record.status !== "rejected") ||
+      !record.payload || typeof record.payload !== "object") {
+    return { ok: false, reason: "unavailable" };
+  }
+  const scope = parseReadResultScope(record.scope);
+  if (!scope) return { ok: false, reason: "scope_mismatch" };
+  if (scope.origin !== args.scope.origin ||
+      scope.transport !== args.scope.transport ||
+      scope.accountAddress.toLowerCase() !== args.scope.accountAddress.toLowerCase() ||
+      scope.network !== args.scope.network ||
+      scope.chainId !== args.scope.chainId ||
+      scope.method !== args.scope.method) {
+    return { ok: false, reason: "scope_mismatch" };
+  }
+  const out: {
+    ok: true;
+    status: "approved" | "rejected";
+    hash?: string;
+    payload:
+      | CedraSignMessageOutput
+      | CedraSignTransactionOutputV1_1
+      | CedraSignAndSubmitTransactionOutput;
+    finalizedAt: string;
+  } = {
+    ok: true,
+    status: record.status,
+    payload: record.payload as
+      | CedraSignMessageOutput
+      | CedraSignTransactionOutputV1_1
+      | CedraSignAndSubmitTransactionOutput,
+    finalizedAt: record.finalizedAt
+  };
+  if (typeof record.hash === "string" && isValidTransactionHash(record.hash)) {
+    out.hash = record.hash;
+  }
+  return out;
 }
 
 export async function tryLocalBridgeSignMessage(
@@ -1862,37 +2312,16 @@ export async function tryLocalBridgeSignMessage(
   options: InferWalletOptions = {}
 ): Promise<CedraSignMessageOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
-
-  const requestId = await startBridgeRequest(
-    "/sign-message",
-    {
-      origin: window.location.origin,
-      app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
-      sessionId: session.sessionId,
-      message: input
-    },
-    { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
-    reconnectSigningError()
+  const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
+  const { requestId, pending, durableId } = await startDurableDesktopRequest("/sign-message", {
+    origin: window.location.origin,
+    app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
+    sessionId: session.sessionId, message: input
+  }, "signMessage", session, options, requestOptions, reconnectSigningError());
+  const payload = await pollDurableDesktopResult<InferBridgeMessagePoll>(
+    "/message-request", requestId, pending.invocationId!, requestOptions, reconnectSigningError()
   );
-  try {
-    const payload = await pollSignedResult<InferBridgeMessagePoll>(
-      "/message-request",
-      requestId,
-      { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
-      reconnectSigningError()
-    );
-
-    if (payload.status === "approved") return normalizeBridgeSignMessageOutput(payload);
-    throw new Error(payload.error ?? "Infer Desk rejected the signMessage request");
-  } catch (error) {
-    cancelPendingRequest(
-      requestId,
-      session,
-      options,
-      error instanceof Error ? error.message : "adapter_error"
-    );
-    throw error;
-  }
+  return completeDesktopResult(payload, pending, durableId) as Promise<CedraSignMessageOutput>;
 }
 
 export async function tryLocalBridgeSignTransaction(
@@ -1901,49 +2330,17 @@ export async function tryLocalBridgeSignTransaction(
   options: InferWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
-
-  const requestId = await startBridgeRequest(
-    "/sign-transaction",
-    {
-      origin: window.location.origin,
-      app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
-      sessionId: session.sessionId,
-      transaction: input
-    },
-    { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
-    reconnectSigningError()
+  const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
+  const { requestId, pending, durableId } = await startDurableDesktopRequest("/sign-transaction", {
+    origin: window.location.origin,
+    app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
+    sessionId: session.sessionId, transaction: input
+  }, "signTransaction", session, options, requestOptions, reconnectSigningError(),
+    "rawTransactionBcsHex" in input ? input.rawTransactionBcsHex : undefined);
+  const payload = await pollDurableDesktopResult<InferBridgeSignTransactionPoll>(
+    "/sign-transaction-request", requestId, pending.invocationId!, requestOptions, reconnectSigningError()
   );
-  try {
-    const payload = await pollSignedResult<InferBridgeSignTransactionPoll>(
-      "/sign-transaction-request",
-      requestId,
-      { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
-      reconnectSigningError()
-    );
-
-    if ("requestId" in payload && payload.requestId !== requestId) {
-      throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned a different signing request");
-    }
-    if (payload.status === "approved") {
-      return normalizeBridgeSignTransactionOutput(
-        payload, "rawTransactionBcsHex" in input ? input.rawTransactionBcsHex : undefined
-      );
-    }
-    if (payload.status === "rejected" &&
-        hasOnlyKeys(payload, ["status", "requestId", "error"]) &&
-        (payload.error === undefined || typeof payload.error === "string")) {
-      throw new InferAdapterError(InferErrorCode.UserRejected, "User rejected the transaction request");
-    }
-    throw new InferAdapterError(InferErrorCode.InternalError, "Infer Desk returned an ambiguous signing result");
-  } catch (error) {
-    cancelPendingRequest(
-      requestId,
-      session,
-      options,
-      error instanceof Error ? error.message : "adapter_error"
-    );
-    throw error;
-  }
+  return completeDesktopResult(payload, pending, durableId) as Promise<CedraSignTransactionOutputV1_1>;
 }
 
 function hasOnlyKeys(value: object, allowedKeys: readonly string[]): boolean {
@@ -1957,63 +2354,14 @@ export async function tryLocalBridgeSignAndSubmit(
   options: InferWalletOptions = {}
 ): Promise<CedraSignAndSubmitTransactionOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectTransactionError();
-
-  const requestId = await startBridgeRequest(
-    "/transaction",
-    {
-      origin: window.location.origin,
-      app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
-      sessionId: session.sessionId,
-      transaction: input
-    },
-    { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
-    reconnectTransactionError()
+  const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
+  const { requestId, pending, durableId } = await startDurableDesktopRequest("/transaction", {
+    origin: window.location.origin,
+    app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
+    sessionId: session.sessionId, transaction: input
+  }, "signAndSubmitTransaction", session, options, requestOptions, reconnectTransactionError());
+  const payload = await pollDurableDesktopResult<InferBridgeTransactionPoll>(
+    "/transaction-request", requestId, pending.invocationId!, requestOptions, reconnectTransactionError()
   );
-  try {
-    const payload = await pollSignedResult<InferBridgeTransactionPoll>(
-      "/transaction-request",
-      requestId,
-      { ...options, bridgeBaseUrl: session.bridgeUrl ?? options.bridgeBaseUrl },
-      reconnectTransactionError()
-    );
-
-    if (payload.requestId !== requestId) {
-      throw new InferAdapterError(
-        InferErrorCode.InternalError,
-        "Infer Desk returned a transaction result for a different request"
-      );
-    }
-
-    if (
-      payload.status === "approved" &&
-      hasOnlyKeys(payload, ["status", "requestId", "hash"]) &&
-      isValidTransactionHash(payload.hash)
-    ) {
-      return { hash: payload.hash };
-    }
-
-    if (
-      payload.status === "rejected" &&
-      hasOnlyKeys(payload, ["status", "requestId", "error"]) &&
-      (payload.error === undefined || typeof payload.error === "string")
-    ) {
-      throw new InferAdapterError(
-        InferErrorCode.UserRejected,
-        "User rejected the transaction request"
-      );
-    }
-
-    throw new InferAdapterError(
-      InferErrorCode.InternalError,
-      "Infer Desk returned an ambiguous transaction result"
-    );
-  } catch (error) {
-    cancelPendingRequest(
-      requestId,
-      session,
-      options,
-      error instanceof Error ? error.message : "adapter_error"
-    );
-    throw error;
-  }
+  return completeDesktopResult(payload, pending, durableId) as Promise<CedraSignAndSubmitTransactionOutput>;
 }

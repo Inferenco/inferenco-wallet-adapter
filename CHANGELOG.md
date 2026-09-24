@@ -5,7 +5,81 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.22] - TBD
+
+### Added
+
+- Authorized original-request read: when a reconnected dapp session matches the DurableRequest scope (origin/transport/address/network/chainId) but the original session is gone, the adapter now mints a relay read-grant over the old request and recovers the redelivered ciphertext via the wallet's W2 fulfillment path. Falls back to current rc.21 behavior (`{status: "unknown"}`) if the relay doesn't have the new endpoints. The same path applies to the desktop-bridge transport via Infer Desk's durable read endpoint.
+- `mintReadGrant`, `getReadGrant` helpers in `mobileRelay.ts` (new types `MintReadGrantArgs`, `MintReadGrantResult`, `GetReadGrantArgs`, `ReadGrantDescriptor`, `ReadGrantScope`, `ReadGrantStatus`).
+- `readResultForSession` helper in `bridge.ts` (new types `ReadResultForSessionArgs`, `ReadResultForSessionScope`, `ReadResultForSessionResult`).
+- New `unknown` reasons on `readRecoverableRequest`: `grant_pending_timeout`, `decrypt_failed`.
+
+### Fixed
+
+- Closes the protocol dependency documented in CHANGELOG 0.2.0-rc.21 ("authorized original-request read contract"): a new dapp session can now recover an old unverified result when the relay or Desk supports the Phase 0 S1 / D2 endpoints.
+
+### Notes
+
+- Mobile-relay path requires relay >= Phase 0 (S1 endpoints `POST/GET /v1/requests/:requestId/read-grant`); older relays byte-identical to rc.21. The mint scope MUST include the original request's `method` (the relay rejects a scope without it with 400 `invalid_scope` and validates it against the original request row); `transport` is not part of the relay wire scope.
+- Desktop-bridge path requires Infer Desk's D2 durable results endpoint `GET /read-result/:requestId`; older Desk byte-identical to rc.21. As of rc.22 the Desk-side durable store and `read_result_for_session` dispatch exist but the HTTP route is not yet wired into the external-bridge transport — the desktop authorized read therefore 404s and falls back to rc.21 behavior until Desk ships the route.
+- Wallet-side W2 fulfillment (`fulfillReadGrant` → `deliverReadGrant`) must be in place for full recovery; without W2, grants remain `pending_fulfillment` and the recovery returns `{status: "unknown", reason: "grant_pending_timeout"}`. The relay has no wallet-facing grant-list endpoint yet — the wallet learns about pending grants from a user action ("Recover pending").
+- The adapter NEVER signs, broadcasts, or opens another transaction approval during the authorized-read path.
+
+## [0.2.0-rc.21] - 2026-09-23
+
+### Added
+
+- Persist exact request receipts, original invocation identities, and verified final outcomes in origin-scoped IndexedDB before returning results or notifying consumers. Valid rc.20 tab receipts migrate on use. New same-origin tabs can recover while the original session remains available.
+- Expose a pre-dispatch invocation hook, structured invocation/request errors, durable invocation listing, late outcome subscriptions, and connection-health checks through InferClient, InferWallet, and the Infer Wallet Standard feature.
+- Wake recovery on startup, focus, visibility return, pageshow, storage changes, and cross-tab record changes; dispose client listeners explicitly.
+
+### Fixed
+
+- A failed Infer Desk session validation no longer certifies a cached account as connected. Ambiguous network/CORS failures preserve the cached identity and recovery evidence, while an explicit session rejection requires reconnection.
+- Keep verified results replayable until exact acknowledgement and preserve unresolved old-session requests for external reconciliation. Recovery never creates or resubmits a wallet request.
+
+### Limits
+
+- An old request without its original read credential remains unknown until Desk or relay provides an explicitly authorized original-request read contract. Infer Desk must persist its own results across restart; this adapter cannot infer a missing hash.
+- IndexedDB is same-origin browser storage, not isolation from same-origin script. Clearing browser data removes local recovery evidence. The adapter does not retain old signing credentials after session replacement or logout.
+
+## [0.2.0-rc.20] - 2026-09-23
+
+### Fixed
+
+- Preserve desktop and mobile signing request receipts across reloads so apps can read and acknowledge exact-ID outcomes without another signing or submission attempt.
+- Bound hidden-tab polling and perform one final authenticated read before reporting an unknown outcome.
+- Keep desktop receipts free of bridge URL tokens and migrate matching legacy receipts; require exact desktop request IDs on recovery and sign-and-submit responses.
+- Isolate startup recovered-outcome callbacks per request and expose recovery operations on InferWallet.
+- Report invalid archive reconciliation references as typed INVALID_PARAMS errors.
+
+### Added
+
+- Explicit, session-bound local archiving after an app reconciles an unknown outcome externally. Archived receipts retain their evidence and are excluded from automatic recovery.
+
+## [0.2.0-rc.17] - 2026-09-18
+
+### Fixed (disconnect regression — token graft in `sessionBridgeBaseUrl`)
+
+`sessionBridgeBaseUrl()` now grafts the per-session URL token from `session.bridgeUrl` onto a bare `options.bridgeBaseUrl`. The host stays from `options.bridgeBaseUrl` — Tier 1 (ND-WEB-001) deeplink hardening is preserved: an attacker who controls `session.bridgeUrl` cannot redirect traffic to a hostile host, only inject a forged token segment that 404s harmlessly at the wallet's F-03 token gate.
+
+This closes the rc.15 + rc.16 compound failure where disconnect-signalling routes (`/session/<id>`, `/connection`) were silently losing the token, the wallet's F-03 gate was 404ing them without CORS, and the adapter's startup validation was clearing its own localStorage session on every page load.
+
+**Side effects:**
+- `validateExternalSession()` startup-validation returns 200 in external browsers with a stored session — no more spurious session-wipe on every reload.
+- `InferClient.on("disconnect", cb)` no longer fires spuriously on reload.
+- `sessionLivenessIntervalMs` (rc.8) is usable again for real disconnect detection in external browsers.
+- DApps that wire bare `bridgeBaseUrl` (e.g. infer-ecosystem) regain end-to-end disconnect in both directions.
+
+**Compatibility:** Backwards compatible. DApps that do not pass `options.bridgeBaseUrl` see no change. DApps that pass `options.bridgeBaseUrl` already carrying a token see no change (no double-prefix). DApps that pass a bare `options.bridgeBaseUrl` gain the graft as a fix.
+
 ## [Unreleased]
+
+### Fixed
+
+- Recognize saved mobile relay sessions named Infer Wallet, so Infer Connect
+  can sign messages and transactions after connecting or restoring a session.
+  Preserve the wallet identity and reject unrecognized wallet names.
 
 ### Transaction relay and exact signing
 

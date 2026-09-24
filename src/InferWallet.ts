@@ -23,8 +23,15 @@ import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
 import { buildDeeplinkUrl } from "./deeplink";
 import { detectProvider } from "./provider";
 import { InferClient } from "./InferClient";
+import type {
+  ArchivedRecoverableRequest,
+  RecoverableRequest,
+  RecoverableInvocation,
+  RecoveredRequestOutcome
+} from "./recovery";
 import {
   InferAccountKeys,
+  InferConnectionHealth,
   InferNetworkInfo,
   InferWalletAdapterLike,
   InferWalletName,
@@ -47,6 +54,7 @@ type InferWalletEvents = {
    * surface a "Reconnect to Infer Connect" affordance.
    */
   disconnect: [];
+  connectionHealth: [InferConnectionHealth];
 };
 
 export class InferWallet
@@ -66,6 +74,13 @@ export class InferWallet
     super();
     this.url = options.websiteUrl ?? (isMobileBrowser() ? DEFAULT_MOBILE_WEBSITE_URL : DEFAULT_DESKTOP_WEBSITE_URL);
     this.client = new InferClient(options);
+    this.client.on("connectionHealth", (health) => {
+      if (health.state === "unreachable" || health.state === "reconnect-required") {
+        this.cachedAccount = null;
+        this.cachedNetwork = null;
+      }
+      this.emit("connectionHealth", health);
+    });
   }
 
   get readyState(): InferWalletReadyState {
@@ -73,6 +88,14 @@ export class InferWallet
     return detectProvider(this.options) || hasStoredExternalSession() || !isMobileBrowser()
       ? InferWalletReadyState.Installed
       : InferWalletReadyState.NotDetected;
+  }
+
+  get connectionHealth(): InferConnectionHealth {
+    return this.client.connectionHealth;
+  }
+
+  checkConnectionHealth(): Promise<InferConnectionHealth> {
+    return this.client.checkConnectionHealth();
   }
 
   get connecting(): boolean {
@@ -121,6 +144,40 @@ export class InferWallet
     await this.client.disconnect();
     this.cachedAccount = null;
     this.cachedNetwork = null;
+  }
+
+  listRecoverableRequests(): Promise<RecoverableRequest[]> {
+    return this.client.listRecoverableRequests();
+  }
+
+  listRecoverableInvocations(): Promise<RecoverableInvocation[]> {
+    return this.client.listRecoverableInvocations();
+  }
+
+  subscribeRecoveredOutcomes(
+    callback: (outcome: RecoveredRequestOutcome) => void | Promise<void>
+  ): () => void {
+    return this.client.subscribeRecoveredOutcomes(callback);
+  }
+
+  dispose(): void {
+    this.client.dispose();
+  }
+
+  listArchivedRecoverableRequests(): Promise<ArchivedRecoverableRequest[]> {
+    return this.client.listArchivedRecoverableRequests();
+  }
+
+  readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
+    return this.client.readRecoverableRequest(requestId);
+  }
+
+  acknowledgeRecoverableRequest(requestId: string): Promise<void> {
+    return this.client.acknowledgeRecoverableRequest(requestId);
+  }
+
+  archiveRecoverableRequest(requestId: string, reconciliationReference: string): Promise<void> {
+    return this.client.archiveRecoverableRequest(requestId, reconciliationReference);
   }
 
   async signAndSubmitTransaction(
