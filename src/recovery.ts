@@ -3,7 +3,7 @@ import type {
   CedraSignMessageOutput,
   CedraSignTransactionOutputV1_1
 } from "@cedra-labs/wallet-standard";
-import { readExternalSession, readDesktopBridgeRequestOnce } from "./bridge";
+import { readExternalSession, readDesktopBridgeRequestOnce, readResultForSession } from "./bridge";
 import { archivePendingDesktopBridgeRequest, clearPendingDesktopBridgeRequest, desktopBridgeOrigin, readPendingDesktopBridgeRequests, type RecoverableMethod } from "./desktopRequests";
 import {
   listDurableRequests, listDurableInvocations, saveDurableRequest, saveDurableFinal, serializeStoredFinal, transitionDurableRequest,
@@ -11,7 +11,15 @@ import {
 } from "./durableRecovery";
 import { deserializeSignTransactionResult } from "./conversion";
 import { InferAdapterError, InferErrorCode, isValidTransactionHash } from "./errors";
-import { decodeMobileRelayResult, readMobileRelayRequestOnce } from "./mobileRelay";
+import { decryptJson } from "./mobileCrypto";
+import {
+  decodeMobileRelayResult,
+  getReadGrant,
+  mintReadGrant,
+  readMobileRelayRequestOnce,
+  type ReadGrantDescriptor,
+  type ReadGrantScope
+} from "./mobileRelay";
 import { archivePendingMobileRelayRequest, clearPendingMobileRelayRequest, readPendingMobileRelayRequests } from "./mobileRequests";
 import { makeRecoveryArchive, type RecoveryArchive } from "./requestArchive";
 import type { InferExternalSession, InferWalletOptions } from "./types";
@@ -76,6 +84,11 @@ function descriptor(row: DurableRequest): RecoverableRequest {
   };
 }
 
+/** Returns true iff the current session can authenticate an
+ * authenticated remote read of the row via the original session's
+ * token. Distinct from the broader "same scope" check used below for
+ * the authorized-read path: matchingSession requires the sessionId to
+ * match the original sessionId. */
 function matchingSession(row: DurableRequest, session: InferExternalSession | null, options: InferWalletOptions = {}): session is InferExternalSession {
   if (!session || session.transport !== row.transport || session.sessionId !== row.sessionId ||
       session.address !== row.address || session.network !== row.network ||
@@ -89,6 +102,25 @@ function matchingSession(row: DurableRequest, session: InferExternalSession | nu
   } catch {
     return false;
   }
+}
+
+/** Returns true iff the current session has matching (origin,
+ * transport, accountAddress, network, chainId) for the row's stored
+ * scope — i.e. the SAME wallet identity is alive on a NEW sessionId.
+ * This is the precondition for the v0.2.0-rc.22 authorized-read
+ * recovery path (A1): the dapp may mint a read-grant over the OLD
+ * request, the wallet (W2) re-wraps the ciphertext under the NEW
+ * sharedSecret, and the dapp decrypts with the current sharedSecret.
+ *
+ * Does NOT require the original `sessionId` to be alive.
+ */
+function sameScope(row: DurableRequest, session: InferExternalSession | null): session is InferExternalSession {
+  if (!session) return false;
+  if (session.transport !== row.transport) return false;
+  if (session.address.toLowerCase() !== row.address.toLowerCase()) return false;
+  if (session.network !== row.network) return false;
+  if (session.chainId !== row.chainId) return false;
+  return window.location.origin === row.origin;
 }
 
 async function migrateCurrentTab(session: InferExternalSession | null, options: InferWalletOptions): Promise<void> {
@@ -127,6 +159,10 @@ function findExact(rows: DurableRequest[], id: string): DurableRequest {
   return matches[0];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function replay(row: DurableRequest): RecoveredRequestOutcome | null {
   const final = row.final;
   if (!final) return null;
@@ -158,6 +194,226 @@ function replay(row: DurableRequest): RecoveredRequestOutcome | null {
   }
 }
 
+/* ===================================================================
+ * v0.2.0-rc.22 (Phase 2 / A1): authorized original-request read.
+ *
+ * When the original session is gone but a fresh session with matching
+ * (origin, transport, address, network, chainId) is alive, the dapp
+ * can mint a one-shot read-grant over the OLD request. The wallet
+ * (W2) re-wraps the original ciphertext under the NEW session's
+ * sharedSecret and the dapp decrypts it with the current session's
+ * sharedSecret. The verified result is persisted via `saveDurableFinal`
+ * before returning — preserving the rc.21 ordering invariant.
+ *
+ * Fallback contract: if the relay/Desk lacks the new endpoints, the
+ * behavior is byte-identical to rc.21 (returns `{status: "unknown"}`).
+ * =================================================================== */
+
+/** Bounds for the bounded poll loop that waits for W2 fulfillment.
+ * Exposed as `let` so test suites can shrink the bound under fake timers
+ * without changing the production default (30 s). */
+export let READ_GRANT_POLL_INTERVAL_MS = 1000;
+export let READ_GRANT_POLL_TIMEOUT_MS = 30_000;
+
+/** Test-only override for the poll interval/timeout. NOT exported
+ * beyond this module's tests. */
+export function _setReadGrantPollConfigForTesting(
+  intervalMs: number,
+  timeoutMs: number
+): void {
+  READ_GRANT_POLL_INTERVAL_MS = intervalMs;
+  READ_GRANT_POLL_TIMEOUT_MS = timeoutMs;
+}
+
+function sameRelayBaseUrl(row: DurableRequest, session: InferExternalSession | null): boolean {
+  if (!session || session.transport !== "mobile-relay") return false;
+  return row.endpoint === session.relayBaseUrl;
+}
+
+function sameBridgeOrigin(row: DurableRequest, session: InferExternalSession | null, options: InferWalletOptions): boolean {
+  if (!session || session.transport !== "desktop-bridge") return false;
+  try {
+    return desktopBridgeOrigin(session, options) === row.endpoint;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mobile-relay authorized-read fallback. Mints a one-shot read-grant,
+ * polls until the wallet fulfills it (W2), then decrypts the
+ * redelivered ciphertext with the CURRENT session's sharedSecret and
+ * decodes the result via the existing `decodeMobileRelayResult` path
+ * — except the cipher comes from `grant.redeliveredEncryptedResult`,
+ * not from the request-status endpoint.
+ *
+ * Returns the recovered outcome on success; returns `null` on any
+ * non-success path so the caller can fall back to rc.21 behavior
+ * (`{status: "unknown"}`).
+ */
+async function authorizedReadMobileRelay(
+  row: DurableRequest,
+  session: InferExternalSession,
+  base: ReturnType<typeof descriptor>
+): Promise<RecoveredRequestOutcome | null> {
+  if (!session.relayBaseUrl || !session.dappSessionToken || !session.sharedSecret) return null;
+  // The relay's S1 endpoint REQUIRES `method` in the scope (it validates
+  // the scope's method against the original request row) and accepts an
+  // optional `invocationId` for idempotent re-mint matching.
+  const scope: ReadGrantScope = {
+    origin: window.location.origin,
+    accountAddress: row.address,
+    network: row.network,
+    chainId: row.chainId,
+    method: row.method,
+    ...(row.invocationId ? { invocationId: row.invocationId } : {}),
+    newSessionId: session.sessionId
+  };
+  const mint = await mintReadGrant({
+    relayBaseUrl: session.relayBaseUrl,
+    requestId: row.requestId,
+    dappSessionToken: session.dappSessionToken,
+    scope
+  });
+  if (!mint.ok) {
+    // Older relay (pre-Phase 0 S1) returns 404 → fall back to rc.21.
+    return null;
+  }
+
+  const deadline = Date.now() + READ_GRANT_POLL_TIMEOUT_MS;
+  let grant: ReadGrantDescriptor | null = null;
+  while (Date.now() < deadline) {
+    const poll = await getReadGrant({
+      relayBaseUrl: session.relayBaseUrl,
+      requestId: row.requestId,
+      dappSessionToken: session.dappSessionToken
+    });
+    if (!poll.ok) return null;
+    grant = poll.grant;
+    if (grant.status === "fulfilled") break;
+    // Terminal grant states ("expired" / "denied" — the relay's enum)
+    // cannot become fulfilled; fall back to rc.21 behavior. The relay
+    // usually signals these via HTTP 410, which lands in the
+    // `!poll.ok` branch above.
+    if (grant.status === "expired" || grant.status === "denied") {
+      return null;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, READ_GRANT_POLL_INTERVAL_MS));
+  }
+  if (!grant || grant.status !== "fulfilled" || !grant.redeliveredEncryptedResult) {
+    return { ...base, status: "unknown", reason: "grant_pending_timeout" };
+  }
+
+  // The wallet (W2) sealed the original result under the NEW session's
+  // sharedSecret. We cannot reuse `decodeMobileRelayResult` directly
+  // because its identity check requires `pending.sessionId ===
+  // session.sessionId` — and the row's pending carries the OLD
+  // sessionId (which is exactly the situation we're recovering from).
+  // Validate the decoded payload ourselves using the row's stored
+  // pending (method/address/network/chainId/requestId) plus the
+  // NEW session's sharedSecret for decryption.
+  let decoded: unknown;
+  try {
+    decoded = decryptJson<unknown>(grant.redeliveredEncryptedResult, session.sharedSecret);
+  } catch {
+    return { ...base, status: "unknown", reason: "decrypt_failed" };
+  }
+
+  let output: CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput;
+  try {
+    if (row.method === "signAndSubmitTransaction") {
+      if (!isRecord(decoded) || Object.keys(decoded).length !== 1 ||
+          !isValidTransactionHash(decoded.hash)) {
+        throw new InferAdapterError(InferErrorCode.InternalError,
+          "Infer Connect returned an approved transaction without a valid hash");
+      }
+      output = { hash: decoded.hash };
+    } else if (row.method === "signMessage") {
+      if (!isRecord(decoded) || typeof decoded.address !== "string" ||
+          decoded.address.toLowerCase() !== row.address.toLowerCase() ||
+          typeof decoded.signature !== "string" ||
+          typeof decoded.fullMessage !== "string" || typeof decoded.message !== "string" ||
+          typeof decoded.nonce !== "string" || typeof decoded.prefix !== "string") {
+        throw new InferAdapterError(InferErrorCode.InternalError,
+          "Infer Connect returned an invalid signed message");
+      }
+      output = decoded as unknown as CedraSignMessageOutput;
+    } else {
+      // signTransaction: the original `expectedTransactionBcsHex` is
+      // preserved on the row's pending.
+      output = deserializeSignTransactionResult(
+        decoded as { authenticatorHex: unknown; rawTransactionBcsHex: unknown },
+        row.pending.expectedTransactionBcsHex
+      );
+    }
+  } catch (cause) {
+    if (cause instanceof InferAdapterError && cause.code === InferErrorCode.UserRejected) {
+      return { ...base, status: "rejected" };
+    }
+    return { ...base, status: "unknown",
+      reason: cause instanceof Error ? cause.message : "Decoded read-grant result failed validation" };
+  }
+
+  // Persist the verified result BEFORE returning — preserve the rc.21
+  // ordering invariant so a follow-up read locally replays without
+  // re-querying the relay.
+  try {
+    await saveDurableFinal(row.id, serializeStoredFinal(row.method, output));
+  } catch {
+    return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
+  }
+  return { ...base, status: "approved", output };
+}
+
+/**
+ * Desktop-bridge authorized-read fallback. Calls the new
+ * `readResultForSession` endpoint (D2 contract) which returns the
+ * durable result from Infer Desk's redb store directly — Desk is the
+ * durable authority on this path so no re-encryption is needed.
+ *
+ * Returns the recovered outcome on success; returns `null` on any
+ * non-success path so the caller can fall back to rc.21 behavior.
+ */
+async function authorizedReadDesktopBridge(
+  row: DurableRequest,
+  session: InferExternalSession,
+  options: InferWalletOptions,
+  base: ReturnType<typeof descriptor>
+): Promise<RecoveredRequestOutcome | null> {
+  // The IPC bridge authenticates per-session URL token. The token is
+  // stored in sessionStorage by the postMessage flow; if it's not
+  // present, the endpoint cannot be reached → fall back to rc.21.
+  const result = await readResultForSession({
+    bridgeOrigin: row.endpoint,
+    requestId: row.requestId,
+    newSessionId: session.sessionId,
+    scope: {
+      origin: row.origin,
+      transport: "desktop-bridge",
+      accountAddress: row.address,
+      network: row.network,
+      chainId: row.chainId,
+      method: row.method
+    },
+    options
+  });
+  if (!result.ok) return null;
+  if (result.status === "rejected") {
+    try {
+      await saveDurableFinal(row.id, { status: "rejected" });
+    } catch {
+      return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
+    }
+    return { ...base, status: "rejected" };
+  }
+  try {
+    await saveDurableFinal(row.id, serializeStoredFinal(row.method, result.payload));
+  } catch {
+    return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
+  }
+  return { ...base, status: "approved", output: result.payload };
+}
+
 /** List all active same-origin receipts, including those from an older wallet session. */
 export async function listRecoverableRequests(options: InferWalletOptions = {}): Promise<RecoverableRequest[]> {
   return (await records(options)).filter((row) => row.state === "active").map(descriptor);
@@ -184,6 +440,28 @@ export async function readRecoverableRequest(
   const base = descriptor(row);
   const session = readExternalSession();
   if (!matchingSession(row, session, options)) {
+    // v0.2.0-rc.22 (A1): if no verified local final is available and the
+    // original session is gone, attempt the authorized-read fallback
+    // path when (a) a fresh session with matching scope exists and
+    // (b) the row's endpoint matches the current session's transport
+    // endpoint. This closes the protocol dependency where a new
+    // session could not read an old unverified result.
+    //
+    // Fallback contract: if the new client endpoints are missing
+    // (404 from mintReadGrant / readResultForSession) or the polling
+    // times out, the result is byte-identical to current rc.21 —
+    // i.e. the adapter returns `{ status: "unknown" }` with the
+    // legacy reason. This guarantees the spec acceptance criterion
+    // that older relay/Desk deployments see no behavior change.
+    if (sameScope(row, session)) {
+      if (row.transport === "mobile-relay" && sameRelayBaseUrl(row, session)) {
+        const authorized = await authorizedReadMobileRelay(row, session!, base);
+        if (authorized) return authorized;
+      } else if (row.transport === "desktop-bridge" && sameBridgeOrigin(row, session, options)) {
+        const authorized = await authorizedReadDesktopBridge(row, session!, options, base);
+        if (authorized) return authorized;
+      }
+    }
     return { ...base, status: "unknown",
       reason: "Original wallet session cannot authenticate a remote read; reconnect or reconcile externally" };
   }

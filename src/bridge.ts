@@ -2118,6 +2118,194 @@ export async function readDesktopBridgeRequestOnce(
   return { pending, status: "approved", output: decodeDesktopResult(payload, pending) };
 }
 
+/* ===================================================================
+ * v0.2.0-rc.22 (Phase 2 / A1): desktop-bridge authorized original-request
+ * read (D2 contract).
+ *
+ * After the original wallet session is gone, the dapp may still hold an
+ * active `DurableRequest` whose original `sessionId` does not match the
+ * current session. Infer Desk (>= 0.6.0-rc.7 / D2) persists the original
+ * request results in its redb store; this helper calls the new
+ * `GET /read-result/<requestId>` endpoint scoped to (origin,
+ * newSessionId, address, network, chainId) so the dapp can recover a
+ * previously-unverified old-session receipt through a fresh session.
+ *
+ * The Desk endpoint returns plaintext results because Desk is the
+ * durable authority for the desktop-bridge path — there is no
+ * re-encryption layer between Desk and the new session (the IPC bridge
+ * authenticates per-session URL token).
+ *
+ * Fallback contract (rc.22): older Desk without the new endpoint
+ * returns 404 → caller falls back to current rc.21 behavior.
+ * =================================================================== */
+
+export interface ReadResultForSessionScope {
+  origin: string;
+  transport: "desktop-bridge";
+  accountAddress: string;
+  network: string;
+  chainId: number;
+  /** Exact method of the original request — the Desk-side D2 dispatch
+   * (`read_result_for_session`) requires it and its `ResultScope`
+   * (bridge_origin, address, network, method) validates against it. */
+  method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
+}
+
+export interface ReadResultForSessionArgs {
+  /** Base URL of the Infer Desk IPC bridge (NOT the session URL token path). */
+  bridgeOrigin: string;
+  requestId: string;
+  /** The new session id; Desk verifies the new session has matching scope. */
+  newSessionId: string;
+  scope: ReadResultForSessionScope;
+  /** InferWalletOptions propagated from the caller (token, timeouts). */
+  options?: InferWalletOptions;
+}
+
+/** Mirrors `RecoveredRequestOutcome` minus `recoveryId` / `transport` /
+ * `sessionId` / `address` / `network` / `chainId` (those are returned
+ * via the outer wrapper in `recovery.ts`). The `hash` is the
+ * `hash` field on the wire; `payload` is the typed decoding of the
+ * wire payload into the AIP-63 / `cedra:signAndSubmitTransaction`
+ * shape Desk stored. */
+export type ReadResultForSessionResult =
+  | {
+      ok: true;
+      status: "approved" | "rejected";
+      hash?: string;
+      payload:
+        | CedraSignMessageOutput
+        | CedraSignTransactionOutputV1_1
+        | CedraSignAndSubmitTransactionOutput;
+      finalizedAt: string;
+    }
+  | { ok: false; reason: "scope_mismatch" | "not_found" | "unavailable" };
+
+function parseReadResultScope(value: unknown): ReadResultForSessionScope | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.origin !== "string" || !record.origin) return null;
+  if (record.transport !== "desktop-bridge") return null;
+  if (typeof record.accountAddress !== "string" || !record.accountAddress) return null;
+  if (typeof record.network !== "string" || !record.network) return null;
+  if (typeof record.chainId !== "number" || !Number.isInteger(record.chainId)) return null;
+  if (typeof record.method !== "string" || !record.method) return null;
+  return {
+    origin: record.origin,
+    transport: "desktop-bridge",
+    accountAddress: record.accountAddress,
+    network: record.network,
+    chainId: record.chainId,
+    method: record.method as ReadResultForSessionScope["method"]
+  };
+}
+
+/**
+ * Authorized read of an old unverified desktop-bridge request through
+ * a fresh session. Hits `GET /read-result/<requestId>?newSessionId=...`
+ * on the Infer Desk IPC bridge.
+ *
+ * The Desk endpoint returns the original session's result envelope
+ * (or its durable equivalent in redb) so the dapp can finalize a
+ * previously-unverified request via the new session. The caller MUST
+ * pass a scope that exactly matches the original row's
+ * `(origin, transport, address, network, chainId)`. Scope mismatch
+ * returns `{ ok: false, reason: "scope_mismatch" }`.
+ */
+export async function readResultForSession(
+  args: ReadResultForSessionArgs
+): Promise<ReadResultForSessionResult> {
+  const opts = args.options ?? {};
+  if (typeof window === "undefined") {
+    return { ok: false, reason: "unavailable" };
+  }
+  let path: string;
+  try {
+    path = bridgePathWithToken("/read-result/" + encodeURIComponent(args.requestId), opts);
+  } catch {
+    // Missing bridge token → unavailable (no token-gated path can work).
+    return { ok: false, reason: "unavailable" };
+  }
+  const url = new URL(path, args.bridgeOrigin);
+  url.searchParams.set("newSessionId", args.newSessionId);
+  url.searchParams.set("origin", args.scope.origin);
+  url.searchParams.set("accountAddress", args.scope.accountAddress);
+  url.searchParams.set("network", args.scope.network);
+  url.searchParams.set("chainId", String(args.scope.chainId));
+  url.searchParams.set("method", args.scope.method);
+
+  let payload: unknown;
+  try {
+    payload = await fetchJsonWithTimeout<{
+      requestId?: unknown;
+      sessionId?: unknown;
+      scope?: unknown;
+      status?: unknown;
+      hash?: unknown;
+      payload?: unknown;
+      finalizedAt?: unknown;
+    }>(url.toString(), bridgeConnectTimeoutMs(opts));
+  } catch (error) {
+    if (error instanceof BridgeHttpError) {
+      if (error.status === 404 || error.status === 403) return { ok: false, reason: "unavailable" };
+      if (error.status === 422) return { ok: false, reason: "scope_mismatch" };
+      return { ok: false, reason: "unavailable" };
+    }
+    return { ok: false, reason: "unavailable" };
+  }
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, reason: "unavailable" };
+  }
+  const record = payload as {
+    requestId?: unknown;
+    sessionId?: unknown;
+    scope?: unknown;
+    status?: unknown;
+    hash?: unknown;
+    payload?: unknown;
+    finalizedAt?: unknown;
+  };
+  if (typeof record.requestId !== "string" || record.requestId !== args.requestId ||
+      typeof record.sessionId !== "string" || record.sessionId !== args.newSessionId ||
+      typeof record.finalizedAt !== "string" ||
+      (record.status !== "approved" && record.status !== "rejected") ||
+      !record.payload || typeof record.payload !== "object") {
+    return { ok: false, reason: "unavailable" };
+  }
+  const scope = parseReadResultScope(record.scope);
+  if (!scope) return { ok: false, reason: "scope_mismatch" };
+  if (scope.origin !== args.scope.origin ||
+      scope.transport !== args.scope.transport ||
+      scope.accountAddress.toLowerCase() !== args.scope.accountAddress.toLowerCase() ||
+      scope.network !== args.scope.network ||
+      scope.chainId !== args.scope.chainId ||
+      scope.method !== args.scope.method) {
+    return { ok: false, reason: "scope_mismatch" };
+  }
+  const out: {
+    ok: true;
+    status: "approved" | "rejected";
+    hash?: string;
+    payload:
+      | CedraSignMessageOutput
+      | CedraSignTransactionOutputV1_1
+      | CedraSignAndSubmitTransactionOutput;
+    finalizedAt: string;
+  } = {
+    ok: true,
+    status: record.status,
+    payload: record.payload as
+      | CedraSignMessageOutput
+      | CedraSignTransactionOutputV1_1
+      | CedraSignAndSubmitTransactionOutput,
+    finalizedAt: record.finalizedAt
+  };
+  if (typeof record.hash === "string" && isValidTransactionHash(record.hash)) {
+    out.hash = record.hash;
+  }
+  return out;
+}
+
 export async function tryLocalBridgeSignMessage(
   input: CedraSignMessageInput,
   session: InferExternalSession,

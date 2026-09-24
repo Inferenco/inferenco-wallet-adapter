@@ -346,9 +346,15 @@ is not proof of non-submission or permission to retry. Unknown active evidence
 does not expire automatically; acknowledged tombstones and explicit archives
 are eligible for cleanup after 30 and 180 days respectively. Browser data
 deletion, a different origin/browser/device, or loss of required keys can make
-recovery impossible. Infer Desk currently keeps request results in process
-memory, so a Desk restart can still make a desktop outcome irretrievable until
-Desk implements durable original-request access.
+recovery impossible.
+
+Phase 2 (rc.22) closes the "old session, new identity" gap via two
+explicitly authorized original-request read contracts: the mobile-relay
+`POST/GET /v1/requests/:requestId/read-grant` flow (see "Authorized
+Original-Request Read (rc.22)" below) and the desktop-bridge
+`GET /read-result/:requestId` endpoint served by Infer Desk's redb
+durable store. The adapter attempts both paths before falling back to
+the rc.21 `{status: "unknown"}` payload.
 
 The optional inferenco:connectionHealth feature exposes checking, connected,
 unreachable, and reconnect-required states for external sessions. A browser
@@ -360,6 +366,167 @@ approved inferenco:// and PKCE callback path to obtain a fresh endpoint; do
 not discover URL tokens publicly or repeat an uncertain transaction. The
 lower-level readPendingMobileRelayRequests, resumeMobileRelayRequest, and
 clearPendingMobileRelayRequest exports remain for existing integrations.
+
+## Authorized Original-Request Read (rc.22)
+
+The Infer Connect recovery repair plan closes the protocol dependency
+where a new dapp session cannot read an old unverified result. After the
+original wallet session is gone, the dapp may still hold an active
+`DurableRequest` whose `sessionId` does not match the current session
+but whose `(origin, transport, address, network, chainId)` DOES match
+— i.e. the SAME wallet identity is alive on a fresh sessionId. In that
+case the adapter attempts two authorized-read paths before falling back
+to the rc.21 `{status: "unknown"}` payload.
+
+The exact scope binding the read-grant is checked against is:
+
+- `origin` (browser origin; tied to IndexedDB scope)
+- `accountAddress` (the address bound to the old session)
+- `network` (Cedra / Testnet / Mainnet, etc.)
+- `chainId` (numeric chain id)
+- `method` (the original request's exact method — the relay's S1
+  endpoint REQUIRES it and rejects the mint with 400 `invalid_scope`
+  when missing; it also validates `method` against the original
+  request row)
+
+The adapter's local gate additionally requires the row's `transport`
+to match the current session's transport and the row's endpoint to
+match the current session's relay base URL / Desk bridge origin — but
+`transport` is NOT part of the relay wire scope. An optional
+`invocationId` is included when the row has one (the relay uses it for
+idempotent re-mint matching).
+
+### Mobile-relay path (S1)
+
+1. The dapp posts a one-shot read-grant:
+   ```
+   POST /v1/requests/:requestId/read-grant
+   x-infer-session-token: <new session's dappSessionToken>
+   Content-Type: application/json
+
+   {
+     "dappSessionToken": "<new session's dappSessionToken>",
+     "scope": {
+       "origin": "https://dapp.example",
+       "accountAddress": "0xABC…",
+       "network": "testnet",
+       "chainId": 2,
+       "method": "signAndSubmitTransaction",
+       "invocationId": "<optional, when the row has one>"
+     }
+   }
+   ```
+   The relay verifies the scope matches BOTH the new session row and
+   the original request's stored scope (origin/address/network/
+   chainId/method) and mints a `grantId` bound to the new session
+   (resolved from the presented `dappSessionToken`, never from the
+   scope). Re-minting within the grant TTL is idempotent: the relay
+   returns the existing grant instead of minting a second one.
+
+2. The wallet (W2) re-wraps the original ciphertext under the NEW
+   session's `sharedSecret` (`XChaCha20-Poly1305` envelope) and POSTs
+   it to `POST /v1/requests/:requestId/read-delivery`, authenticating
+   with the ORIGINAL session's `walletSessionToken`. NOTE: the relay
+   has no wallet-facing grant-list endpoint or WS broadcast yet — the
+   wallet learns about a pending grant from a user action ("Recover
+   pending") until the relay ships an indexed read (`discoverPendingReadGrants`
+   in the wallet is a documented Phase 2 stub). Without wallet-side
+   fulfillment the grant stays `pending_fulfillment` and the dapp's
+   poll ends in `grant_pending_timeout`.
+
+3. The dapp polls the grant state:
+   ```
+   GET /v1/requests/:requestId/read-grant
+   x-infer-session-token: <new session's dappSessionToken>
+   ```
+   Until `status === "fulfilled"`:
+   ```json
+   {
+     "grantId": "…",
+     "requestId": "…",
+     "scope": { "origin": "…", "accountAddress": "…", "network": "…", "chainId": 2, "method": "signAndSubmitTransaction" },
+     "status": "fulfilled",
+     "expiresAt": "…",
+     "fulfilledAt": "…",
+     "redeliveredEncryptedResult": "{ v: 1, nonce: '…', ciphertext: '…' }"
+   }
+   ```
+   The grant status enum mirrors the relay's `relay_read_grant_status`:
+   `pending_fulfillment` | `fulfilled` | `expired` | `denied`. Expired,
+   denied, and not-found grants are signaled via HTTP 410/404 (the
+   adapter treats them as terminal and falls back to rc.21).
+
+4. The dapp decrypts `redeliveredEncryptedResult` with the CURRENT
+   session's `sharedSecret`, validates the decoded payload against
+   the row's stored scope, persists the verified final via
+   `saveDurableFinal` (BEFORE returning — preserve the rc.21 ordering
+   invariant), and returns the recovered outcome.
+
+If the poll never sees `fulfilled` within the bound (default: 30 s),
+the recovery returns `{status: "unknown", reason: "grant_pending_timeout"}`.
+
+If the decrypt fails (e.g. W2 produced ciphertext under a different
+shared secret), the recovery returns `{status: "unknown", reason: "decrypt_failed"}`.
+
+### Desktop-bridge path (D2)
+
+The desktop-bridge path is simpler because Infer Desk is the durable
+authority for results (redb-backed store, `persistence.rs`). No
+re-encryption layer is needed:
+
+```
+GET /<token>/read-result/:requestId?newSessionId=<new-session>&origin=…&accountAddress=…&network=…&chainId=…&method=…
+```
+
+The Desk-side dispatch (`read_result_for_session`) validates the new
+bridge session's scope (origin/address/network) plus the exact
+`method` against the stored result's `ResultScope` before returning
+anything. A scope mismatch returns 422 (`{error: "scope_mismatch"}`);
+a missing token-gated path returns 404 and the adapter falls back to
+rc.21 behavior.
+
+> **Endpoint status (rc.22):** the durable store and the
+> `read_result_for_session` dispatch exist on the Desk side, but the
+> HTTP route serving `GET /read-result/:requestId` is NOT yet wired
+> into the external-bridge transport. Until Desk ships the route,
+> every desktop authorized read 404s and the adapter falls back to
+> the byte-identical rc.21 `{status: "unknown"}` payload — the
+> fallback gate makes the missing route safe but inert.
+
+### Fallback contract
+
+If the relay lacks the S1 endpoints, or the Desk lacks the D2 endpoint,
+the adapter's behavior is byte-identical to rc.21: the read-grant mint
+returns 404 → the `authorizedReadMobileRelay` helper returns `null` →
+the caller falls through to `{status: "unknown", reason: "Original
+wallet session cannot authenticate a remote read; reconnect or
+reconcile externally"}`. This guarantees older deployments see no
+behavior change.
+
+### Relationship to existing API
+
+The authorized-read path is fully internal to `readRecoverableRequest`.
+No new public API is required to benefit from rc.22; existing
+applications calling `listRecoverableRequests()` /
+`readRecoverableRequest(recoveryId)` automatically pick up the new
+path. The lower-level primitives `mintReadGrant`, `getReadGrant`, and
+`readResultForSession` are exported from the package for tests and
+for advanced integrations that need to drive the path explicitly.
+
+### Hard guarantees
+
+- The adapter NEVER signs, broadcasts, or opens another transaction
+  approval during the authorized-read path. The only HTTP traffic is
+  the read-grant mint/poll (relay) or the durable read IPC (Desk).
+- Expiry / revocation / disconnect do NOT block reconciliation — the
+  new path is bounded only by its own poll timeout (default 30 s) and
+  by the row's lifetime.
+- After a full reload, the adapter recovers the *result*, not the old
+  JS promise. The result is durably persisted via `saveDurableFinal`
+  BEFORE returning, so a follow-up `readRecoverableRequest` locally
+  replays without re-issuing any mint/poll.
+- Secrets stay adapter/wallet-owned. The `dappSessionToken` is sent
+  on the wire but no shared secret or signing key is logged.
 
 ## WebSocket Protocol
 
