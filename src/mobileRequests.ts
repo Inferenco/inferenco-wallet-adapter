@@ -7,6 +7,8 @@ const STORAGE_PREFIX = "inferenco:infer-pending-request:";
 export interface PendingMobileRelayRequest {
   version: 1;
   requestId: string;
+  /** Generated before request creation; safe for application journals. */
+  invocationId?: string;
   sessionId: string;
   address: string;
   network: string;

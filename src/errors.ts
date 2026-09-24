@@ -5,6 +5,9 @@ export enum InferErrorCode {
   NotInstalled = "NOT_INSTALLED",
   ConnectionTimeout = "CONNECTION_TIMEOUT",
   InvalidParams = "INVALID_PARAMS",
+  RequestNotInvoked = "REQUEST_NOT_INVOKED",
+  RequestOutcomeUnknown = "REQUEST_OUTCOME_UNKNOWN",
+  ConnectionUnavailable = "CONNECTION_UNAVAILABLE",
   InvalidNetwork = "INVALID_NETWORK",
   InternalError = "INTERNAL_ERROR",
   /**
@@ -36,6 +39,38 @@ export class InferAdapterError extends Error {
     super(message);
     this.name = "InferAdapterError";
   }
+}
+
+/** Exact invocation evidence for an ambiguous or definitely unissued wallet request. */
+export class InferRequestError extends InferAdapterError {
+  readonly dispatch: "not-invoked" | "unknown";
+  readonly status?: number;
+
+  constructor(
+    code: InferErrorCode,
+    message: string,
+    public readonly invocationId: string | null,
+    public readonly requestId: string | null,
+    cause?: unknown
+  ) {
+    super(code, message, cause);
+    this.name = "InferRequestError";
+    this.dispatch = code === InferErrorCode.RequestNotInvoked ? "not-invoked" : "unknown";
+    if (cause && typeof cause === "object" && "status" in cause &&
+        typeof cause.status === "number") this.status = cause.status;
+  }
+}
+
+export function unresolvedRequestError(
+  message: string,
+  invocationId: string,
+  requestId: string | null,
+  cause: unknown
+): InferRequestError {
+  // Once dispatch or delivery may have occurred, a nested transport error
+  // cannot prove a clean wallet rejection or a safe-to-retry failure.
+  return new InferRequestError(InferErrorCode.RequestOutcomeUnknown,
+    message, invocationId, requestId, cause);
 }
 
 function extractStatus(error: unknown): string | number | undefined {

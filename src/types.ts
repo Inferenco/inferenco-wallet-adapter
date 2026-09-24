@@ -71,6 +71,8 @@ export interface InferWalletOptions {
   onMobileRequestCreated?: (request: Readonly<PendingMobileRelayRequest>) => void | Promise<void>;
   /** Persist the request ID with the application action before awaiting approval. */
   onRequestCreated?: (request: Readonly<PendingMobileRelayRequest | PendingDesktopBridgeRequest>) => void | Promise<void>;
+  /** Awaited after durable invocation persistence and before request creation. */
+  onInvocationPrepared?: (invocation: Readonly<import("./recovery").RecoverableInvocation>) => void | Promise<void>;
   /** Optional startup notification. Journal the outcome, then acknowledge its exact ID. */
   onRecoveredOutcome?: (outcome: Readonly<RecoveredRequestOutcome>) => void | Promise<void>;
 
@@ -134,6 +136,21 @@ export interface InferWalletOptions {
  * and require a fresh `connect()` to resume.
  */
 export type InferDisconnectEvent = void;
+
+export interface InferConnectionIdentity {
+  transport: "desktop-bridge" | "mobile-relay";
+  sessionId: string;
+  address: string;
+  network: string;
+  chainId: number;
+}
+
+export type InferConnectionHealth =
+  | { state: "disconnected"; identity: null }
+  | { state: "checking"; identity: InferConnectionIdentity; reason?: string }
+  | { state: "connected"; identity: InferConnectionIdentity }
+  | { state: "unreachable"; identity: InferConnectionIdentity; reason: string }
+  | { state: "reconnect-required"; identity: InferConnectionIdentity; reason: string };
 
 export interface InferExternalSession {
   transport: "desktop-bridge" | "mobile-relay";

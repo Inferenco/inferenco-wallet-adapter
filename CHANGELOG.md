@@ -5,6 +5,44 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.22] - TBD
+
+### Added
+
+- Authorized original-request read: when a reconnected dapp session matches the DurableRequest scope (origin/transport/address/network/chainId) but the original session is gone, the adapter now mints a relay read-grant over the old request and recovers the redelivered ciphertext via the wallet's W2 fulfillment path. Falls back to current rc.21 behavior (`{status: "unknown"}`) if the relay doesn't have the new endpoints. The same path applies to the desktop-bridge transport via Infer Desk's durable read endpoint.
+- `mintReadGrant`, `getReadGrant` helpers in `mobileRelay.ts` (new types `MintReadGrantArgs`, `MintReadGrantResult`, `GetReadGrantArgs`, `ReadGrantDescriptor`, `ReadGrantScope`, `ReadGrantStatus`).
+- `readResultForSession` helper in `bridge.ts` (new types `ReadResultForSessionArgs`, `ReadResultForSessionScope`, `ReadResultForSessionResult`).
+- New `unknown` reasons on `readRecoverableRequest`: `grant_pending_timeout`, `decrypt_failed`.
+
+### Fixed
+
+- Closes the protocol dependency documented in CHANGELOG 0.2.0-rc.21 ("authorized original-request read contract"): a new dapp session can now recover an old unverified result when the relay or Desk supports the Phase 0 S1 / D2 endpoints.
+
+### Notes
+
+- Mobile-relay path requires relay >= Phase 0 (S1 endpoints `POST/GET /v1/requests/:requestId/read-grant`); older relays byte-identical to rc.21. The mint scope MUST include the original request's `method` (the relay rejects a scope without it with 400 `invalid_scope` and validates it against the original request row); `transport` is not part of the relay wire scope.
+- Desktop-bridge path requires Infer Desk's D2 durable results endpoint `GET /read-result/:requestId`; older Desk byte-identical to rc.21. As of rc.22 the Desk-side durable store and `read_result_for_session` dispatch exist but the HTTP route is not yet wired into the external-bridge transport — the desktop authorized read therefore 404s and falls back to rc.21 behavior until Desk ships the route.
+- Wallet-side W2 fulfillment (`fulfillReadGrant` → `deliverReadGrant`) must be in place for full recovery; without W2, grants remain `pending_fulfillment` and the recovery returns `{status: "unknown", reason: "grant_pending_timeout"}`. The relay has no wallet-facing grant-list endpoint yet — the wallet learns about pending grants from a user action ("Recover pending").
+- The adapter NEVER signs, broadcasts, or opens another transaction approval during the authorized-read path.
+
+## [0.2.0-rc.21] - 2026-09-23
+
+### Added
+
+- Persist exact request receipts, original invocation identities, and verified final outcomes in origin-scoped IndexedDB before returning results or notifying consumers. Valid rc.20 tab receipts migrate on use. New same-origin tabs can recover while the original session remains available.
+- Expose a pre-dispatch invocation hook, structured invocation/request errors, durable invocation listing, late outcome subscriptions, and connection-health checks through InferClient, InferWallet, and the Infer Wallet Standard feature.
+- Wake recovery on startup, focus, visibility return, pageshow, storage changes, and cross-tab record changes; dispose client listeners explicitly.
+
+### Fixed
+
+- A failed Infer Desk session validation no longer certifies a cached account as connected. Ambiguous network/CORS failures preserve the cached identity and recovery evidence, while an explicit session rejection requires reconnection.
+- Keep verified results replayable until exact acknowledgement and preserve unresolved old-session requests for external reconciliation. Recovery never creates or resubmits a wallet request.
+
+### Limits
+
+- An old request without its original read credential remains unknown until Desk or relay provides an explicitly authorized original-request read contract. Infer Desk must persist its own results across restart; this adapter cannot infer a missing hash.
+- IndexedDB is same-origin browser storage, not isolation from same-origin script. Clearing browser data removes local recovery evidence. The adapter does not retain old signing credentials after session replacement or logout.
+
 ## [0.2.0-rc.20] - 2026-09-23
 
 ### Fixed

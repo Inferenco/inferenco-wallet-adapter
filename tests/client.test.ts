@@ -777,8 +777,19 @@ describe("InferClient", () => {
     // Ensure /<token>/connection responds OK so disconnect() doesn't throw.
     // Each fetch must return a fresh Response object so its body can be
     // read exactly once.
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      new Response(JSON.stringify({ status: "revoked" }), {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) =>
+      new Response(JSON.stringify(init?.method === "DELETE"
+        ? { status: "revoked" }
+        : {
+            transport: "desktop-bridge",
+            address: signer.accountAddress.toString(),
+            publicKey: signer.publicKey.toString(),
+            network: "testnet",
+            chainId: 2,
+            sessionId: "session-self-disconnect",
+            bridgeUrl: "http://127.0.0.1:21984",
+            walletName: "Nova Desk"
+          }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       })
