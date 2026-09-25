@@ -5,25 +5,69 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0-rc.22] - TBD
+## [0.2.0-rc.23] - TBD
 
-### Added
+### Fixed (sign-path token graft + multi-tab preauth waiter)
+
+- **rc.22 regression closed (chip-claim fix).** The rc.22
+  precedence flip in `tryLocalBridgeSign*` /
+  `readDesktopBridgeRequestOnce`
+  (`options.bridgeBaseUrl ?? session.bridgeUrl`, commit
+  `f6da44d`) silently dropped the per-session URL token when
+  the dApp passes a bare `bridgeBaseUrl` (the production
+  `infer-ecosystem` case). Every sign call threw
+  `MissingBridgeTokenError` synchronously before any fetch —
+  the `inferenco://` approval sheet in Infer Desk never
+  surfaced. Fix: replace the precedence expression with the
+  rc.17 graft helper `sessionBridgeBaseUrl(session, options)`
+  at the four sign-path call sites in `bridge.ts`
+  (`tryLocalBridgeSignMessage` :2315,
+  `tryLocalBridgeSignTransaction` :2333,
+  `tryLocalBridgeSignAndSubmit` :2357, and
+  `readDesktopBridgeRequestOnce` :2110). The rc.17 graft
+  preserves ND-WEB-001 (the host still comes from
+  `options.bridgeBaseUrl`; an attacker who substitutes
+  `session.bridgeUrl` can only inject a forged token SEGMENT
+  onto the dApp's trusted host, where the wallet's F-03 token
+  gate 404s). The recovery authorized-read endpoint
+  (`readResultForSession`, `bridge.ts:2224`) does not carry
+  the buggy precedence pattern and is out of scope here.
+- **Multi-tab preauth waiter.** `InferClient.connect()`'s
+  pre-auth branch previously polled its own `request_id` and
+  never registered with `waitForExternalSession`, so a peer-tab
+  approval (delivered via the
+  `inferenco:infer-session-ready` CustomEvent that the adapter
+  already dispatches from `bridge.ts syncReadySession`) could
+  not wake the stuck connect. `pollPreauthUntilResolved`
+  (`InferClient.ts:392`) now races the request_id poll against
+  `waitForExternalSession` so a peer-tab approval short-circuits
+  the connect. First settlement wins; the `settled` flag
+  prevents double-resolve; the loser's loop checks the flag and
+  exits on the next iteration. The single-tab case is unchanged
+  (no peer dispatches the event, so the request_id poll wins
+  as before).
+
+### Fixed (chip-claim durable recovery — rc.22 foundation)
+
+- Closes the protocol dependency documented in CHANGELOG 0.2.0-rc.21 ("authorized original-request read contract"): a new dapp session can now recover an old unverified result when the relay or Desk supports the Phase 0 S1 / D2 endpoints.
+
+### Notes
+
+- **A2 (precise classification for sync `MissingBridgeTokenError` as `InferRequestError(RequestNotInvoked, …)`)** is deliberately deferred: the dApp `infer-ecosystem` has no `REQUEST_NOT_INVOKED` classifier yet, so emitting that code now would surface as an unknown error the dApp cannot render. Tracked for the next chip-claim cycle once the dApp classifier lands.
+- The `/read-result/<requestId>` recovery endpoint audit (rc.22 D2 contract) was skipped in this cycle: the function takes no `session` parameter and uses `args.bridgeOrigin` for the host, so the rc.22 precedence-flip pattern never applied. Token extraction in that path runs through `bridgePathWithToken`'s `options.bridgeBaseUrl` fallback (rc.7 contract) and is unchanged.
+- Mobile-relay path requires relay >= Phase 0 (S1 endpoints `POST/GET /v1/requests/:requestId/read-grant`); older relays byte-identical to rc.21. The mint scope MUST include the original request's `method` (the relay rejects a scope without it with 400 `invalid_scope` and validates it against the original request row); `transport` is not part of the relay wire scope.
+- Desktop-bridge path requires Infer Desk's D2 durable results endpoint `GET /read-result/:requestId`; older Desk byte-identical to rc.21. As of rc.23 the Desk-side durable store and `read_result_for_session` dispatch exist but the HTTP route is not yet wired into the external-bridge transport — the desktop authorized read therefore 404s and falls back to rc.21 behavior until Desk ships the route.
+- Wallet-side W2 fulfillment (`fulfillReadGrant` → `deliverReadGrant`) must be in place for full recovery; without W2, grants remain `pending_fulfillment` and the recovery returns `{status: "unknown", reason: "grant_pending_timeout"}`. The relay has no wallet-facing grant-list endpoint yet — the wallet learns about pending grants from a user action ("Recover pending").
+- The adapter NEVER signs, broadcasts, or opens another transaction approval during the authorized-read path.
+
+### Added (rc.22 — published as rc.23)
 
 - Authorized original-request read: when a reconnected dapp session matches the DurableRequest scope (origin/transport/address/network/chainId) but the original session is gone, the adapter now mints a relay read-grant over the old request and recovers the redelivered ciphertext via the wallet's W2 fulfillment path. Falls back to current rc.21 behavior (`{status: "unknown"}`) if the relay doesn't have the new endpoints. The same path applies to the desktop-bridge transport via Infer Desk's durable read endpoint.
 - `mintReadGrant`, `getReadGrant` helpers in `mobileRelay.ts` (new types `MintReadGrantArgs`, `MintReadGrantResult`, `GetReadGrantArgs`, `ReadGrantDescriptor`, `ReadGrantScope`, `ReadGrantStatus`).
 - `readResultForSession` helper in `bridge.ts` (new types `ReadResultForSessionArgs`, `ReadResultForSessionScope`, `ReadResultForSessionResult`).
 - New `unknown` reasons on `readRecoverableRequest`: `grant_pending_timeout`, `decrypt_failed`.
 
-### Fixed
-
-- Closes the protocol dependency documented in CHANGELOG 0.2.0-rc.21 ("authorized original-request read contract"): a new dapp session can now recover an old unverified result when the relay or Desk supports the Phase 0 S1 / D2 endpoints.
-
-### Notes
-
-- Mobile-relay path requires relay >= Phase 0 (S1 endpoints `POST/GET /v1/requests/:requestId/read-grant`); older relays byte-identical to rc.21. The mint scope MUST include the original request's `method` (the relay rejects a scope without it with 400 `invalid_scope` and validates it against the original request row); `transport` is not part of the relay wire scope.
-- Desktop-bridge path requires Infer Desk's D2 durable results endpoint `GET /read-result/:requestId`; older Desk byte-identical to rc.21. As of rc.22 the Desk-side durable store and `read_result_for_session` dispatch exist but the HTTP route is not yet wired into the external-bridge transport — the desktop authorized read therefore 404s and falls back to rc.21 behavior until Desk ships the route.
-- Wallet-side W2 fulfillment (`fulfillReadGrant` → `deliverReadGrant`) must be in place for full recovery; without W2, grants remain `pending_fulfillment` and the recovery returns `{status: "unknown", reason: "grant_pending_timeout"}`. The relay has no wallet-facing grant-list endpoint yet — the wallet learns about pending grants from a user action ("Recover pending").
-- The adapter NEVER signs, broadcasts, or opens another transaction approval during the authorized-read path.
+## [0.2.0-rc.22] - superseded by rc.23
 
 ## [0.2.0-rc.21] - 2026-09-23
 

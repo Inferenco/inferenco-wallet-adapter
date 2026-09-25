@@ -388,28 +388,91 @@ async function retryLocalBridgeConnectAfterDeeplink(
  * on timeout or rejection. Single-shot: the dapp's tab is the
  * only consumer — the wallet invalidates the request_id after
  * the first `Approved` poll.
+ *
+ * v0.2.0-rc.23 (multi-tab preauth waiter): race the request_id
+ * poll against `waitForExternalSession(options)` so a peer-tab
+ * Approved event (delivered via the
+ * `inferenco:infer-session-ready` CustomEvent that the adapter
+ * already dispatches from `bridge.ts` `syncReadySession`) wakes
+ * the stuck connect. The adapter's existing wake machinery
+ * (`installExternalSessionResumeListeners` → `syncReadySession`
+ * at `bridge.ts:771`) is upstream; the pre-auth connect path
+ * simply did not register before — `waitForExternalSession` is
+ * what registers it, and the pre-auth branch never called it.
+ *
+ * Behavioural contract:
+ *  - Idempotent: each call's `waitForExternalSession`
+ *    registration is scoped to this promise; cleanup is done by
+ *    its internal `finish()` (bridge.ts:1160) when the waiter
+ *    resolves. Two parallel `connect()` calls produce two
+ *    independent registrations, each cleaned up by its own
+ *    timeout.
+ *  - No double-resolve: the `settled` flag is checked on every
+ *    `pollPreauthConnect` return and every `waitForExternalSession`
+ *    resolve; the second resolution is dropped.
+ *  - Non-blocking in single-tab case: no peer dispatches the
+ *    session-ready event, so `waitForExternalSession`'s own
+ *    timeout (same `bridgePollTimeoutMs`) is the loser; the
+ *    request_id poll wins unchanged.
  */
 async function pollPreauthUntilResolved(
   requestId: string,
   options: InferWalletOptions
 ): Promise<InferExternalSession | null> {
-  const deadline = Date.now() + bridgePollTimeoutMs(options);
-  while (Date.now() < deadline) {
-    const result = await pollPreauthConnect({ requestId, options });
-    if (result) {
-      if (result.status === "approved" && result.session) {
-        storeExternalSession(result.session);
-        return result.session;
+  let settled = false;
+  const tryFinish = (resolve: (v: InferExternalSession | null) => void) =>
+    (value: InferExternalSession | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+  // Own request_id poll. Throws on poll error (preserves existing
+  // behaviour). The `settled` short-circuit prevents one final
+  // pollPreauthConnect call after a peer-tab wake lands.
+  const pollLoop = (async (): Promise<InferExternalSession | null> => {
+    const deadline = Date.now() + bridgePollTimeoutMs(options);
+    while (!settled && Date.now() < deadline) {
+      const result = await pollPreauthConnect({ requestId, options });
+      if (settled) return null;
+      if (result) {
+        if (result.status === "approved" && result.session) {
+          storeExternalSession(result.session);
+          return result.session;
+        }
+        if (result.status === "rejected") {
+          return null;
+        }
       }
-      if (result.status === "rejected") {
-        return null;
-      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, bridgePollIntervalMs(options))
+      );
     }
-    await new Promise((resolve) =>
-      window.setTimeout(resolve, bridgePollIntervalMs(options))
-    );
-  }
-  return null;
+    return null;
+  })();
+
+  // Peer-tab wake. Returns null on its own timeout; in that case
+  // the poll loop's null is the eventual winner.
+  const externalWait = (async (): Promise<InferExternalSession | null> => {
+    const session = await waitForExternalSession(options);
+    if (settled || session === null) return null;
+    return session;
+  })();
+
+  // First settlement wins. Rejections from the poll path propagate
+  // to the outer await below (preserves the existing contract that
+  // a network failure surfaces to the caller's try/catch).
+  return await new Promise<InferExternalSession | null>((resolve, reject) => {
+    const finish = tryFinish(resolve);
+    pollLoop.then(finish, (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    externalWait.then((session) => {
+      if (session !== null) finish(session);
+    });
+  });
 }
 
 export class InferClient extends EventEmitter<InferClientEvents> {

@@ -2107,7 +2107,10 @@ export async function readDesktopBridgeRequestOnce(
     pending.method === "signTransaction" ? "/sign-transaction-request" : "/transaction-request";
   const payload = await fetchJsonWithTimeout<InferBridgeMessagePoll | InferBridgeSignTransactionPoll | InferBridgeTransactionPoll>(
     bridgeUrlWithToken(path + "/" + encodeURIComponent(requestId), {
-      ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl
+      // A1: rc.23 token graft (sessionBridgeBaseUrl) — replaces the rc.22
+      // `options.bridgeBaseUrl ?? session.bridgeUrl` precedence that silently
+      // dropped the per-session URL token when the dApp passes a bare base.
+      ...options, bridgeBaseUrl: sessionBridgeBaseUrl(session, options)
     }),
     bridgeConnectTimeoutMs(options)
   );
@@ -2312,7 +2315,10 @@ export async function tryLocalBridgeSignMessage(
   options: InferWalletOptions = {}
 ): Promise<CedraSignMessageOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
-  const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
+  // A1: rc.23 token graft (sessionBridgeBaseUrl) — replaces the rc.22
+  // `options.bridgeBaseUrl ?? session.bridgeUrl` precedence that silently
+  // dropped the per-session URL token when the dApp passes a bare base.
+  const requestOptions = { ...options, bridgeBaseUrl: sessionBridgeBaseUrl(session, options) };
   const { requestId, pending, durableId } = await startDurableDesktopRequest("/sign-message", {
     origin: window.location.origin,
     app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
@@ -2330,7 +2336,10 @@ export async function tryLocalBridgeSignTransaction(
   options: InferWalletOptions = {}
 ): Promise<CedraSignTransactionOutputV1_1> {
   if (!isBrowser() || !session.sessionId) throw reconnectSigningError();
-  const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
+  // A1: rc.23 token graft (sessionBridgeBaseUrl) — replaces the rc.22
+  // `options.bridgeBaseUrl ?? session.bridgeUrl` precedence that silently
+  // dropped the per-session URL token when the dApp passes a bare base.
+  const requestOptions = { ...options, bridgeBaseUrl: sessionBridgeBaseUrl(session, options) };
   const { requestId, pending, durableId } = await startDurableDesktopRequest("/sign-transaction", {
     origin: window.location.origin,
     app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
@@ -2354,7 +2363,10 @@ export async function tryLocalBridgeSignAndSubmit(
   options: InferWalletOptions = {}
 ): Promise<CedraSignAndSubmitTransactionOutput> {
   if (!isBrowser() || !session.sessionId) throw reconnectTransactionError();
-  const requestOptions = { ...options, bridgeBaseUrl: options.bridgeBaseUrl ?? session.bridgeUrl };
+  // A1: rc.23 token graft (sessionBridgeBaseUrl) — replaces the rc.22
+  // `options.bridgeBaseUrl ?? session.bridgeUrl` precedence that silently
+  // dropped the per-session URL token when the dApp passes a bare base.
+  const requestOptions = { ...options, bridgeBaseUrl: sessionBridgeBaseUrl(session, options) };
   const { requestId, pending, durableId } = await startDurableDesktopRequest("/transaction", {
     origin: window.location.origin,
     app: typeof document !== "undefined" ? document.title || "Infer Desk" : "Infer Desk",
