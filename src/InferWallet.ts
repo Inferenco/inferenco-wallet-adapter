@@ -154,6 +154,16 @@ export class InferWallet
     return this.client.listRecoverableInvocations();
   }
 
+  reconcileRecoverableInvocation(
+    invocationId: string
+  ): ReturnType<InferClient["reconcileRecoverableInvocation"]> {
+    return this.client.reconcileRecoverableInvocation(invocationId);
+  }
+
+  relaunchRecoverableInvocation(invocationId: string): Promise<void> {
+    return this.client.relaunchRecoverableInvocation(invocationId);
+  }
+
   subscribeRecoveredOutcomes(
     callback: (outcome: RecoveredRequestOutcome) => void | Promise<void>
   ): () => void {

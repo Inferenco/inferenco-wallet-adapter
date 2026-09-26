@@ -1,6 +1,6 @@
 {
   "name": "@inferenco/infer-wallet-adapter",
-  "version": "0.2.0-rc.22",
+  "version": "0.2.0-rc.24",
   "description": "Standalone Infer wallet adapter for Cedra dapps",
   "license": "Apache-2.0",
   "author": "TOO Spielcrypto and Singularity Shift Ltd",

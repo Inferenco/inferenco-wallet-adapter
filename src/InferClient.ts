@@ -27,6 +27,9 @@ import {
   parseDisconnectPayload,
   pollPreauthConnect,
   readExternalSession,
+  readCallbackMarker,
+  readPendingMobilePairing,
+  renderCallbackCompletionFallback,
   readValidatedExternalSession,
   revokeExternalSession,
   sessionToAccountInfo,
@@ -49,6 +52,7 @@ import {
 } from "./conversion";
 import { DEFAULT_SESSION_LIVENESS_INTERVAL_MS, INFER_SESSION_CLEARED_MESSAGE_TYPE } from "./constants";
 import { RECOVERY_CHANNEL, pruneDurableEvidence } from "./durableRecovery";
+import { hasLiveOriginalMobileTab, installMobileReturnOwnerResponder } from "./mobileReturnCoordinator";
 import {
   isValidTransactionHash,
   InferAdapterError,
@@ -59,7 +63,7 @@ import {
 import { buildDeeplinkUrl } from "./deeplink";
 import {
   connectViaMobileRelay,
-  resumeMobileRelaySessionFromCallback,
+  resumeMobileRelaySession,
   signAndSubmitViaMobileRelay,
   signMessageViaMobileRelay,
   signTransactionViaMobileRelay
@@ -70,13 +74,16 @@ import {
   listArchivedRecoverableRequests,
   listRecoverableInvocations,
   listRecoverableRequests,
-  readRecoverableRequest
+  readRecoverableRequest,
+  reconcileRecoverableInvocation,
+  relaunchRecoverableInvocation
 } from "./recovery";
 import type {
   ArchivedRecoverableRequest,
   RecoveredRequestOutcome,
   RecoverableRequest,
-  RecoverableInvocation
+  RecoverableInvocation,
+  RecoveredInvocationOutcome
 } from "./recovery";
 import { detectProvider } from "./provider";
 import type {
@@ -388,28 +395,91 @@ async function retryLocalBridgeConnectAfterDeeplink(
  * on timeout or rejection. Single-shot: the dapp's tab is the
  * only consumer — the wallet invalidates the request_id after
  * the first `Approved` poll.
+ *
+ * v0.2.0-rc.23 (multi-tab preauth waiter): race the request_id
+ * poll against `waitForExternalSession(options)` so a peer-tab
+ * Approved event (delivered via the
+ * `inferenco:infer-session-ready` CustomEvent that the adapter
+ * already dispatches from `bridge.ts` `syncReadySession`) wakes
+ * the stuck connect. The adapter's existing wake machinery
+ * (`installExternalSessionResumeListeners` → `syncReadySession`
+ * at `bridge.ts:771`) is upstream; the pre-auth connect path
+ * simply did not register before — `waitForExternalSession` is
+ * what registers it, and the pre-auth branch never called it.
+ *
+ * Behavioural contract:
+ *  - Idempotent: each call's `waitForExternalSession`
+ *    registration is scoped to this promise; cleanup is done by
+ *    its internal `finish()` (bridge.ts:1160) when the waiter
+ *    resolves. Two parallel `connect()` calls produce two
+ *    independent registrations, each cleaned up by its own
+ *    timeout.
+ *  - No double-resolve: the `settled` flag is checked on every
+ *    `pollPreauthConnect` return and every `waitForExternalSession`
+ *    resolve; the second resolution is dropped.
+ *  - Non-blocking in single-tab case: no peer dispatches the
+ *    session-ready event, so `waitForExternalSession`'s own
+ *    timeout (same `bridgePollTimeoutMs`) is the loser; the
+ *    request_id poll wins unchanged.
  */
 async function pollPreauthUntilResolved(
   requestId: string,
   options: InferWalletOptions
 ): Promise<InferExternalSession | null> {
-  const deadline = Date.now() + bridgePollTimeoutMs(options);
-  while (Date.now() < deadline) {
-    const result = await pollPreauthConnect({ requestId, options });
-    if (result) {
-      if (result.status === "approved" && result.session) {
-        storeExternalSession(result.session);
-        return result.session;
+  let settled = false;
+  const tryFinish = (resolve: (v: InferExternalSession | null) => void) =>
+    (value: InferExternalSession | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+  // Own request_id poll. Throws on poll error (preserves existing
+  // behaviour). The `settled` short-circuit prevents one final
+  // pollPreauthConnect call after a peer-tab wake lands.
+  const pollLoop = (async (): Promise<InferExternalSession | null> => {
+    const deadline = Date.now() + bridgePollTimeoutMs(options);
+    while (!settled && Date.now() < deadline) {
+      const result = await pollPreauthConnect({ requestId, options });
+      if (settled) return null;
+      if (result) {
+        if (result.status === "approved" && result.session) {
+          storeExternalSession(result.session);
+          return result.session;
+        }
+        if (result.status === "rejected") {
+          return null;
+        }
       }
-      if (result.status === "rejected") {
-        return null;
-      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, bridgePollIntervalMs(options))
+      );
     }
-    await new Promise((resolve) =>
-      window.setTimeout(resolve, bridgePollIntervalMs(options))
-    );
-  }
-  return null;
+    return null;
+  })();
+
+  // Peer-tab wake. Returns null on its own timeout; in that case
+  // the poll loop's null is the eventual winner.
+  const externalWait = (async (): Promise<InferExternalSession | null> => {
+    const session = await waitForExternalSession(options);
+    if (settled || session === null) return null;
+    return session;
+  })();
+
+  // First settlement wins. Rejections from the poll path propagate
+  // to the outer await below (preserves the existing contract that
+  // a network failure surfaces to the caller's try/catch).
+  return await new Promise<InferExternalSession | null>((resolve, reject) => {
+    const finish = tryFinish(resolve);
+    pollLoop.then(finish, (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    externalWait.then((session) => {
+      if (session !== null) finish(session);
+    });
+  });
 }
 
 export class InferClient extends EventEmitter<InferClientEvents> {
@@ -429,6 +499,7 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   private recoveryRun: Promise<void> | null = null;
   private recoveryRescan = false;
   private recoveryChannel: BroadcastChannel | null = null;
+  private disposeMobileOwnerResponder: (() => void) | null = null;
   private disconnectChannel: BroadcastChannel | null = null;
   private readonly recoveryWake = () => { this.scheduleRecovery(); };
   private readonly onSessionCleared = () => { this.handleExternalSessionCleared(); };
@@ -461,6 +532,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
       this.recoveredSubscribers.set(options.onRecoveredOutcome, new Set());
     }
     if (typeof window !== "undefined") {
+      this.disposeMobileOwnerResponder = installMobileReturnOwnerResponder();
+      const mobileCallbackId = isMobileBrowser() ? readCallbackMarker()?.requestId : undefined;
+      if (mobileCallbackId) void this.coordinateMobileCallbackTab(mobileCallbackId);
       window.addEventListener("focus", this.recoveryWake);
       window.addEventListener("pageshow", this.recoveryWake);
       window.addEventListener("storage", this.recoveryWake);
@@ -507,6 +581,14 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     return listRecoverableInvocations();
   }
 
+  reconcileRecoverableInvocation(invocationId: string): Promise<RecoveredInvocationOutcome> {
+    return reconcileRecoverableInvocation(invocationId, this.options);
+  }
+
+  relaunchRecoverableInvocation(invocationId: string): Promise<void> {
+    return relaunchRecoverableInvocation(invocationId, this.options);
+  }
+
   listArchivedRecoverableRequests(): Promise<ArchivedRecoverableRequest[]> {
     return listArchivedRecoverableRequests(this.options);
   }
@@ -546,6 +628,8 @@ export class InferClient extends EventEmitter<InferClientEvents> {
       window.removeEventListener("message", this.onWindowDisconnect);
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.recoveryWake);
     }
+    this.disposeMobileOwnerResponder?.();
+    this.disposeMobileOwnerResponder = null;
     this.recoveryChannel?.removeEventListener("message", this.recoveryWake);
     this.recoveryChannel?.close();
     this.recoveryChannel = null;
@@ -553,6 +637,33 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     this.disconnectChannel?.close();
     this.disconnectChannel = null;
     this.recoveredSubscribers.clear();
+  }
+
+  private async coordinateMobileCallbackTab(requestId: string): Promise<void> {
+    if (window.opener && window.opener !== window) return;
+    let final = false;
+    try {
+      const pairing = readPendingMobilePairing();
+      if (pairing?.pairingId === requestId) {
+        try {
+          final = !!(await resumeMobileRelaySession(this.options));
+        } catch (error) {
+          final = error instanceof InferAdapterError &&
+            (error.code === InferErrorCode.UserRejected ||
+             error.code === InferErrorCode.ConnectionTimeout);
+        }
+      } else {
+        const outcome = await this.readRecoverableRequest(requestId);
+        final = outcome.status === "approved" || outcome.status === "rejected";
+      }
+      if (final && !this.disposed && await hasLiveOriginalMobileTab(requestId)) {
+        // The original tab still owns the request. It wakes from the durable
+        // record change; this callback tab never takes over gameplay.
+        renderCallbackCompletionFallback();
+      }
+    } catch {
+      // Unknown or unauthenticated callback markers cannot claim completion.
+    }
   }
 
   private scheduleRecovery(): void {
@@ -570,6 +681,21 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   }
 
   private async reconcileRecoverableRequests(): Promise<void> {
+    // Recover receipt-less mobile invocations first. This lookup is read-only
+    // and may cause an original request to appear in the durable request list.
+    try {
+      const invocations = await this.listRecoverableInvocations();
+      for (const invocation of invocations) {
+        if (this.disposed) return;
+        if (invocation.transport === "mobile-relay" &&
+            (invocation.state === "prepared" || invocation.state === "unknown") &&
+            !invocation.requestId) {
+          await this.reconcileRecoverableInvocation(invocation.invocationId);
+        }
+      }
+    } catch {
+      // Existing request receipts remain recoverable independently.
+    }
     let pending: RecoverableRequest[];
     try {
       pending = await this.listRecoverableRequests();
@@ -728,7 +854,7 @@ export class InferClient extends EventEmitter<InferClientEvents> {
         return { account, network: this.networkInfo };
       }
 
-      const resumedMobileSession = await resumeMobileRelaySessionFromCallback(this.options);
+      const resumedMobileSession = await resumeMobileRelaySession(this.options);
       if (resumedMobileSession) {
         return this.connectResultFromExternalSession(resumedMobileSession);
       }
