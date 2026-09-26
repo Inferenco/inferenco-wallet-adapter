@@ -5,6 +5,25 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-rc.24] - TBD
+
+### Added
+
+- Optional `mobileReturnMode: "resume-browser-v1"` launch preference for Android Infer Wallet. The adapter appends `returnMode=resume-browser-v1` to pairing and signing deep links; older wallet builds continue using their existing callback behavior.
+- Authenticated `reconcileRecoverableInvocation(invocationId)` for a mobile creation response lost before a request ID was saved. The adapter persists the exact immutable encrypted envelope and a UUID before POST, looks up the original request by that UUID, saves its receipt, then reads and validates the original result. It never creates or launches another request during reconciliation.
+- Explicit `relaunchRecoverableInvocation(invocationId)` for a user-triggered return to the same pending request. The relay issues an additional launch token without replacing the request.
+- Fallback callback tabs ask the originating tab whether it still owns the exact request ID. After verified completion, a duplicate tab with a live owner displays a return message; coordination messages carry only IDs and random probe nonces.
+
+### Fixed
+
+- Mobile pairing approval now polls the authenticated relay with or without a WebSocket event or URL callback marker. Focus, visibility and page restoration wake the same pairing read, and a reload resumes the stored pairing instead of creating another.
+- Interrupted creation records retain a sanitised failure category while keeping session tokens out of durable invocation envelopes.
+
+### Compatibility
+
+- Invocation lookup and explicit relaunch require the relay's `/v1/requests/by-invocation/:id` endpoints. Older relays leave ambiguous invocations unresolved; they are never retried as new requests.
+- The browser-task return preference requires a compatible Infer Wallet build. The dapp should opt in only after that wallet path is verified on Android.
+
 ## [0.2.0-rc.23] - TBD
 
 ### Fixed (sign-path token graft + multi-tab preauth waiter)

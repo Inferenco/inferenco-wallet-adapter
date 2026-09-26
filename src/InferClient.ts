@@ -27,6 +27,9 @@ import {
   parseDisconnectPayload,
   pollPreauthConnect,
   readExternalSession,
+  readCallbackMarker,
+  readPendingMobilePairing,
+  renderCallbackCompletionFallback,
   readValidatedExternalSession,
   revokeExternalSession,
   sessionToAccountInfo,
@@ -49,6 +52,7 @@ import {
 } from "./conversion";
 import { DEFAULT_SESSION_LIVENESS_INTERVAL_MS, INFER_SESSION_CLEARED_MESSAGE_TYPE } from "./constants";
 import { RECOVERY_CHANNEL, pruneDurableEvidence } from "./durableRecovery";
+import { hasLiveOriginalMobileTab, installMobileReturnOwnerResponder } from "./mobileReturnCoordinator";
 import {
   isValidTransactionHash,
   InferAdapterError,
@@ -59,7 +63,7 @@ import {
 import { buildDeeplinkUrl } from "./deeplink";
 import {
   connectViaMobileRelay,
-  resumeMobileRelaySessionFromCallback,
+  resumeMobileRelaySession,
   signAndSubmitViaMobileRelay,
   signMessageViaMobileRelay,
   signTransactionViaMobileRelay
@@ -70,13 +74,16 @@ import {
   listArchivedRecoverableRequests,
   listRecoverableInvocations,
   listRecoverableRequests,
-  readRecoverableRequest
+  readRecoverableRequest,
+  reconcileRecoverableInvocation,
+  relaunchRecoverableInvocation
 } from "./recovery";
 import type {
   ArchivedRecoverableRequest,
   RecoveredRequestOutcome,
   RecoverableRequest,
-  RecoverableInvocation
+  RecoverableInvocation,
+  RecoveredInvocationOutcome
 } from "./recovery";
 import { detectProvider } from "./provider";
 import type {
@@ -492,6 +499,7 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   private recoveryRun: Promise<void> | null = null;
   private recoveryRescan = false;
   private recoveryChannel: BroadcastChannel | null = null;
+  private disposeMobileOwnerResponder: (() => void) | null = null;
   private disconnectChannel: BroadcastChannel | null = null;
   private readonly recoveryWake = () => { this.scheduleRecovery(); };
   private readonly onSessionCleared = () => { this.handleExternalSessionCleared(); };
@@ -524,6 +532,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
       this.recoveredSubscribers.set(options.onRecoveredOutcome, new Set());
     }
     if (typeof window !== "undefined") {
+      this.disposeMobileOwnerResponder = installMobileReturnOwnerResponder();
+      const mobileCallbackId = isMobileBrowser() ? readCallbackMarker()?.requestId : undefined;
+      if (mobileCallbackId) void this.coordinateMobileCallbackTab(mobileCallbackId);
       window.addEventListener("focus", this.recoveryWake);
       window.addEventListener("pageshow", this.recoveryWake);
       window.addEventListener("storage", this.recoveryWake);
@@ -570,6 +581,14 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     return listRecoverableInvocations();
   }
 
+  reconcileRecoverableInvocation(invocationId: string): Promise<RecoveredInvocationOutcome> {
+    return reconcileRecoverableInvocation(invocationId, this.options);
+  }
+
+  relaunchRecoverableInvocation(invocationId: string): Promise<void> {
+    return relaunchRecoverableInvocation(invocationId, this.options);
+  }
+
   listArchivedRecoverableRequests(): Promise<ArchivedRecoverableRequest[]> {
     return listArchivedRecoverableRequests(this.options);
   }
@@ -609,6 +628,8 @@ export class InferClient extends EventEmitter<InferClientEvents> {
       window.removeEventListener("message", this.onWindowDisconnect);
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.recoveryWake);
     }
+    this.disposeMobileOwnerResponder?.();
+    this.disposeMobileOwnerResponder = null;
     this.recoveryChannel?.removeEventListener("message", this.recoveryWake);
     this.recoveryChannel?.close();
     this.recoveryChannel = null;
@@ -616,6 +637,33 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     this.disconnectChannel?.close();
     this.disconnectChannel = null;
     this.recoveredSubscribers.clear();
+  }
+
+  private async coordinateMobileCallbackTab(requestId: string): Promise<void> {
+    if (window.opener && window.opener !== window) return;
+    let final = false;
+    try {
+      const pairing = readPendingMobilePairing();
+      if (pairing?.pairingId === requestId) {
+        try {
+          final = !!(await resumeMobileRelaySession(this.options));
+        } catch (error) {
+          final = error instanceof InferAdapterError &&
+            (error.code === InferErrorCode.UserRejected ||
+             error.code === InferErrorCode.ConnectionTimeout);
+        }
+      } else {
+        const outcome = await this.readRecoverableRequest(requestId);
+        final = outcome.status === "approved" || outcome.status === "rejected";
+      }
+      if (final && !this.disposed && await hasLiveOriginalMobileTab(requestId)) {
+        // The original tab still owns the request. It wakes from the durable
+        // record change; this callback tab never takes over gameplay.
+        renderCallbackCompletionFallback();
+      }
+    } catch {
+      // Unknown or unauthenticated callback markers cannot claim completion.
+    }
   }
 
   private scheduleRecovery(): void {
@@ -633,6 +681,21 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   }
 
   private async reconcileRecoverableRequests(): Promise<void> {
+    // Recover receipt-less mobile invocations first. This lookup is read-only
+    // and may cause an original request to appear in the durable request list.
+    try {
+      const invocations = await this.listRecoverableInvocations();
+      for (const invocation of invocations) {
+        if (this.disposed) return;
+        if (invocation.transport === "mobile-relay" &&
+            (invocation.state === "prepared" || invocation.state === "unknown") &&
+            !invocation.requestId) {
+          await this.reconcileRecoverableInvocation(invocation.invocationId);
+        }
+      }
+    } catch {
+      // Existing request receipts remain recoverable independently.
+    }
     let pending: RecoverableRequest[];
     try {
       pending = await this.listRecoverableRequests();
@@ -791,7 +854,7 @@ export class InferClient extends EventEmitter<InferClientEvents> {
         return { account, network: this.networkInfo };
       }
 
-      const resumedMobileSession = await resumeMobileRelaySessionFromCallback(this.options);
+      const resumedMobileSession = await resumeMobileRelaySession(this.options);
       if (resumedMobileSession) {
         return this.connectResultFromExternalSession(resumedMobileSession);
       }

@@ -929,7 +929,7 @@ function broadcastReadySession(session: InferExternalSession): void {
   }
 }
 
-function renderCallbackCompletionFallback(): void {
+export function renderCallbackCompletionFallback(): void {
   if (!isBrowser() || !document.body || document.getElementById(INFER_CALLBACK_OVERLAY_ID)) {
     return;
   }
@@ -1137,10 +1137,8 @@ export function clearCallbackMarker(): void {
   window.sessionStorage.removeItem(LEGACY_NOVA_CALLBACK_MARKER_STORAGE_KEY);
 }
 
-function hasPendingMobilePairingCallbackResume(): boolean {
-  const marker = readCallbackMarker();
-  const pendingPairing = readPendingMobilePairing();
-  return !!marker && !!pendingPairing && marker.requestId === pendingPairing.pairingId;
+function hasPendingMobilePairingResume(): boolean {
+  return !!readPendingMobilePairing();
 }
 
 export async function waitForExternalSession(
@@ -1373,7 +1371,7 @@ export async function tryResumeInferWalletConnection(
     }
   }
 
-  const hasPendingResume = hasPendingMobilePairingCallbackResume();
+  const hasPendingResume = hasPendingMobilePairingResume();
   if (!hasPendingResume) {
     const session = await readValidatedExternalSession(options);
     if (!session) {

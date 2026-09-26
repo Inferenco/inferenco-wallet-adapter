@@ -3,7 +3,7 @@ import type {
   CedraSignMessageOutput,
   CedraSignTransactionOutputV1_1
 } from "@cedra-labs/wallet-standard";
-import { readExternalSession, readDesktopBridgeRequestOnce, readResultForSession } from "./bridge";
+import { BridgeHttpError, readExternalSession, readDesktopBridgeRequestOnce, readResultForSession } from "./bridge";
 import { archivePendingDesktopBridgeRequest, clearPendingDesktopBridgeRequest, desktopBridgeOrigin, readPendingDesktopBridgeRequests, type RecoverableMethod } from "./desktopRequests";
 import {
   listDurableRequests, listDurableInvocations, saveDurableRequest, saveDurableFinal, serializeStoredFinal, transitionDurableRequest,
@@ -17,6 +17,8 @@ import {
   getReadGrant,
   mintReadGrant,
   readMobileRelayRequestOnce,
+  reconcileMobileRelayInvocationReceipt,
+  relaunchMobileRelayInvocation,
   type ReadGrantDescriptor,
   type ReadGrantScope
 } from "./mobileRelay";
@@ -49,6 +51,7 @@ export interface RecoverableInvocation {
   /** Prepared means dispatch may be unknown after a crash; never infer no submission. */
   state: "prepared" | "created" | "unknown" | "not-invoked";
   requestId?: string;
+  failureReason?: string;
 }
 
 export function invocationDescriptor(row: DurableInvocation): RecoverableInvocation {
@@ -56,7 +59,8 @@ export function invocationDescriptor(row: DurableInvocation): RecoverableInvocat
     invocationId: row.id, transport: row.transport, sessionId: row.sessionId,
     address: row.address, network: row.network, chainId: row.chainId,
     method: row.method, state: row.state,
-    ...(row.requestId ? { requestId: row.requestId } : {})
+    ...(row.requestId ? { requestId: row.requestId } : {}),
+    ...(row.failureReason ? { failureReason: row.failureReason } : {})
   };
 }
 
@@ -65,6 +69,85 @@ export async function listRecoverableInvocations(): Promise<RecoverableInvocatio
   return (await listDurableInvocations()).map(invocationDescriptor);
 }
 
+/** Reconcile the original mobile invocation after an interrupted POST.
+ * The lookup is authenticated and read-only; it never creates or launches
+ * another wallet request. A verified final is saved before return. */
+export async function reconcileRecoverableInvocation(
+  invocationId: string,
+  options: InferWalletOptions = {}
+): Promise<RecoveredInvocationOutcome> {
+  if (typeof window === "undefined") {
+    throw new InferAdapterError(InferErrorCode.Unsupported, "Recovery requires a browser");
+  }
+  const invocation = (await listDurableInvocations()).find((row) => row.id === invocationId);
+  if (!invocation) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized,
+      "Invocation is not bound to this browser origin");
+  }
+  if (invocation.requestId) {
+    try {
+      return await readRecoverableRequest(invocation.requestId, options);
+    } catch {
+      // A receipt may have been saved before the durable request was created.
+    }
+  }
+  if (invocation.state === "not-invoked") {
+    return { invocationId, status: "unknown", reason: "request_not_invoked" };
+  }
+  if (invocation.transport !== "mobile-relay" || !invocation.mobileRequest) {
+    return { invocationId, status: "unknown", reason: "invocation_lookup_unavailable" };
+  }
+  const session = readExternalSession();
+  if (!session || session.transport !== "mobile-relay" ||
+      session.sessionId !== invocation.sessionId ||
+      session.address !== invocation.address ||
+      session.network !== invocation.network ||
+      session.chainId !== invocation.chainId) {
+    return { invocationId, status: "unknown", reason: "original_session_unavailable" };
+  }
+  try {
+    const { pending } = await reconcileMobileRelayInvocationReceipt(
+      invocation, session, options
+    );
+    return await readRecoverableRequest(pending.requestId, options);
+  } catch (error) {
+    const reason = error instanceof BridgeHttpError && error.status === 404
+      ? "invocation_lookup_unavailable"
+      : error instanceof InferAdapterError && error.code === InferErrorCode.Unauthorized
+        ? "invocation_identity_mismatch"
+        : "invocation_reconciliation_unavailable";
+    return { invocationId, status: "unknown", reason };
+  }
+}
+
+/** An explicit retry control may reopen only the already reconciled pending
+ * request. This never repeats creation or signs anything in the adapter. */
+export async function relaunchRecoverableInvocation(
+  invocationId: string,
+  options: InferWalletOptions = {}
+): Promise<void> {
+  const invocation = (await listDurableInvocations()).find((row) => row.id === invocationId);
+  if (!invocation || invocation.transport !== "mobile-relay" || !invocation.requestId) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized,
+      "Reconcile the original mobile request before relaunch");
+  }
+  const session = readExternalSession();
+  if (!session || session.transport !== "mobile-relay") {
+    throw new InferAdapterError(InferErrorCode.Unauthorized,
+      "Original mobile relay session is unavailable");
+  }
+  const outcome = await readRecoverableRequest(invocation.requestId, options);
+  if (outcome.status !== "pending") {
+    throw new InferAdapterError(InferErrorCode.InvalidParams,
+      "Only a pending original request can reopen its wallet approval");
+  }
+  await relaunchMobileRelayInvocation(invocation, session, options);
+}
+
+
+export type RecoveredInvocationOutcome =
+  | RecoveredRequestOutcome
+  | { invocationId: string; status: "unknown"; reason: string };
 
 export type RecoveredRequestOutcome =
   | (RecoverableRequest & { status: "pending" })

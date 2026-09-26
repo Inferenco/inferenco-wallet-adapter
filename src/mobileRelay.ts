@@ -36,6 +36,7 @@ import {
   encryptJson
 } from "./mobileCrypto";
 import { watchRelaySocket } from "./mobileSocket";
+import { rememberOwnedMobilePairing } from "./mobileReturnCoordinator";
 import {
   storePendingMobileRelayRequest,
   readPendingMobileRelayRequests,
@@ -49,13 +50,15 @@ import {
   InferErrorCode
 } from "./errors";
 import { deserializeSignTransactionResult } from "./conversion";
-import { prepareDurableInvocation, saveDurableRequest, saveDurableFinal, serializeStoredFinal, updateDurableInvocation } from "./durableRecovery";
+import { prepareDurableInvocation, saveDurableMobileInvocationEnvelope, saveDurableRequest, saveDurableFinal, serializeStoredFinal, updateDurableInvocation, type DurableInvocation } from "./durableRecovery";
 import type {
   InferExternalSignTransactionInput,
   InferExternalSession,
   InferMobilePairingCreateResponse,
   InferMobilePairingStatus,
   InferMobileRequestCreateResponse,
+  InferMobileInvocationReceipt,
+  InferMobileInvocationRelaunchReceipt,
   InferMobileRequestStatus,
   InferWalletOptions
 } from "./types";
@@ -106,8 +109,16 @@ function buildRelayUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
 
-function launch(url: string): void {
-  window.location.href = url;
+export function mobileWalletLaunchUrl(url: string, options: InferWalletOptions): string {
+  const target = new URL(url);
+  if (options.mobileReturnMode === "resume-browser-v1") {
+    target.searchParams.set("returnMode", "resume-browser-v1");
+  }
+  return target.toString();
+}
+
+function launch(url: string, options: InferWalletOptions): void {
+  window.location.href = mobileWalletLaunchUrl(url, options);
 }
 
 function isFinalStatus(status: string | undefined): boolean {
@@ -132,42 +143,99 @@ async function waitForPairingOutcome(
 ): Promise<InferMobilePairingStatus> {
   const relayBaseUrl = getRelayBaseUrl(options);
   const deadline = Date.now() + mobileRequestTimeout(options);
-  let socketSignal = false;
-
-  const socket = websocketUrl
-    ? watchRelaySocket({
+  let wakePoll: (() => void) | undefined;
+  let wakeRequested = false;
+  const wake = () => {
+    wakeRequested = true;
+    wakePoll?.();
+  };
+  let socket: ReturnType<typeof watchRelaySocket> | null = null;
+  if (websocketUrl) {
+    try {
+      socket = watchRelaySocket({
         websocketUrl,
         role: "dapp",
         token: dappPairingToken,
         target: { kind: "pairing", id: pairingId },
         options,
         onEvent(event) {
-          if (event.type === "pairing.approved" || event.type === "pairing.rejected") {
-            socketSignal = true;
-          }
+          if (event.type === "pairing.approved" || event.type === "pairing.rejected") wake();
         }
-      })
-    : null;
+      });
+    } catch {
+      // Authenticated HTTP polling remains authoritative.
+    }
+  }
+  window.addEventListener("focus", wake);
+  document.addEventListener("visibilitychange", wake);
+  window.addEventListener("pageshow", wake);
 
   try {
-    while (Date.now() < deadline) {
+    // Always poll the exact pairing. Websocket and callback signals only wake.
+    do {
+      wakeRequested = false;
       storeCallbackSession();
-      const marker = readCallbackMarker();
-      if (socketSignal || marker?.requestId === pairingId || !websocketUrl) {
+      try {
         const status = await fetchJsonWithTimeout<InferMobilePairingStatus>(
-          `${buildRelayUrl(relayBaseUrl, `/v1/pairings/${pairingId}`)}?dappPairingToken=${encodeURIComponent(dappPairingToken)}`,
-          mobileRequestTimeout(options)
+          buildRelayUrl(relayBaseUrl, "/v1/pairings/" + pairingId) +
+            "?dappPairingToken=" + encodeURIComponent(dappPairingToken),
+          Math.min(10_000, Math.max(1, deadline - Date.now()))
         );
+        if (status.pairingId !== pairingId) {
+          throw new InferAdapterError(InferErrorCode.InternalError,
+            "Infer Connect returned a different pairing");
+        }
         if (isFinalStatus(status.status)) {
           if (readCallbackMarker()?.requestId === pairingId) clearCallbackMarker();
           return status;
         }
-        socketSignal = false;
+        if (status.status !== "pending" && status.status !== "claimed") {
+          throw new InferAdapterError(InferErrorCode.InternalError,
+            "Infer Connect returned an invalid pairing status");
+        }
+      } catch (error) {
+        const retryable = error instanceof TypeError ||
+          (error instanceof DOMException && error.name === "AbortError") ||
+          (error instanceof BridgeHttpError && (error.status === 429 || error.status >= 500));
+        if (!retryable) throw error;
       }
-
-      await new Promise((resolve) => window.setTimeout(resolve, mobilePollInterval(options)));
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      // Focus may arrive while the HTTP request is in flight, before the
+      // timer exists. Keep that wake so it cannot be lost.
+      if (wakeRequested) {
+        wakeRequested = false;
+        continue;
+      }
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          wakePoll = undefined;
+          resolve();
+        };
+        const timer = window.setTimeout(finish, Math.min(mobilePollInterval(options), remaining));
+        wakePoll = finish;
+      });
+    } while (Date.now() < deadline);
+    // A suspended tab can cross the deadline. Read the same pairing once more.
+    try {
+      const final = await fetchJsonWithTimeout<InferMobilePairingStatus>(
+        buildRelayUrl(relayBaseUrl, "/v1/pairings/" + pairingId) +
+          "?dappPairingToken=" + encodeURIComponent(dappPairingToken),
+        10_000
+      );
+      if (final.pairingId === pairingId && isFinalStatus(final.status)) return final;
+    } catch {
+      // The saved pairing remains available for a future retry.
     }
   } finally {
+    wakePoll?.();
+    window.removeEventListener("focus", wake);
+    document.removeEventListener("visibilitychange", wake);
+    window.removeEventListener("pageshow", wake);
     socket?.close();
   }
 
@@ -232,44 +300,40 @@ function sessionFromApprovedPairing(
   };
 }
 
-export async function resumeMobileRelaySessionFromCallback(
+/** Resume an existing pairing after callback, task return, focus, or reload.
+ * This never creates a second pairing or opens the wallet. */
+export async function resumeMobileRelaySession(
   options: InferWalletOptions = {}
 ): Promise<InferExternalSession | null> {
   assertBrowser();
-  const marker = readCallbackMarker();
   const pendingPairing = readPendingMobilePairing();
+  if (!pendingPairing) return null;
+  const marker = readCallbackMarker();
 
-  if (!marker || !pendingPairing || marker.requestId !== pendingPairing.pairingId) {
-    return null;
-  }
-
-  const pairing = await fetchJsonWithTimeout<InferMobilePairingStatus>(
-    `${buildRelayUrl(pendingPairing.relayBaseUrl, `/v1/pairings/${pendingPairing.pairingId}`)}?dappPairingToken=${encodeURIComponent(pendingPairing.dappPairingToken)}`,
-    mobileRequestTimeout(options)
+  const pairing = await waitForPairingOutcome(
+    pendingPairing.pairingId, pendingPairing.dappPairingToken,
+    { ...options, relayBaseUrl: pendingPairing.relayBaseUrl },
+    getWebsocketUrl({ ...options, relayBaseUrl: pendingPairing.relayBaseUrl })
   );
-
   if (pairing.status === "approved") {
-    try {
-      const session = sessionFromApprovedPairing(pairing, pendingPairing.relayBaseUrl, pendingPairing.privateKey);
-      storeExternalSession(session);
-      clearPendingMobilePairing();
-      clearCallbackMarker();
-      return session;
-    } catch (error) {
-      clearPendingMobilePairing();
-      clearCallbackMarker();
-      throw error;
-    }
+    const session = sessionFromApprovedPairing(
+      pairing, pendingPairing.relayBaseUrl, pendingPairing.privateKey
+    );
+    storeExternalSession(session);
+    clearPendingMobilePairing();
+    if (marker?.requestId === pendingPairing.pairingId) clearCallbackMarker();
+    return session;
   }
-
   if (isFinalStatus(pairing.status)) {
     clearPendingMobilePairing();
-    clearCallbackMarker();
-    return null;
+    if (marker?.requestId === pendingPairing.pairingId) clearCallbackMarker();
+    throwForStatus(pairing.status, pairing.errorMessage);
   }
-
   return null;
 }
+
+/** Backwards-compatible name for clients using the older callback API. */
+export const resumeMobileRelaySessionFromCallback = resumeMobileRelaySession;
 
 async function readRequestStatus(
   requestId: string,
@@ -403,6 +467,127 @@ async function waitForRequestOutcome(
     "Relay outcome is unknown; recover the existing request before trying again");
 }
 
+function matchingMobileInvocation(
+  invocation: DurableInvocation,
+  session: InferExternalSession,
+  options: InferWalletOptions
+): boolean {
+  const envelope = invocation.mobileRequest?.envelope;
+  return invocation.origin === window.location.origin &&
+    invocation.transport === "mobile-relay" &&
+    invocation.sessionId === session.sessionId &&
+    invocation.address === session.address &&
+    invocation.network === session.network &&
+    invocation.chainId === session.chainId &&
+    invocation.mobileRequest?.relayBaseUrl ===
+      (session.relayBaseUrl ?? getRelayBaseUrl(options)) &&
+    envelope?.clientInvocationId === invocation.id &&
+    envelope.sessionId === session.sessionId &&
+    envelope.method === invocation.method &&
+    envelope.requestMetadata.origin === window.location.origin &&
+    !!session.dappSessionToken && !!session.sharedSecret;
+}
+
+function validateInvocationReceipt(
+  receipt: InferMobileInvocationReceipt
+): void {
+  if (!receipt || typeof receipt.requestId !== "string" || !receipt.requestId ||
+      typeof receipt.expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(receipt.expiresAt)) ||
+      !["pending", "approved", "rejected", "failed", "expired", "cancelled", "revoked"]
+        .includes(receipt.status)) {
+    throw new InferAdapterError(InferErrorCode.InternalError,
+      "Relay returned an invalid invocation receipt");
+  }
+}
+
+/** Authenticated lookup of a prepared invocation whose creation response was
+ * lost. Saves the original request identity before any consumer is notified.
+ * Never POSTs another signing request and never launches the wallet. */
+export async function reconcileMobileRelayInvocationReceipt(
+  invocation: DurableInvocation,
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
+): Promise<{ pending: PendingMobileRelayRequest; receipt: InferMobileInvocationReceipt }> {
+  assertBrowser();
+  if (!matchingMobileInvocation(invocation, session, options)) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized,
+      "Invocation does not belong to this relay session");
+  }
+  const relayBaseUrl = invocation.mobileRequest!.relayBaseUrl;
+  const url = new URL(buildRelayUrl(relayBaseUrl,
+    "/v1/requests/by-invocation/" + encodeURIComponent(invocation.id)));
+  url.searchParams.set("sessionId", session.sessionId);
+  const receipt = await fetchJsonWithTimeout<InferMobileInvocationReceipt>(
+    url.toString(), mobileRequestTimeout(options),
+    { headers: { "x-infer-session-token": session.dappSessionToken! } }
+  );
+  validateInvocationReceipt(receipt);
+  if (invocation.requestId && invocation.requestId !== receipt.requestId) {
+    throw new InferAdapterError(InferErrorCode.InternalError,
+      "Invocation lookup changed its original request ID");
+  }
+  const pending: PendingMobileRelayRequest = {
+    version: 1,
+    requestId: receipt.requestId,
+    invocationId: invocation.id,
+    sessionId: invocation.sessionId,
+    address: invocation.address,
+    network: invocation.network,
+    chainId: invocation.chainId,
+    relayBaseUrl,
+    origin: invocation.origin,
+    method: invocation.method,
+    expiresAt: receipt.expiresAt,
+    ...(invocation.mobileRequest!.expectedTransactionBcsHex
+      ? { expectedTransactionBcsHex: invocation.mobileRequest!.expectedTransactionBcsHex }
+      : {})
+  };
+  storePendingMobileRelayRequest(pending);
+  await saveDurableRequest(pending, invocation.id);
+  await updateDurableInvocation(invocation.id, "created", receipt.requestId);
+  await options.onMobileRequestCreated?.(Object.freeze({ ...pending }));
+  await options.onRequestCreated?.(Object.freeze({ ...pending }));
+  return { pending, receipt };
+}
+
+/** Explicit user action to reopen the wallet for the SAME pending request.
+ * The relay issues an additive launch token; the original request survives. */
+export async function relaunchMobileRelayInvocation(
+  invocation: DurableInvocation,
+  session: InferExternalSession,
+  options: InferWalletOptions = {}
+): Promise<InferMobileInvocationRelaunchReceipt> {
+  assertBrowser();
+  if (!matchingMobileInvocation(invocation, session, options) || !invocation.requestId) {
+    throw new InferAdapterError(InferErrorCode.Unauthorized,
+      "The existing relay request must be reconciled before relaunch");
+  }
+  const url = buildRelayUrl(invocation.mobileRequest!.relayBaseUrl,
+    "/v1/requests/by-invocation/" + encodeURIComponent(invocation.id) + "/relaunch");
+  const receipt = await fetchJsonWithTimeout<InferMobileInvocationRelaunchReceipt>(
+    url, mobileRequestTimeout(options), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-infer-session-token": session.dappSessionToken!
+      },
+      body: JSON.stringify({ sessionId: session.sessionId })
+    }
+  );
+  validateInvocationReceipt(receipt);
+  if (receipt.requestId !== invocation.requestId ||
+      receipt.status !== "pending" ||
+      typeof receipt.walletDeeplinkUrl !== "string" ||
+      !receipt.walletDeeplinkUrl ||
+      Date.parse(receipt.expiresAt) <= Date.now()) {
+    throw new InferAdapterError(InferErrorCode.InternalError,
+      "Relay relaunch did not match the pending original request");
+  }
+  launch(receipt.walletDeeplinkUrl, options);
+  return receipt;
+}
+
 /** Read the original request after reload; never creates a request or opens the wallet. */
 export async function resumeMobileRelayRequest(
   requestId: string,
@@ -451,7 +636,8 @@ export async function connectViaMobileRelay(options: InferWalletOptions = {}): P
     relayBaseUrl,
     expiresAt: response.expiresAt
   });
-  launch(response.walletDeeplinkUrl);
+  rememberOwnedMobilePairing(response.pairingId);
+  launch(response.walletDeeplinkUrl, options);
   const pairing = await waitForPairingOutcome(
     response.pairingId,
     response.dappPairingToken,
@@ -472,6 +658,13 @@ export async function connectViaMobileRelay(options: InferWalletOptions = {}): P
   }
 }
 
+function mobileCreationFailureReason(cause: unknown): string {
+  if (cause instanceof BridgeHttpError) return "relay_http_" + cause.status;
+  if (cause instanceof DOMException && cause.name === "AbortError") return "creation_timeout";
+  if (cause instanceof TypeError) return "creation_network_error";
+  return "creation_response_unavailable";
+}
+
 async function startRequest(
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction",
   payload: unknown,
@@ -483,7 +676,7 @@ async function startRequest(
   }
 
   const relayBaseUrl = session.relayBaseUrl ?? getRelayBaseUrl(options);
-  let invocation;
+  let invocation: DurableInvocation;
   try {
     invocation = await prepareDurableInvocation(session, method);
   } catch (cause) {
@@ -491,7 +684,24 @@ async function startRequest(
       "Wallet request was not sent because its invocation could not be saved",
       null, null, cause);
   }
+  const expectedTransactionBcsHex = method === "signTransaction" &&
+    payload && typeof payload === "object" &&
+    "rawTransactionBcsHex" in payload &&
+    typeof payload.rawTransactionBcsHex === "string"
+      ? payload.rawTransactionBcsHex : undefined;
+  let envelope;
   try {
+    envelope = {
+      clientInvocationId: invocation.id,
+      sessionId: session.sessionId,
+      method,
+      callbackUrl: callbackUrlWithoutMarkers(),
+      encryptedRequest: encryptJson(payload, session.sharedSecret),
+      requestMetadata: { origin: window.location.origin, appName: appName() }
+    };
+    await saveDurableMobileInvocationEnvelope(
+      invocation.id, relayBaseUrl, envelope, expectedTransactionBcsHex
+    );
     await options.onInvocationPrepared?.(Object.freeze({
       invocationId: invocation.id, transport: invocation.transport,
       sessionId: invocation.sessionId, address: invocation.address,
@@ -513,20 +723,13 @@ async function startRequest(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId: session.sessionId,
-          dappSessionToken: session.dappSessionToken,
-          method,
-          callbackUrl: callbackUrlWithoutMarkers(),
-          encryptedRequest: encryptJson(payload, session.sharedSecret),
-          requestMetadata: {
-            origin: window.location.origin,
-            appName: appName()
-          }
+          ...envelope,
+          dappSessionToken: session.dappSessionToken
         })
       }
     );
   } catch (cause) {
-    await updateDurableInvocation(invocation.id, "unknown").catch(() => undefined);
+    await updateDurableInvocation(invocation.id, "unknown", undefined, mobileCreationFailureReason(cause)).catch(() => undefined);
     throw unresolvedRequestError(
       "Relay request creation may have succeeded; reconcile before retrying",
       invocation.id, null, cause);
@@ -534,7 +737,7 @@ async function startRequest(
 
   if (typeof response.requestId !== "string" || !response.requestId ||
       typeof response.expiresAt !== "string" || !Number.isFinite(Date.parse(response.expiresAt))) {
-    await updateDurableInvocation(invocation.id, "unknown").catch(() => undefined);
+    await updateDurableInvocation(invocation.id, "unknown", undefined, "invalid_creation_receipt").catch(() => undefined);
     throw new InferRequestError(InferErrorCode.RequestOutcomeUnknown,
       "Relay request creation returned an invalid receipt", invocation.id, null);
   }
@@ -550,9 +753,7 @@ async function startRequest(
     origin: window.location.origin,
     method,
     expiresAt: response.expiresAt,
-    ...(method === "signTransaction" && payload && typeof payload === "object" &&
-        "rawTransactionBcsHex" in payload && typeof payload.rawTransactionBcsHex === "string"
-      ? { expectedTransactionBcsHex: payload.rawTransactionBcsHex } : {})
+    ...(expectedTransactionBcsHex ? { expectedTransactionBcsHex } : {})
   };
   let durableId: string;
   try {
@@ -567,7 +768,9 @@ async function startRequest(
       "Relay request exists but its receipt could not be fully recorded",
       invocation.id, response.requestId, cause);
   }
-  if (Date.parse(response.expiresAt) > Date.now()) launch(response.walletDeeplinkUrl);
+  if (response.walletDeeplinkUrl && Date.parse(response.expiresAt) > Date.now()) {
+    launch(response.walletDeeplinkUrl, options);
+  }
   let status: InferMobileRequestStatus;
   try {
     status = await waitForRequestOutcome(response.requestId, method, session, options, response.expiresAt);
