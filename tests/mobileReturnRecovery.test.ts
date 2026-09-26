@@ -234,6 +234,45 @@ describe("receipt-less invocation reconciliation", () => {
   });
 });
 
+describe("duplicate mobile completion wakeups", () => {
+  it("delivers one retained final outcome without creating another request", async () => {
+    const requestId = "duplicate-callback-request";
+    const row = await saveDurableRequest({
+      version: 1, requestId, sessionId: "duplicate-session",
+      address: "0x1", network: "testnet", chainId: 2,
+      relayBaseUrl: relay, origin: window.location.origin,
+      method: "signAndSubmitTransaction", expiresAt: expiresAt()
+    });
+    await saveDurableFinal(row.id, {
+      status: "approved", method: "signAndSubmitTransaction", hash
+    });
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new Error("A retained final outcome needs no network request")
+    );
+    const delivered: string[] = [];
+    const client = new InferClient({
+      onRecoveredOutcome: (outcome) => {
+        if (outcome.requestId === requestId) delivered.push(outcome.requestId);
+      }
+    });
+    try {
+      await vi.waitFor(() => expect(delivered).toEqual([requestId]));
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("pageshow"));
+      window.dispatchEvent(new Event("storage"));
+      const recoveryRun = (client as unknown as { recoveryRun: Promise<void> | null }).recoveryRun;
+      expect(recoveryRun).not.toBeNull();
+      await recoveryRun;
+      expect(delivered).toEqual([requestId]);
+      expect(fetch.mock.calls.every(([, init]) => init?.method !== "POST")).toBe(true);
+      expect((await listDurableRequests()).find((request) => request.requestId === requestId))
+        .toMatchObject({ final: { status: "approved", hash } });
+    } finally {
+      client.dispose();
+    }
+  });
+});
+
 describe("fallback callback tab ownership", () => {
   it("identifies only a live owner of the exact request without sharing credentials", async () => {
     const messages: unknown[] = [];
