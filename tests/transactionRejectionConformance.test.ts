@@ -300,7 +300,7 @@ describe("sign-and-submit rejection conformance", () => {
   it("does not infer rejection from failed-status text", async () => {
     await expectCode(
       invokeBridge({ status: "failed", error: "transaction rejected upstream" }),
-      InferErrorCode.InternalError
+      InferErrorCode.RequestOutcomeUnknown
     );
   });
 
@@ -311,7 +311,7 @@ describe("sign-and-submit rejection conformance", () => {
         requestId: "stale-bridge-request",
         error: "user_cancelled"
       }),
-      InferErrorCode.InternalError
+      InferErrorCode.RequestOutcomeUnknown
     );
   });
 
@@ -322,7 +322,7 @@ describe("sign-and-submit rejection conformance", () => {
   ])("fails closed for mobile %s mismatch", async (_name, identity) => {
     await expectCode(
       invokeMobile({ status: "rejected", ...identity }),
-      InferErrorCode.InternalError
+      InferErrorCode.RequestOutcomeUnknown
     );
   });
 
@@ -335,16 +335,16 @@ describe("sign-and-submit rejection conformance", () => {
   ])("fails closed for bridge rejection containing %s material", async (_name, material) => {
     await expectCode(
       invokeBridge({ status: "rejected", error: "user_cancelled", ...material }),
-      InferErrorCode.InternalError
+      InferErrorCode.RequestOutcomeUnknown
     );
   });
 
   it("accepts an approved bridge response only with a valid hash", async () => {
     await expect(invokeBridge({ status: "approved", hash: HASH })).resolves.toEqual({ hash: HASH });
     vi.restoreAllMocks();
-    await expectCode(invokeBridge({ status: "approved" }), InferErrorCode.InternalError);
+    await expectCode(invokeBridge({ status: "approved" }), InferErrorCode.RequestOutcomeUnknown);
     vi.restoreAllMocks();
-    await expectCode(invokeBridge({ status: "approved", hash: "0x1234" }), InferErrorCode.InternalError);
+    await expectCode(invokeBridge({ status: "approved", hash: "0x1234" }), InferErrorCode.RequestOutcomeUnknown);
   });
 
   it("supports canonical approved and legacy bare provider hashes", async () => {
@@ -465,7 +465,7 @@ describe("sign-and-submit rejection conformance", () => {
   ])("fails closed for mobile rejection containing %s material", async (_name, material) => {
     await expectCode(
       invokeMobile({ status: "rejected", ...material }),
-      InferErrorCode.InternalError
+      InferErrorCode.RequestOutcomeUnknown
     );
   });
 
@@ -519,9 +519,9 @@ describe("sign-and-submit rejection conformance", () => {
 
     await expect(invokeApproved({ hash: HASH })).resolves.toEqual({ hash: HASH });
     vi.restoreAllMocks();
-    await expectCode(invokeApproved({}), InferErrorCode.InternalError);
+    await expectCode(invokeApproved({}), InferErrorCode.RequestOutcomeUnknown);
     vi.restoreAllMocks();
-    await expectCode(invokeApproved({ hash: "0x1234" }), InferErrorCode.InternalError);
+    await expectCode(invokeApproved({ hash: "0x1234" }), InferErrorCode.RequestOutcomeUnknown);
   });
 
   it("returns the exact AIP-62 Rejected shape and propagates ambiguity", async () => {
@@ -653,6 +653,6 @@ describe("sign-and-submit rejection conformance", () => {
       resultMetadata: null
     })]
   ])("propagates ambiguous %s rejection through AIP-62", async (_name, invoke) => {
-    await expectCode(invoke(), InferErrorCode.InternalError);
+    await expectCode(invoke(), InferErrorCode.RequestOutcomeUnknown);
   });
 });

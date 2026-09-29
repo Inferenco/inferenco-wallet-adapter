@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CallbackOriginMismatch } from "../../src/errors.js";
-import { tryResumeInferWalletConnection } from "../../src/bridge.js";
+import { readExternalSession, tryResumeInferWalletConnection } from "../../src/bridge.js";
 import { INFER_CONNECT_NAME } from "../../src/constants.js";
 
 const GOOD_SESSION = {
@@ -27,24 +27,18 @@ afterEach(() => {
 });
 
 describe("walletName allowlist via the public resume path", () => {
-  it("session_with_NO_CONNECT_NAME_is_accepted", () => {
-    // Indirect verification: store a session with the correct name,
-    // and the helper accepts it (wallet is in the wallet-standard
-    // registry). The walletName-allowlist lives inside the private
-    // parseExternalSession, which is exercised by every public path.
-    const session = { ...GOOD_SESSION, walletName: INFER_CONNECT_NAME, transport: "desktop-bridge" as const };
-    expect(session.walletName).toBe(INFER_CONNECT_NAME);
-  });
+  it.each(["Infer Connect", "Infer Wallet", "Infer Desk", "Nova Connect", "Nova Desk"])(
+    "accepts a saved session from %s without renaming it", (walletName) => {
+      const session = { ...GOOD_SESSION, walletName, transport: "mobile-relay" };
+      window.localStorage.setItem("inferenco:infer-session", JSON.stringify(session));
+      expect(readExternalSession()).toMatchObject(session);
+    }
+  );
 
-  it("session_with_unknown_walletName_value_is_the_string_we_compare_against", () => {
-    // Same indirect check: the allowlist compares against
-    // INFER_CONNECT_NAME; an attacker-supplied value fails the check.
-    const session = {
-      ...GOOD_SESSION,
-      walletName: "Evil Connect",
-      transport: "desktop-bridge" as const
-    };
-    expect(session.walletName).not.toBe(INFER_CONNECT_NAME);
+  it("rejects an unrecognised wallet name", () => {
+    window.localStorage.setItem("inferenco:infer-session",
+      JSON.stringify({ ...GOOD_SESSION, walletName: "Evil Connect", transport: "mobile-relay" }));
+    expect(readExternalSession()).toBeNull();
   });
 });
 

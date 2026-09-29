@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _setBridgeTokenForTesting, _resetBridgeTokenForTesting } from "../src/bridge/token";
 import {
   readExternalSession,
+  checkExternalConnectionHealth,
   storeExternalSession,
   validateExternalSession
 } from "../src/bridge";
@@ -11,6 +12,7 @@ import {
   LEGACY_NOVA_EXTERNAL_SESSION_STORAGE_KEY
 } from "../src/constants";
 import type { InferExternalSession } from "../src/types";
+import { InferAdapterError, InferErrorCode } from "../src/errors";
 
 const SAMPLE_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const SAMPLE_BRIDGE_URL = `http://127.0.0.1:21984/${SAMPLE_TOKEN}`;
@@ -57,12 +59,15 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
     // for unknown sessions (F-03 token gate). Browsers enforce CORS
     // and refuse to give JS access to the response body / status,
     // surfacing the failure as `TypeError: Failed to fetch`.
-    // Without the fix, `validateExternalSession`'s catch block
-    // doesn't match `BridgeHttpError` and leaves the stale session
-    // in localStorage forever — every page load retries the same
-    // request and emits the same devtools CORS error.
+    //
+    // P-04 (0.2.0-rc.18): a TypeError on validateExternalSession now
+    // does NOT clear the session — it falls back to
+    // `readExternalSession()` so the dApp can still get a usable
+    // session for direct bridge calls. The trade-off is documented
+    // in the catch block comment.
 
-    storeExternalSession(makeStaleDesktopSession());
+    const session = makeStaleDesktopSession();
+    storeExternalSession(session);
     expect(readExternalSession()).not.toBeNull();
 
     // Simulate browser CORS enforcement: the fetch is sent but the
@@ -72,18 +77,19 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
 
-    const result = await validateExternalSession(makeStaleDesktopSession(), {});
+    const result = await validateExternalSession(session, {});
+    // TypeError is ambiguous: preserve identity, but do not certify transport health.
     expect(result).toBeNull();
-    // Session is wiped so the next page load doesn't retry.
-    expect(readExternalSession()).toBeNull();
+    expect(readExternalSession()).not.toBeNull();
+    expect((await checkExternalConnectionHealth(readExternalSession(), {})).state).toBe("unreachable");
   });
 
-  it("clears_session_on_real_network_failure_too", async () => {
+  it("preserves_session_on_real_network_failure_too", async () => {
     // Counterpart: when the wallet is genuinely down (cold start,
     // crashed, host network unreachable), the same TypeError fires.
-    // The recovery is identical — clear the session, force the user
-    // through fresh connect. Without this branch, a wallet restart
-    // would leave the dapp with a permanently-broken session.
+    // P-04: TypeError is now a SOFT failure — preserve the session
+    // so the next sign call can retry (and surface the real error
+    // if the wallet is still down).
     storeExternalSession(makeStaleDesktopSession());
 
     globalThis.fetch = vi.fn(async () => {
@@ -91,17 +97,16 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
     }) as unknown as typeof fetch;
 
     const result = await validateExternalSession(makeStaleDesktopSession(), {});
+    // Preserve identity, while declining to certify transport health.
     expect(result).toBeNull();
-    expect(readExternalSession()).toBeNull();
+    expect(readExternalSession()).not.toBeNull();
   });
 
   it("does_not_clear_session_on_explicit_404_response_with_cors", async () => {
-    // Regression-guard: the original behaviour for a real
-    // `BridgeHttpError(404)` (e.g., a Node test or a future wallet
-    // build that DOES add CORS to 404) still clears the session.
-    // Covered by the existing test suite — kept here as a contract
-    // marker so future maintainers don't drop the BridgeHttpError
-    // branch when refactoring the catch.
+    // Regression-guard: a real `BridgeHttpError(404)` (e.g., a Node
+    // test or a future wallet build that DOES add CORS to 404) STILL
+    // clears the session because the wallet explicitly told us the
+    // session is dead.
     storeExternalSession(makeStaleDesktopSession());
 
     globalThis.fetch = vi.fn(async () => {
@@ -114,6 +119,39 @@ describe("validateExternalSession — F-03 CORS-blocked 404 fallback", () => {
     const result = await validateExternalSession(makeStaleDesktopSession(), {});
     expect(result).toBeNull();
     expect(readExternalSession()).toBeNull();
+  });
+
+  it("preserves_session_on_typeerror_and_returns_localstorage", async () => {
+    // P-04 explicit pin: a TypeError on validateExternalSession
+    // MUST NOT call `clearExternalSession()` (that would silently
+    // force a fresh connect). Instead, the catch branch calls
+    // `readExternalSession()` and returns the cached session
+    // directly.
+    const session = makeStaleDesktopSession();
+    storeExternalSession(session);
+
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError("NetworkError when attempting to fetch resource.");
+    }) as unknown as typeof fetch;
+
+    const result = await validateExternalSession(session, {});
+    expect(result).toBeNull();
+    // The session is preserved on disk.
+    expect(readExternalSession()).not.toBeNull();
+  });
+
+  it("returns_null_on_typeerror_when_no_session_is_stored", async () => {
+    // Edge case: TypeError fired during validateExternalSession but
+    // no session is stored in localStorage. `readExternalSession()`
+    // returns null and that's what the function returns.
+    window.localStorage.clear();
+
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }) as unknown as typeof fetch;
+
+    const result = await validateExternalSession(makeStaleDesktopSession(), {});
+    expect(result).toBeNull();
   });
 
   it("preserves_session_on_successful_validation", async () => {

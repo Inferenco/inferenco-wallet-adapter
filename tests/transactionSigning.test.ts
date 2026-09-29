@@ -129,7 +129,7 @@ describe("exact prebuilt signing", () => {
         chainId: 2, sessionId: "session-1", bridgeUrl: "https://bridge.example"
       });
       if (kind === "approved") await expect(promise).resolves.toHaveProperty("rawTransaction");
-      else await expect(promise).rejects.toMatchObject({ code: kind === "rejected" ? "USER_REJECTED" : "INTERNAL_ERROR" });
+      else await expect(promise).rejects.toMatchObject({ code: kind === "rejected" ? "USER_REJECTED" : "REQUEST_OUTCOME_UNKNOWN" });
       expect(fetch.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/sign-transaction"))).toHaveLength(1);
     });
 
