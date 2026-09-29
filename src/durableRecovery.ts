@@ -28,6 +28,17 @@ function announceRecordChange(): void {
 const ACK_TOMBSTONE_MS = 30 * 24 * 60 * 60 * 1000;
 const ARCHIVE_MS = 180 * 24 * 60 * 60 * 1000;
 
+/** Immutable relay fields, saved before the first creation POST. The session token
+ * remains in the existing session store and is never copied into this record. */
+export interface DurableMobileRequestEnvelope {
+  clientInvocationId: string;
+  sessionId: string;
+  method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
+  callbackUrl: string;
+  encryptedRequest: string;
+  requestMetadata: { origin: string; appName: string };
+}
+
 export interface DurableInvocation {
   id: string;
   origin: string;
@@ -40,6 +51,12 @@ export interface DurableInvocation {
   state: "prepared" | "created" | "unknown" | "not-invoked";
   requestId?: string;
   createdAt: string;
+  mobileRequest?: {
+    relayBaseUrl: string;
+    envelope: DurableMobileRequestEnvelope;
+    expectedTransactionBcsHex?: string;
+  };
+  failureReason?: string;
 }
 
 export type DurablePending = PendingDesktopBridgeRequest | PendingMobileRelayRequest;
@@ -137,6 +154,15 @@ function openDatabase(): Promise<IDBDatabase> {
 function randomId(): string {
   const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function randomUuid(): string {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+    hex.slice(16, 20), hex.slice(20)].join("-");
 }
 
 function pendingEndpoint(pending: DurablePending): string {
@@ -342,7 +368,7 @@ export async function prepareDurableInvocation(
 ): Promise<DurableInvocation> {
   const db = await openDatabase();
   const record: DurableInvocation = {
-    id: randomId(), origin: window.location.origin, transport: session.transport,
+    id: randomUuid(), origin: window.location.origin, transport: session.transport,
     sessionId: session.sessionId, address: session.address, network: session.network,
     chainId: session.chainId, method, state: "prepared",
     createdAt: new Date().toISOString()
@@ -356,10 +382,12 @@ export async function prepareDurableInvocation(
   });
 }
 
-export async function updateDurableInvocation(
+/** Save the exact immutable mobile request fields before any network dispatch. */
+export async function saveDurableMobileInvocationEnvelope(
   id: string,
-  state: DurableInvocation["state"],
-  requestId?: string
+  relayBaseUrl: string,
+  envelope: DurableMobileRequestEnvelope,
+  expectedTransactionBcsHex?: string
 ): Promise<void> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
@@ -369,11 +397,45 @@ export async function updateDurableInvocation(
     lookup.onsuccess = () => {
       const row = lookup.result as DurableInvocation | undefined;
       if (!row || row.origin !== window.location.origin ||
-          (row.state !== "prepared" && row.state !== state)) {
+          row.transport !== "mobile-relay" || row.state !== "prepared" ||
+          row.mobileRequest || row.id !== envelope.clientInvocationId ||
+          row.sessionId !== envelope.sessionId || row.method !== envelope.method ||
+          envelope.requestMetadata.origin !== row.origin) {
         tx.abort();
         return;
       }
-      store.put({ ...row, state, ...(requestId ? { requestId } : {}) });
+      store.put({ ...row, mobileRequest: {
+        relayBaseUrl, envelope,
+        ...(expectedTransactionBcsHex ? { expectedTransactionBcsHex } : {})
+      } });
+    };
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onabort = () => { db.close(); reject(failure("Unable to persist the exact mobile invocation", tx.error)); };
+    tx.onerror = () => { /* onabort rejects after rollback */ };
+  });
+}
+
+export async function updateDurableInvocation(
+  id: string,
+  state: DurableInvocation["state"],
+  requestId?: string,
+  failureReason?: string
+): Promise<void> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(INVOCATIONS, "readwrite");
+    const store = tx.objectStore(INVOCATIONS);
+    const lookup = store.get(id);
+    lookup.onsuccess = () => {
+      const row = lookup.result as DurableInvocation | undefined;
+      if (!row || row.origin !== window.location.origin ||
+          (row.state !== "prepared" && row.state !== "unknown" && row.state !== state) ||
+          (row.requestId && requestId && row.requestId !== requestId)) {
+        tx.abort();
+        return;
+      }
+      store.put({ ...row, state, ...(requestId ? { requestId } : {}),
+        ...(failureReason ? { failureReason } : {}) });
     };
     tx.oncomplete = () => { db.close(); resolve(); };
     tx.onabort = () => { db.close(); reject(failure("Unable to update the original invocation", tx.error)); };

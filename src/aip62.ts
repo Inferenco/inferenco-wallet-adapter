@@ -55,6 +55,8 @@ export type InferRecoveredOutcomesFeature = {
     version: "1.0.0";
     list: InferClient["listRecoverableRequests"];
     listInvocations: InferClient["listRecoverableInvocations"];
+    reconcileInvocation: InferClient["reconcileRecoverableInvocation"];
+    relaunchInvocation: InferClient["relaunchRecoverableInvocation"];
     subscribe: InferClient["subscribeRecoveredOutcomes"];
     listArchived: InferClient["listArchivedRecoverableRequests"];
     read: InferClient["readRecoverableRequest"];
@@ -167,6 +169,8 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
       version: "1.0.0",
       list: () => client.listRecoverableRequests(),
       listInvocations: () => client.listRecoverableInvocations(),
+      reconcileInvocation: (invocationId) => client.reconcileRecoverableInvocation(invocationId),
+      relaunchInvocation: (invocationId) => client.relaunchRecoverableInvocation(invocationId),
       subscribe: (callback) => client.subscribeRecoveredOutcomes(callback),
       listArchived: () => client.listArchivedRecoverableRequests(),
       read: (requestId) => client.readRecoverableRequest(requestId),

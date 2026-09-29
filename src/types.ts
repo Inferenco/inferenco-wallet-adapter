@@ -93,6 +93,8 @@ export interface InferWalletOptions {
   mobilePollIntervalMs?: number;
   mobileRequestTimeoutMs?: number;
   mobileSocketTimeoutMs?: number;
+  /** Prefer returning to the existing Android browser task after relay approval. */
+  mobileReturnMode?: "resume-browser-v1";
   /**
    * Tier 1 (deeplink hardening): if set, the adapter verifies that
    * the deeplink callback's `window.location.origin` matches this
@@ -283,8 +285,20 @@ export interface InferMobilePairingStatus {
 
 export interface InferMobileRequestCreateResponse {
   requestId: string;
-  walletDeeplinkUrl: string;
+  /** Omitted on idempotent replay; an existing request must not auto-launch twice. */
+  walletDeeplinkUrl?: string;
   expiresAt: string;
+  status?: "pending" | "approved" | "rejected" | "failed" | "expired" | "cancelled" | "revoked";
+}
+
+export interface InferMobileInvocationReceipt {
+  requestId: string;
+  expiresAt: string;
+  status: "pending" | "approved" | "rejected" | "failed" | "expired" | "cancelled" | "revoked";
+}
+
+export interface InferMobileInvocationRelaunchReceipt extends InferMobileInvocationReceipt {
+  walletDeeplinkUrl: string;
 }
 
 interface InferMobileRequestStatusBase {
