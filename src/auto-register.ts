@@ -1,3 +1,3 @@
-import { registerNovaWallet } from "./aip62";
+import { registerInferWallet } from "./aip62";
 
-registerNovaWallet();
+registerInferWallet();

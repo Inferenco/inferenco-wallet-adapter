@@ -1,7 +1,7 @@
 {
-  "name": "@inferenco/nova-wallet-adapter",
-  "version": "0.1.1",
-  "description": "Standalone Nova wallet adapter for Cedra dapps",
+  "name": "@inferenco/infer-wallet-adapter",
+  "version": "0.2.0-rc.24",
+  "description": "Standalone Infer wallet adapter for Cedra dapps",
   "license": "Apache-2.0",
   "author": "TOO Spielcrypto and Singularity Shift Ltd",
   "repository": {
@@ -14,14 +14,14 @@
   },
   "keywords": [
     "cedra",
-    "nova",
+    "infer",
     "wallet",
     "adapter",
     "blockchain",
     "aip-62",
     "wallet-standard",
-    "nova-desk",
-    "nova-wallet",
+    "infer-desk",
+    "infer-wallet",
     "cryptocurrency"
   ],
   "publishConfig": {
@@ -53,7 +53,7 @@
   ],
   "scripts": {
     "prepare": "npm run build",
-    "build": "tsup src/index.ts src/aip62.ts src/auto-register.ts --format esm,cjs --dts",
+    "build": "tsup src/index.ts src/aip62.ts src/auto-register.ts --format esm,cjs --dts --clean",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -68,6 +68,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "fake-indexeddb": "^6.2.5",
     "jsdom": "^26.0.0",
     "tsup": "^8.4.0",
     "typescript": "^5.7.2",

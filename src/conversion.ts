@@ -25,12 +25,12 @@ import type {
 } from "@cedra-labs/wallet-standard";
 import { AccountInfo } from "@cedra-labs/wallet-standard";
 import type {
-  NovaSignMessageResponse,
-  NovaSignTransactionResult,
-  NovaTransactionPayload,
-  NovaProviderAccount
+  InferSignMessageResponse,
+  InferSignTransactionResult,
+  InferTransactionPayload,
+  InferProviderAccount
 } from "./types";
-import { NovaAdapterError, NovaErrorCode } from "./errors";
+import { InferAdapterError, InferErrorCode } from "./errors";
 
 export function toUint8Array(input: string | Uint8Array): Uint8Array {
   if (input instanceof Uint8Array) return input;
@@ -38,11 +38,56 @@ export function toUint8Array(input: string | Uint8Array): Uint8Array {
   return new Uint8Array(hex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? []);
 }
 
-function tryDeserializeFinished<T>(
+function strictBcsBytes(hex: string): Uint8Array {
+  if (typeof hex !== "string" || !/^(?:0x)?(?:[0-9a-fA-F]{2})+$/.test(hex)) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Invalid transaction BCS hex");
+  }
+  return toUint8Array(hex);
+}
+
+export function deserializeAccountAuthenticator(hex: string): AccountAuthenticator {
+  const result = tryDeserializeFinished(hex, (deserializer) => AccountAuthenticator.deserialize(deserializer));
+  if (!result) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Invalid or noncanonical authenticator BCS");
+  }
+  return ensureBcsToHex(result);
+}
+
+/** Hydrate the JSON signing boundary and bind a prebuilt request to the returned bytes. */
+export function deserializeSignTransactionResult(result: unknown, expectedBcsHex?: string) {
+  const fields = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const authenticatorHex = stringField(result, "authenticatorHex") ??
+    (fields.authenticator instanceof AccountAuthenticator ? fields.authenticator.toString() : undefined);
+  const raw = fields.rawTransaction;
+  const rawTransactionBcsHex = stringField(result, "rawTransactionBcsHex") ??
+    (raw instanceof SimpleTransaction || raw instanceof MultiAgentTransaction || raw instanceof RawTransaction
+      ? raw.toString() : undefined);
+  if (!authenticatorHex || !rawTransactionBcsHex) {
+    throw new InferAdapterError(InferErrorCode.InternalError, "Missing signed transaction BCS fields");
+  }
+  const authenticator = deserializeAccountAuthenticator(authenticatorHex);
+  const rawTransaction = deserializeAnyRawTransaction(rawTransactionBcsHex);
+  if (expectedBcsHex !== undefined) {
+    const expected = strictBcsBytes(expectedBcsHex);
+    const returned = strictBcsBytes(rawTransactionBcsHex);
+    if (expected.length !== returned.length || expected.some((byte, i) => byte !== returned[i])) {
+      throw new InferAdapterError(InferErrorCode.InternalError, "Wallet changed the prebuilt transaction");
+    }
+  }
+  return { authenticator, rawTransaction, authenticatorHex, rawTransactionBcsHex };
+}
+
+function tryDeserializeFinished<T extends { bcsToBytes(): Uint8Array }>(
   hex: string,
   deserialize: (deserializer: Deserializer) => T
 ): T | null {
-  return tryDeserializeBytesFinished(toUint8Array(hex), deserialize);
+  const bytes = strictBcsBytes(hex);
+  const value = tryDeserializeBytesFinished(bytes, deserialize);
+  if (value) {
+    const canonical = value.bcsToBytes();
+    if (canonical.length !== bytes.length || canonical.some((byte, i) => byte !== bytes[i])) return null;
+  }
+  return value;
 }
 
 function tryDeserializeBytesFinished<T>(
@@ -75,7 +120,7 @@ export function deserializeAnyRawTransaction(hex: string): AnyRawTransaction {
   );
   if (rawTransaction) return new SimpleTransaction(rawTransaction);
 
-  throw new Error("Unable to deserialize signed raw transaction payload");
+  throw new InferAdapterError(InferErrorCode.InternalError, "Unable to deserialize signed raw transaction payload");
 }
 
 export function ensureBcsToHex<T extends { toString: () => string }>(
@@ -100,7 +145,7 @@ function stringField(value: unknown, key: string): string | undefined {
 function normalizeAuthenticator(value: unknown, hex?: string): AccountAuthenticator | undefined {
   const nestedHex = stringField(value, "hex");
   if (hex || nestedHex) {
-    return ensureBcsToHex(AccountAuthenticator.deserialize(Deserializer.fromHex(hex ?? nestedHex!)));
+    return deserializeAccountAuthenticator(hex ?? nestedHex!);
   }
   if (
     value &&
@@ -122,9 +167,9 @@ function normalizeRawTransaction(value: unknown, hex?: string): AnyRawTransactio
   return undefined;
 }
 
-export function normalizeSignTransactionResult(result: unknown): NovaSignTransactionResult {
+export function normalizeSignTransactionResult(result: unknown): InferSignTransactionResult {
   if (result instanceof Uint8Array || !result || typeof result !== "object") {
-    return result as NovaSignTransactionResult;
+    return result as InferSignTransactionResult;
   }
 
   const authenticatorHex =
@@ -138,7 +183,7 @@ export function normalizeSignTransactionResult(result: unknown): NovaSignTransac
     authenticatorHex
   );
 
-  if (!authenticator) return result as NovaSignTransactionResult;
+  if (!authenticator) return result as InferSignTransactionResult;
 
   const rawTransaction = normalizeRawTransaction(
     hasRawTransactionField ? (result as { rawTransaction?: unknown }).rawTransaction : undefined,
@@ -149,14 +194,14 @@ export function normalizeSignTransactionResult(result: unknown): NovaSignTransac
       ...(result as Record<string, unknown>),
       authenticator,
       rawTransaction
-    } as NovaSignTransactionResult;
+    } as InferSignTransactionResult;
   }
 
   if (hasAuthenticatorField) {
     return {
       ...(result as Record<string, unknown>),
       authenticator
-    } as NovaSignTransactionResult;
+    } as InferSignTransactionResult;
   }
 
   return authenticator;
@@ -179,7 +224,7 @@ function normalizeProviderPublicKey(publicKey: string | Uint8Array): Ed25519Publ
   return new Ed25519PublicKey(bytes);
 }
 
-export function normalizeProviderAccount(account: NovaProviderAccount): AccountInfo {
+export function normalizeProviderAccount(account: InferProviderAccount): AccountInfo {
   return new AccountInfo({
     address: AccountAddress.from(account.address),
     publicKey: normalizeProviderPublicKey(account.publicKey)
@@ -201,7 +246,7 @@ export function normalizeNetwork(network: string | number | NetworkInfo): Networ
       : network;
 
   if (!rawName) {
-    throw new NovaAdapterError(NovaErrorCode.InvalidNetwork, `Unsupported network value: ${String(network)}`);
+    throw new InferAdapterError(InferErrorCode.InvalidNetwork, `Unsupported network value: ${String(network)}`);
   }
 
   const name =
@@ -225,7 +270,7 @@ export function normalizeNetwork(network: string | number | NetworkInfo): Networ
 }
 
 export function normalizeTransactionPayload(
-  transaction: AnyRawTransaction | NovaTransactionPayload
+  transaction: AnyRawTransaction | InferTransactionPayload
 ): {
   sender?: string;
   data?: InputGenerateTransactionPayloadData;
@@ -252,7 +297,7 @@ export function normalizeTransactionPayload(
 }
 
 export function normalizeSignMessageOutput(
-  output: CedraSignMessageOutput | NovaSignMessageResponse
+  output: CedraSignMessageOutput | InferSignMessageResponse
 ): CedraSignMessageOutput {
   return {
     address: output.address,
