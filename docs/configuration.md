@@ -10,7 +10,7 @@ import { InferWallet } from "@inferenco/infer-wallet-adapter";
 const wallet = new InferWallet({
   bridgeBaseUrl: "http://127.0.0.1:21984",
   detectAliases: false,
-  bridgePollTimeoutMs: 60000,
+  bridgePollTimeoutMs: 60000
 });
 ```
 
@@ -22,39 +22,39 @@ The same options are accepted by `InferClient`, `registerInferWallet`, and `crea
 
 ### `deeplinkBaseUrl`
 
-| | |
-|-|-|
-| **Type** | `string` |
+|             |                                   |
+| ----------- | --------------------------------- |
+| **Type**    | `string`                          |
 | **Default** | `"inferenco://connect?callback="` |
 
 Base URL for deeplink generation. The adapter appends the current page URL as the callback parameter.
 
 ```typescript
 new InferWallet({
-  deeplinkBaseUrl: "myapp://connect?callback=",
+  deeplinkBaseUrl: "myapp://connect?callback="
 });
 ```
 
 ### `deeplinkScheme`
 
-| | |
-|-|-|
-| **Type** | `string` |
+|             |               |
+| ----------- | ------------- |
+| **Type**    | `string`      |
 | **Default** | `"inferenco"` |
 
 URI scheme used for deeplinks. Used when constructing deeplink URLs for mobile relay pairing.
 
 ```typescript
 new InferWallet({
-  deeplinkScheme: "inferenco",
+  deeplinkScheme: "inferenco"
 });
 ```
 
 ### `websiteUrl`
 
-| | |
-|-|-|
-| **Type** | `string` |
+|             |                                                                                               |
+| ----------- | --------------------------------------------------------------------------------------------- |
+| **Type**    | `string`                                                                                      |
 | **Default** | Desktop: `"https://inferenco.com/infer-desk"`; Mobile: `"https://inferenco.com/infer-wallet"` |
 
 The URL exposed as the wallet's website in the adapter metadata.
@@ -65,10 +65,10 @@ The URL exposed as the wallet's website in the adapter metadata.
 
 ### `forceRegistration`
 
-| | |
-|-|-|
-| **Type** | `boolean` |
-| **Default** | `false` |
+|             |           |
+| ----------- | --------- |
+| **Type**    | `boolean` |
+| **Default** | `false`   |
 
 When `true`, `registerInferWallet()` registers the wallet even if no injected provider is detected. This enables deeplink-based connection flows for dApps that want Infer Connect to appear in wallet selection UIs without requiring the extension.
 
@@ -76,16 +76,16 @@ When `true`, `registerInferWallet()` registers the wallet even if no injected pr
 import { registerInferWallet } from "@inferenco/infer-wallet-adapter/aip62";
 
 registerInferWallet({
-  forceRegistration: true,
+  forceRegistration: true
 });
 ```
 
 ### `desktopRegistration`
 
-| | |
-|-|-|
-| **Type** | `boolean` |
-| **Default** | `true` |
+|             |           |
+| ----------- | --------- |
+| **Type**    | `boolean` |
+| **Default** | `true`    |
 
 When `true`, the adapter auto-registers on desktop browsers even without an injected provider. This allows desktop users to connect via the local bridge or deeplink without needing the extension installed.
 
@@ -93,10 +93,10 @@ Set to `false` to only register when a provider is explicitly detected.
 
 ### `detectAliases`
 
-| | |
-|-|-|
-| **Type** | `boolean` |
-| **Default** | `true` |
+|             |           |
+| ----------- | --------- |
+| **Type**    | `boolean` |
+| **Default** | `true`    |
 
 When `true`, the adapter checks `window.cedra` and `window.aptos` for Infer-branded providers (those with `isInferWallet === true`, or the legacy `isNovaWallet === true` for pre-rebrand wallets). When `false`, only `window.inferenco`, `window.infer`, and `window.nova` are checked.
 
@@ -104,7 +104,7 @@ Disable this if your dApp has its own handling for `window.cedra` / `window.apto
 
 ```typescript
 new InferWallet({
-  detectAliases: false, // Only check window.inferenco and window.nova
+  detectAliases: false // Only check window.inferenco and window.nova
 });
 ```
 
@@ -114,33 +114,33 @@ new InferWallet({
 
 ### `networkOverride`
 
-| | |
-|-|-|
-| **Type** | `Network` (from `@cedra-labs/ts-sdk`) |
-| **Default** | `undefined` |
+|             |                                       |
+| ----------- | ------------------------------------- |
+| **Type**    | `Network` (from `@cedra-labs/ts-sdk`) |
+| **Default** | `undefined`                           |
 
-Force the adapter to use a specific network regardless of what the provider reports. Useful for dApps that are hardcoded to a single network.
+Require the actual approved wallet network before signing. A mismatch rejects before dispatch; the adapter does not switch the wallet or relabel its reported network.
 
 ```typescript
 import { Network } from "@cedra-labs/ts-sdk";
 
 new InferWallet({
-  networkOverride: Network.TESTNET,
+  networkOverride: Network.TESTNET
 });
 ```
 
 ### `fullnodeUrl`
 
-| | |
-|-|-|
-| **Type** | `string` |
+|             |                                 |
+| ----------- | ------------------------------- |
+| **Type**    | `string`                        |
 | **Default** | `undefined` (uses SDK defaults) |
 
-Custom fullnode URL for SDK operations like transaction building and submission. When set, the adapter uses this URL instead of the SDK's default for the detected network.
+Retained for API compatibility. Current wallet signing transports do not read this option and always use the approved provider/bridge/relay. The exported getSdkNetwork and signAndSubmitWithSdk helpers accept an explicit fullnodeUrl argument for caller-controlled SDK operations; this constructor option does not redirect signing or submission.
 
 ```typescript
 new InferWallet({
-  fullnodeUrl: "https://fullnode.testnet.cedralabs.com/v1",
+  fullnodeUrl: "https://fullnode.testnet.cedralabs.com/v1"
 });
 ```
 
@@ -152,25 +152,25 @@ These options configure the local HTTP bridge to the Infer Desk desktop applicat
 
 ### `bridgeBaseUrl`
 
-| | |
-|-|-|
-| **Type** | `string` |
+|             |                            |
+| ----------- | -------------------------- |
+| **Type**    | `string`                   |
 | **Default** | `"http://127.0.0.1:21984"` |
 
 Base URL for the desktop bridge. Change this if Infer Desk is configured to run on a different port.
 
 ```typescript
 new InferWallet({
-  bridgeBaseUrl: "http://127.0.0.1:9999",
+  bridgeBaseUrl: "http://127.0.0.1:9999"
 });
 ```
 
 ### `bridgeConnectTimeoutMs`
 
-| | |
-|-|-|
-| **Type** | `number` |
-| **Default** | `1200` |
+|             |          |
+| ----------- | -------- |
+| **Type**    | `number` |
+| **Default** | `1200`   |
 
 Timeout in milliseconds for the initial bridge connection probe. If the bridge doesn't respond within this time, the adapter considers Infer Desk as not running and falls back to the next transport.
 
@@ -178,33 +178,33 @@ Keep this short to avoid blocking the user when Infer Desk is not installed.
 
 ### `bridgePollIntervalMs`
 
-| | |
-|-|-|
-| **Type** | `number` |
-| **Default** | `250` |
+|             |          |
+| ----------- | -------- |
+| **Type**    | `number` |
+| **Default** | `250`    |
 
 Interval in milliseconds between poll requests to the bridge while waiting for user approval. Lower values provide faster feedback but increase request volume.
 
 ### `bridgePollTimeoutMs`
 
-| | |
-|-|-|
-| **Type** | `number` |
+|             |                      |
+| ----------- | -------------------- |
+| **Type**    | `number`             |
 | **Default** | `120000` (2 minutes) |
 
 Maximum time in milliseconds to wait for the user to approve or reject a request in Infer Desk. After this timeout, the adapter throws a `ConnectionTimeout` error.
 
 ```typescript
 new InferWallet({
-  bridgePollTimeoutMs: 60000, // 1 minute timeout
+  bridgePollTimeoutMs: 60000 // 1 minute timeout
 });
 ```
 
 ### `sessionLivenessIntervalMs` _(added in v0.2.0-rc.8)_
 
-| | |
-|-|-|
-| **Type** | `number` |
+|             |                |
+| ----------- | -------------- |
+| **Type**    | `number`       |
 | **Default** | `0` (disabled) |
 
 When set to a positive number of milliseconds, the adapter periodically
@@ -222,7 +222,7 @@ keep the existing lazy fallback (detection on next user-initiated
 
 ```typescript
 new InferWallet({
-  sessionLivenessIntervalMs: 30_000, // poll every 30 s
+  sessionLivenessIntervalMs: 30_000 // poll every 30 s
 });
 ```
 
@@ -234,57 +234,57 @@ These options configure the nova-service relay used for connecting to the Infer 
 
 ### `relayBaseUrl`
 
-| | |
-|-|-|
-| **Type** | `string` |
+|             |                                                            |
+| ----------- | ---------------------------------------------------------- |
+| **Type**    | `string`                                                   |
 | **Default** | `"https://nova-service-160604102004.europe-west1.run.app"` |
 
 Base URL for the nova-service relay REST API. Override for self-hosted relay deployments or local development.
 
 ```typescript
 new InferWallet({
-  relayBaseUrl: "https://relay.your-domain.com",
+  relayBaseUrl: "https://relay.your-domain.com"
 });
 ```
 
 ### `websocketBaseUrl`
 
-| | |
-|-|-|
-| **Type** | `string` |
+|             |                                                                |
+| ----------- | -------------------------------------------------------------- |
+| **Type**    | `string`                                                       |
 | **Default** | `"wss://nova-service-160604102004.europe-west1.run.app/v1/ws"` |
 
 WebSocket URL for real-time relay notifications. Must match the relay deployment.
 
 ```typescript
 new InferWallet({
-  websocketBaseUrl: "wss://relay.your-domain.com/v1/ws",
+  websocketBaseUrl: "wss://relay.your-domain.com/v1/ws"
 });
 ```
 
 ### `mobilePollIntervalMs`
 
-| | |
-|-|-|
-| **Type** | `number` |
+|             |                   |
+| ----------- | ----------------- |
+| **Type**    | `number`          |
 | **Default** | `1000` (1 second) |
 
 Interval in milliseconds between poll requests to nova-service while waiting for the user to approve in Infer Wallet. Used when WebSocket notifications are unavailable or time out.
 
 ### `mobileRequestTimeoutMs`
 
-| | |
-|-|-|
-| **Type** | `number` |
+|             |                      |
+| ----------- | -------------------- |
+| **Type**    | `number`             |
 | **Default** | `180000` (3 minutes) |
 
 Maximum time in milliseconds to wait for the user to approve or reject a request in Infer Wallet. Longer than the Infer Desk timeout to account for app switching delays on mobile.
 
 ### `mobileSocketTimeoutMs`
 
-| | |
-|-|-|
-| **Type** | `number` |
+|             |                      |
+| ----------- | -------------------- |
+| **Type**    | `number`             |
 | **Default** | `15000` (15 seconds) |
 
 Time in milliseconds to wait for a WebSocket response from nova-service before switching to HTTP polling. If the WebSocket connection fails or no message arrives within this window, the adapter polls at `mobilePollIntervalMs` intervals instead.
@@ -307,7 +307,7 @@ import { Network } from "@cedra-labs/ts-sdk";
 const wallet = new InferWallet({
   networkOverride: Network.TESTNET,
   forceRegistration: true,
-  fullnodeUrl: "https://fullnode.testnet.cedralabs.com/v1",
+  fullnodeUrl: "https://fullnode.testnet.cedralabs.com/v1"
 });
 ```
 
@@ -316,7 +316,7 @@ const wallet = new InferWallet({
 ```typescript
 const wallet = new InferWallet({
   relayBaseUrl: "https://relay.your-domain.com",
-  websocketBaseUrl: "wss://relay.your-domain.com/v1/ws",
+  websocketBaseUrl: "wss://relay.your-domain.com/v1/ws"
 });
 ```
 
@@ -325,7 +325,7 @@ const wallet = new InferWallet({
 ```typescript
 const wallet = new InferWallet({
   bridgeBaseUrl: "http://127.0.0.1:9999",
-  bridgePollTimeoutMs: 60000,
+  bridgePollTimeoutMs: 60000
 });
 ```
 
@@ -334,6 +334,10 @@ const wallet = new InferWallet({
 ```typescript
 const wallet = new InferWallet({
   detectAliases: false,
-  desktopRegistration: false,
+  desktopRegistration: false
 });
 ```
+
+## Invocation preparation (0.2.1)
+
+`onInvocationPrepared` may return a Promise. The adapter awaits it after its own durable invocation save and before dispatch, so applications can durably bind invocationId, requestCommitment and immutable scope to reviewed intent. Rejecting the hook prevents dispatch; only the public submission feature's isNotInvoked method verifies the resulting invocation-bound proof. Required v1 restrictions select the explicit transactionSubmission feature; applications must not set internal requireContractVersion flags to infer native support. Peer support comes from versioned capabilities and qualification, as documented in [integration-contract.md](integration-contract.md).

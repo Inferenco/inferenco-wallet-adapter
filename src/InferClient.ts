@@ -1,8 +1,24 @@
+import {
+  canonicalAddress,
+  encodeWireValue,
+  legacySubmitInput,
+  normalizeSubmitInput,
+  requestCommitment,
+  validateMessageInput,
+  MESSAGE_PROFILE,
+  type CanonicalTransactionInput
+} from "./integrationContract";
+import { notInvokedError } from "./nonDispatchEvidence";
+import {
+  prepareDurableInvocation,
+  updateDurableInvocation,
+  updateInjectedInvocationEvidence,
+  serializeStoredFinal,
+  type DurableInvocation
+} from "./durableRecovery";
+import { invocationDescriptor } from "./recovery";
 import EventEmitter from "eventemitter3";
-import type {
-  AnyRawTransaction,
-  Network,
-} from "@cedra-labs/ts-sdk";
+import type { AnyRawTransaction, Network } from "@cedra-labs/ts-sdk";
 import type {
   AccountInfo,
   CedraSignAndSubmitTransactionInput,
@@ -10,6 +26,7 @@ import type {
   CedraSignMessageInput,
   CedraSignMessageOutput,
   CedraSignTransactionInputV1_1,
+  CedraSignTransactionOutputV1_1,
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
@@ -44,10 +61,12 @@ import {
 } from "./bridge";
 import {
   createFullMessage,
+  assertSignedMessageBinding,
   deserializeSignTransactionResult,
   normalizeNetwork,
   normalizeProviderAccount,
   normalizeSignMessageOutput,
+  verifySignedMessageOutput,
   normalizeSignTransactionResult
 } from "./conversion";
 import { DEFAULT_SESSION_LIVENESS_INTERVAL_MS, INFER_SESSION_CLEARED_MESSAGE_TYPE } from "./constants";
@@ -182,18 +201,7 @@ function normalizeExternalAccountInput(input: unknown): InferExternalAccountInpu
 }
 
 function toJsonCompatibleValue(value: unknown): unknown {
-  if (typeof value === "bigint") return value.toString();
-  if (value instanceof Uint8Array) return Array.from(value);
-  if (Array.isArray(value)) return value.map(toJsonCompatibleValue);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-        key,
-        toJsonCompatibleValue(item)
-      ])
-    );
-  }
-  return value;
+  return encodeWireValue(value);
 }
 
 function normalizeWalletStandardSignTransactionInput(
@@ -251,7 +259,8 @@ function normalizeSdkRawTransactionInput(
 }
 
 function toExternalSignTransactionInput(
-  transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
+  transaction:
+    | AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
   options?: unknown
 ): InferExternalSignTransactionInput {
   if (isWalletStandardSignTransactionInput(transaction)) {
@@ -307,7 +316,8 @@ function snapshotProviderRecord(
 
 function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {
   const keys = Reflect.ownKeys(value);
-  return keys.length === expected.length && expected.every((key) => keys.includes(key));
+  return (
+    keys.length === expected.length && expected.every((key) => keys.includes(key)));
 }
 
 function normalizeSignAndSubmitProviderResult(
@@ -656,7 +666,8 @@ export class InferClient extends EventEmitter<InferClientEvents> {
         const outcome = await this.readRecoverableRequest(requestId);
         final = outcome.status === "approved" || outcome.status === "rejected";
       }
-      if (final && !this.disposed && await hasLiveOriginalMobileTab(requestId)) {
+      if (final && !this.disposed &&
+        (await hasLiveOriginalMobileTab(requestId))) {
         // The original tab still owns the request. It wakes from the durable
         // record change; this callback tab never takes over gameplay.
         renderCallbackCompletionFallback();
@@ -687,7 +698,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
       const invocations = await this.listRecoverableInvocations();
       for (const invocation of invocations) {
         if (this.disposed) return;
-        if (invocation.transport === "mobile-relay" &&
+        if (
+          (invocation.transport === "mobile-relay" ||
+            invocation.transport === "desktop-bridge") &&
             (invocation.state === "prepared" || invocation.state === "unknown") &&
             !invocation.requestId) {
           await this.reconcileRecoverableInvocation(invocation.invocationId);
@@ -840,7 +853,8 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     return { account, network };
   }
 
-  async connect(): Promise<{ account: AccountInfo; network: NetworkInfo | null }> {
+  async connect(): Promise<{ account: AccountInfo; network: NetworkInfo | null;
+  }> {
     try {
       const provider = this.refreshProvider();
       if (provider?.connect) {
@@ -917,19 +931,19 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         const preauth = await startPreauthConnect({
           origin: window.location.origin,
           app,
-          options: this.options,
+          options: this.options
         });
         if (preauth) {
           const session = await pollPreauthUntilResolved(
             preauth.requestId,
-            this.options,
+            this.options
           );
           if (session) {
             return this.connectResultFromExternalSession(session);
           }
           throw new InferAdapterError(
             InferErrorCode.ConnectionTimeout,
-            "Timed out waiting for Infer Desk to approve the pre-auth connect request.",
+            "Timed out waiting for Infer Desk to approve the pre-auth connect request."
           );
         }
 
@@ -996,7 +1010,9 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     try {
       const provider = this.refreshProvider();
       if (provider?.account) {
-        const account = normalizeProviderAccount(unwrap(await provider.account()));
+        const account = normalizeProviderAccount(
+          unwrap(await provider.account())
+        );
         this.accountInfo = account;
         return account;
       }
@@ -1008,7 +1024,10 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         return account;
       }
 
-      throw new InferAdapterError(InferErrorCode.NotInstalled, "Infer provider account() unavailable");
+      throw new InferAdapterError(
+        InferErrorCode.NotInstalled,
+        "Infer provider account() unavailable"
+      );
     } catch (error) {
       remapInferError(error);
     }
@@ -1059,150 +1078,631 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         return network;
       }
 
-      throw new InferAdapterError(InferErrorCode.NotInstalled, "Infer provider network() unavailable");
+      throw new InferAdapterError(
+        InferErrorCode.NotInstalled,
+        "Infer provider network() unavailable"
+      );
     } catch (error) {
       remapInferError(error);
     }
   }
 
-  async signMessage(input: CedraSignMessageInput): Promise<CedraSignMessageOutput> {
+  private async prepareInjectedSigning(
+    provider: InferProvider,
+    method: DurableInvocation["method"],
+    payload: unknown,
+    account: AccountInfo,
+    network: NetworkInfo
+  ) {
+    const scope = {
+      origin: typeof window === "undefined" ? "" : window.location.origin,
+      accountAddress: canonicalAddress(account.address.toString()),
+      network: network.name,
+      chainId: network.chainId
+    };
+    if (!scope.origin)
+      throw new InferAdapterError(
+        InferErrorCode.Unsupported,
+        "Persistent signing requires a browser origin"
+      );
+    const invocation = await prepareDurableInvocation(
+      {
+        transport: "injected",
+        sessionId: "injected:" + scope.accountAddress + ":" + scope.chainId,
+        address: scope.accountAddress,
+        network: scope.network,
+        chainId: scope.chainId
+      },
+      method,
+      {
+        requestCommitment: requestCommitment(method, scope, payload),
+        requestPayload: payload,
+        endpoint: scope.origin,
+        signerPublicKey: account.publicKey.toString()
+      }
+    );
+    const descriptor = Object.freeze(invocationDescriptor(invocation));
     try {
+      await this.options.onInvocationPrepared?.(descriptor);
+      if (
+        provider.integrationContractVersion !== undefined &&
+        provider.integrationContractVersion !== 1
+      ) {
+        throw new InferAdapterError(
+          InferErrorCode.Unsupported,
+          "Unsupported provider integration contract version"
+        );
+      }
+      if (
+        this.options.networkOverride !== undefined &&
+        this.options.networkOverride !== scope.network
+      ) {
+        throw new InferAdapterError(
+          InferErrorCode.InvalidNetwork,
+          "Approved network differs from networkOverride"
+        );
+      }
+    } catch (cause) {
+      await updateDurableInvocation(invocation.id, "not-invoked").catch(
+        () => undefined
+      );
+      throw notInvokedError(
+        "Signing stopped before provider invocation",
+        descriptor,
+        cause
+      );
+    }
+    return {
+      invocation,
+      scope,
+      metadata: {
+        contractVersion: 1,
+        invocationId: invocation.id,
+        requestCommitment: invocation.requestCommitment,
+        scope
+      }
+    };
+  }
+
+  async signMessage(
+    input: CedraSignMessageInput
+  ): Promise<CedraSignMessageOutput> {
+    let invocation: DurableInvocation | undefined;
+    try {
+      const request = validateMessageInput(input);
       const provider = this.refreshProvider();
+      const account = await this.getAccount();
+      const network = await this.getNetwork();
+      const scope = {
+        origin: typeof window === "undefined" ? "" : window.location.origin,
+        accountAddress: canonicalAddress(account.address.toString()),
+        network: network.name,
+        chainId: network.chainId
+      };
+      let response: unknown;
+      let expectedInput: CedraSignMessageInput = request;
+      let allowLegacy = false;
       if (provider?.signMessage) {
-        const result = unwrap(await provider.signMessage(input)) as CedraSignMessageOutput | InferSignMessageResponse;
-        return normalizeSignMessageOutput(result);
+        const payload =
+          provider.integrationContractVersion === 1
+            ? { ...request, profile: MESSAGE_PROFILE }
+            : request;
+        expectedInput = payload;
+        allowLegacy = provider.integrationContractVersion !== 1;
+        const prepared = await this.prepareInjectedSigning(
+          provider,
+          "signMessage",
+          payload,
+          account,
+          network
+        );
+        invocation = prepared.invocation;
+        try {
+          response = await provider.signMessage(
+            payload,
+            provider.integrationContractVersion === 1
+              ? prepared.metadata
+              : undefined
+          );
+        } catch (cause) {
+          throw new InferAdapterError(
+            InferErrorCode.InternalError,
+            "Native message signing failed; no explicit decline was returned",
+            cause
+          );
+        }
+        const record = snapshotProviderRecord(
+          response,
+          "Unreadable message response"
+        );
+        if (!record)
+          throw new InferAdapterError(
+            InferErrorCode.InternalError,
+            "Malformed message response"
+          );
+        if (record.status === "Rejected" && hasExactKeys(record, ["status"]))
+          throw new InferAdapterError(
+            InferErrorCode.UserRejected,
+            "User rejected the message request"
+          );
+        if (Object.prototype.hasOwnProperty.call(record, "status")) {
+          if (
+            record.status !== "Approved" ||
+            !hasExactKeys(record, ["status", "args"])
+          )
+            throw new InferAdapterError(
+              InferErrorCode.InternalError,
+              "Ambiguous message response"
+            );
+          response = record.args;
+        }
+      } else {
+        const session = await readValidatedExternalSession(this.options);
+        if (!session)
+          throw new InferAdapterError(
+            InferErrorCode.Unsupported,
+            "Infer message signing is unavailable"
+          );
+        const payload =
+          session.integrationContractVersion === 1
+            ? { ...request, profile: MESSAGE_PROFILE }
+            : request;
+        expectedInput = payload;
+        allowLegacy = session.integrationContractVersion !== 1;
+        response = await (session.transport === "mobile-relay"
+          ? signMessageViaMobileRelay(payload, session, this.options)
+          : tryLocalBridgeSignMessage(payload, session, this.options));
       }
-
-      const externalSession = await readValidatedExternalSession(this.options);
-      if (externalSession) {
-        return externalSession.transport === "mobile-relay"
-          ? signMessageViaMobileRelay(input, externalSession, this.options)
-          : tryLocalBridgeSignMessage(input, externalSession, this.options);
-      }
-
-      throw new InferAdapterError(InferErrorCode.Unsupported, "Infer provider signMessage() unavailable");
+      const output = verifySignedMessageOutput(
+        response,
+        expectedInput,
+        scope,
+        account.publicKey.toString(),
+        allowLegacy
+      );
+      if (invocation)
+        await updateInjectedInvocationEvidence(invocation.id, {
+          final: serializeStoredFinal("signMessage", output)
+        });
+      return output;
     } catch (error) {
-      remapInferError(error);
+      if (
+        invocation &&
+        error instanceof InferAdapterError &&
+        error.code === InferErrorCode.UserRejected
+      ) {
+        await updateInjectedInvocationEvidence(invocation.id, {
+          final: { status: "rejected" }
+        });
+      } else if (invocation)
+        await updateDurableInvocation(invocation.id, "unknown").catch(
+          () => undefined
+        );
+      remapSignAndSubmitError(error);
     }
   }
 
   async signMessageAndVerify(input: CedraSignMessageInput): Promise<boolean> {
-    const account = await this.getAccount();
-    const output = await this.signMessage(input);
-    const publicKey = account.publicKey as unknown as {
-      verifySignature?: (args: { message: Uint8Array; signature: unknown }) => boolean;
-      verifySignatureAsync?: (args: { message: Uint8Array; signature: unknown }) => Promise<boolean>;
-    };
-    const message = new TextEncoder().encode(output.fullMessage || createFullMessage(input, account.address.toString()));
-
-    if (publicKey.verifySignature) {
-      return publicKey.verifySignature({ message, signature: output.signature });
+    validateMessageInput(input);
+    try {
+      await this.signMessage(input);
+      return true;
+    } catch (error) {
+      if (
+        error instanceof InferAdapterError &&
+        (error.code === InferErrorCode.InternalError ||
+          error.code === InferErrorCode.InvalidParams)
+      )
+        return false;
+      throw error;
     }
-
-    if (publicKey.verifySignatureAsync) {
-      return publicKey.verifySignatureAsync({ message, signature: output.signature });
-    }
-
-    return false;
   }
 
   async signTransaction(
-    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
+    transaction:
+      | AnyRawTransaction
+      | InferTransactionPayload
+      | CedraSignTransactionInputV1_1,
     options?: unknown
   ): Promise<InferSignTransactionResult> {
+    let invocation: DurableInvocation | undefined;
     try {
       const provider = this.refreshProvider();
       if (provider?.signTransaction) {
         const rawInput = isSdkRawTransaction(transaction)
           ? normalizeSdkRawTransactionInput(transaction, options)
           : undefined;
-        const response = await provider.signTransaction(rawInput ?? transaction, options);
+        const wire = encodeWireValue(
+          rawInput ?? toExternalSignTransactionInput(transaction, options)
+        ) as unknown as InferExternalSignTransactionInput;
+        let metadata: unknown = options;
+        if (
+          provider.integrationContractVersion !== undefined &&
+          provider.integrationContractVersion !== 1
+        ) {
+          throw new InferAdapterError(
+            InferErrorCode.Unsupported,
+            "Unsupported provider integration contract version"
+          );
+        }
+        if (provider.integrationContractVersion === 1) {
+          const prepared = await this.prepareInjectedSigning(
+            provider,
+            "signTransaction",
+            wire,
+            await this.getAccount(),
+            await this.getNetwork()
+          );
+          invocation = prepared.invocation;
+          metadata = prepared.metadata;
+        }
+        if (
+          provider.integrationContractVersion !== 1 &&
+          this.options.networkOverride !== undefined &&
+          (await this.getNetwork()).name !== this.options.networkOverride
+        ) {
+          throw new InferAdapterError(
+            InferErrorCode.InvalidNetwork,
+            "Approved network differs from networkOverride"
+          );
+        }
+        let response: unknown;
+        try {
+          response = await provider.signTransaction(wire, metadata);
+        } catch (cause) {
+          throw new InferAdapterError(
+            InferErrorCode.InternalError,
+            "Native transaction signing failed; no explicit decline was returned",
+            cause
+          );
+        }
         let result: unknown = response;
-        if (rawInput || (response && typeof response === "object" && "status" in response)) {
-          const record = snapshotProviderRecord(response, "Unreadable signing response");
-          if (!record) throw new InferAdapterError(InferErrorCode.InternalError, "Malformed signing response");
+        if (
+          rawInput ||
+          (response && typeof response === "object" && "status" in response)
+        ) {
+          const record = snapshotProviderRecord(
+            response,
+            "Unreadable signing response"
+          );
+          if (!record)
+            throw new InferAdapterError(
+              InferErrorCode.InternalError,
+              "Malformed signing response"
+            );
           if (Object.prototype.hasOwnProperty.call(record, "status")) {
-            if (record.status === "Rejected" && hasExactKeys(record, ["status"])) {
-              throw new InferAdapterError(InferErrorCode.UserRejected, "User rejected the transaction request");
+            if (
+              record.status === "Rejected" &&
+              hasExactKeys(record, ["status"])
+            ) {
+              throw new InferAdapterError(
+                InferErrorCode.UserRejected,
+                "User rejected the transaction request"
+              );
             }
-            if (record.status !== "Approved" || !hasExactKeys(record, ["status", "args"])) {
-              throw new InferAdapterError(InferErrorCode.InternalError, "Ambiguous signing response");
+            if (
+              record.status !== "Approved" ||
+              !hasExactKeys(record, ["status", "args"])
+            ) {
+              throw new InferAdapterError(
+                InferErrorCode.InternalError,
+                "Ambiguous signing response"
+              );
             }
             result = record.args;
-          } else {
-            result = unwrap(record);
-          }
-        } else {
-          result = unwrap(response);
-        }
-        return rawInput
-          ? deserializeSignTransactionResult(result, rawInput.rawTransactionBcsHex)
-          : normalizeSignTransactionResult(result);
+          } else result = unwrap(record);
+        } else result = unwrap(response);
+        const output =
+          rawInput || invocation
+            ? deserializeSignTransactionResult(
+                result,
+                rawInput?.rawTransactionBcsHex
+              )
+            : normalizeSignTransactionResult(result);
+        if (invocation)
+          await updateInjectedInvocationEvidence(invocation.id, {
+            final: serializeStoredFinal(
+              "signTransaction",
+              output as CedraSignTransactionOutputV1_1
+            )
+          });
+        return output;
       }
-
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
-        const externalInput = toExternalSignTransactionInput(transaction, options);
+        const externalInput = toExternalSignTransactionInput(
+          transaction,
+          options
+        );
         const result = await (externalSession.transport === "mobile-relay"
-          ? signTransactionViaMobileRelay(externalInput, externalSession, this.options)
-          : tryLocalBridgeSignTransaction(externalInput, externalSession, this.options));
-        if ("rawTransactionBcsHex" in externalInput) {
-          return deserializeSignTransactionResult(result, externalInput.rawTransactionBcsHex);
+          ? signTransactionViaMobileRelay(
+              externalInput,
+              externalSession,
+              this.options
+            )
+          : tryLocalBridgeSignTransaction(
+              externalInput,
+              externalSession,
+              this.options
+            ));
+        if ("rawTransactionBcsHex" in externalInput)
+          return deserializeSignTransactionResult(
+            result,
+            externalInput.rawTransactionBcsHex
+          );
+        return result;
+      }
+      throw new InferAdapterError(
+        InferErrorCode.Unsupported,
+        "Infer provider signTransaction() unavailable"
+      );
+    } catch (error) {
+      if (
+        invocation &&
+        error instanceof InferAdapterError &&
+        error.code === InferErrorCode.UserRejected
+      ) {
+        await updateInjectedInvocationEvidence(invocation.id, {
+          final: { status: "rejected" }
+        });
+      } else if (invocation)
+        await updateDurableInvocation(invocation.id, "unknown").catch(
+          () => undefined
+        );
+      remapSignAndSubmitError(error);
+    }
+  }
+
+  /** Documented SDK convenience; the standard feature validates its own input first. */
+  async signAndSubmitTransaction(
+    transaction:
+      | AnyRawTransaction
+      | InferTransactionPayload
+      | CedraSignAndSubmitTransactionInput,
+    options?: unknown
+  ): Promise<CedraSignAndSubmitTransactionOutput> {
+    const wire = normalizeSubmitInput(
+      options === undefined ? transaction : { data: transaction, options }
+    );
+    const required =
+      wire.options.expireTimestamp !== undefined ||
+      wire.options.sequenceNumber !== undefined ||
+      wire.sender !== undefined ||
+      wire.chainId !== undefined;
+    return this.submitNormalized(wire, {
+      ...this.options,
+      ...(required ? { requireContractVersion: 1 as const } : {})
+    });
+  }
+
+  async signAndSubmitTransactionWithRestrictions(
+    input: CanonicalTransactionInput,
+    callOptions: Pick<InferWalletOptions, "onInvocationPrepared"> = {}
+  ): Promise<CedraSignAndSubmitTransactionOutput> {
+    const wire = normalizeSubmitInput(input);
+    return this.submitNormalized(wire, {
+      ...this.options,
+      ...callOptions,
+      requireContractVersion: 1
+    });
+  }
+
+  private async submitNormalized(
+    wire: CanonicalTransactionInput,
+    callOptions: InferWalletOptions
+  ): Promise<CedraSignAndSubmitTransactionOutput> {
+    try {
+      const provider = this.refreshProvider();
+      if (provider?.signAndSubmitTransaction) {
+        const account = await this.getAccount();
+        const network = await this.getNetwork();
+        const scope = {
+          origin: typeof window === "undefined" ? "" : window.location.origin,
+          accountAddress: canonicalAddress(account.address.toString()),
+          network: network.name,
+          chainId: network.chainId
+        };
+        if (!scope.origin || typeof scope.network !== "string")
+          throw new InferAdapterError(
+            InferErrorCode.Unsupported,
+            "A browser and approved network are required"
+          );
+        const invocation = await prepareDurableInvocation(
+          {
+            transport: "injected",
+            sessionId: "injected:" + scope.accountAddress + ":" + scope.chainId,
+            address: scope.accountAddress,
+            network: scope.network,
+            chainId: scope.chainId
+          },
+          "signAndSubmitTransaction",
+          {
+            requestCommitment: requestCommitment(
+              "signAndSubmitTransaction",
+              scope,
+              wire
+            ),
+            requestPayload: wire,
+            endpoint: scope.origin
+          }
+        );
+        const descriptor = Object.freeze(invocationDescriptor(invocation));
+        try {
+          await callOptions.onInvocationPrepared?.(descriptor);
+          if (
+            provider.integrationContractVersion !== undefined &&
+            provider.integrationContractVersion !== 1
+          )
+            throw new InferAdapterError(
+              InferErrorCode.Unsupported,
+              "Unsupported provider integration contract version"
+            );
+          if (
+            callOptions.requireContractVersion === 1 &&
+            (provider.integrationContractVersion !== 1 ||
+              !provider.capabilities?.transactionRestrictions)
+          ) {
+            throw new InferAdapterError(
+              InferErrorCode.Unsupported,
+              "This injected wallet does not support required transaction restrictions"
+            );
+          }
+          this.assertSubmissionScope(
+            wire,
+            scope.accountAddress,
+            scope.chainId,
+            scope.network
+          );
+        } catch (cause) {
+          await updateDurableInvocation(invocation.id, "not-invoked").catch(
+            () => undefined
+          );
+          throw notInvokedError(
+            "Wallet submission stopped before provider invocation",
+            descriptor,
+            cause
+          );
+        }
+        let providerResult: unknown;
+        try {
+          providerResult = await provider.signAndSubmitTransaction(
+            (provider.integrationContractVersion === 1
+              ? wire
+              : legacySubmitInput(wire)) as unknown as InferTransactionPayload,
+            provider.integrationContractVersion === 1
+              ? {
+                  contractVersion: 1,
+                  invocationId: invocation.id,
+                  requestCommitment: invocation.requestCommitment,
+                  scope
+                }
+              : undefined
+          );
+        } catch (cause) {
+          await updateDurableInvocation(invocation.id, "unknown").catch(
+            () => undefined
+          );
+          throw new InferAdapterError(
+            InferErrorCode.RequestOutcomeUnknown,
+            "Injected wallet submission outcome is unknown",
+            cause
+          );
+        }
+        let result: CedraSignAndSubmitTransactionOutput;
+        try {
+          result = normalizeSignAndSubmitProviderResult(providerResult);
+        } catch (error) {
+          if (
+            error instanceof InferAdapterError &&
+            error.code === InferErrorCode.UserRejected
+          ) {
+            await updateInjectedInvocationEvidence(invocation.id, {
+              final: { status: "rejected" }
+            });
+          } else
+            await updateDurableInvocation(invocation.id, "unknown").catch(
+              () => undefined
+            );
+          throw error;
+        }
+        try {
+          await updateInjectedInvocationEvidence(invocation.id, {
+            final: {
+              status: "approved",
+              method: "signAndSubmitTransaction",
+              hash: result.hash
+            }
+          });
+        } catch (cause) {
+          throw new InferAdapterError(
+            InferErrorCode.RequestOutcomeUnknown,
+            "Native submission returned a hash but local evidence could not be saved",
+            { cause, hash: result.hash }
+          );
         }
         return result;
       }
-
-      throw new InferAdapterError(InferErrorCode.Unsupported, "Infer provider signTransaction() unavailable");
+      const session = await readValidatedExternalSession(callOptions);
+      if (session) {
+        const scopeFailure = (() => {
+          try {
+            this.assertSubmissionScope(
+              wire,
+              session.address,
+              session.chainId,
+              session.network
+            );
+            return undefined;
+          } catch (cause) {
+            return cause;
+          }
+        })();
+        // Scope errors are fenced after the awaited invocation hook, before dispatch.
+        const options = scopeFailure
+          ? {
+              ...callOptions,
+              onInvocationPrepared: async (
+                invocation: Readonly<RecoverableInvocation>
+              ) => {
+                await callOptions.onInvocationPrepared?.(invocation);
+                throw scopeFailure;
+              }
+            }
+          : callOptions;
+        return session.transport === "mobile-relay"
+          ? signAndSubmitViaMobileRelay(
+              wire as unknown as CedraSignAndSubmitTransactionInput,
+              session,
+              options
+            )
+          : tryLocalBridgeSignAndSubmit(
+              wire as unknown as CedraSignAndSubmitTransactionInput,
+              session,
+              options
+            );
+      }
+      throw new InferAdapterError(
+        InferErrorCode.Unsupported,
+        "Infer wallet submission is unavailable"
+      );
     } catch (error) {
       remapSignAndSubmitError(error);
     }
   }
 
-  async signAndSubmitTransaction(
-    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignAndSubmitTransactionInput,
-    options?: unknown
-  ): Promise<CedraSignAndSubmitTransactionOutput> {
-    try {
-      const provider = this.refreshProvider();
-      if (provider?.signAndSubmitTransaction) {
-        let providerResult: unknown;
-        try {
-          providerResult = await provider.signAndSubmitTransaction(
-            transaction as AnyRawTransaction | InferTransactionPayload,
-            options
-          );
-        } catch (error) {
-          throw new InferAdapterError(
-            InferErrorCode.InternalError,
-            "Infer provider signAndSubmitTransaction() failed",
-            error
-          );
-        }
-        return normalizeSignAndSubmitProviderResult(providerResult);
-      }
-
-      const externalSession = await readValidatedExternalSession(this.options);
-      if (externalSession) {
-        return externalSession.transport === "mobile-relay"
-          ? signAndSubmitViaMobileRelay(
-              transaction as CedraSignAndSubmitTransactionInput,
-              externalSession,
-              this.options
-            )
-          : tryLocalBridgeSignAndSubmit(
-              transaction as CedraSignAndSubmitTransactionInput,
-              externalSession,
-              this.options
-            );
-      }
-
+  private assertSubmissionScope(
+    wire: CanonicalTransactionInput,
+    address: string,
+    chainId: number,
+    network: string
+  ): void {
+    if (wire.sender !== undefined && wire.sender !== canonicalAddress(address))
       throw new InferAdapterError(
-        InferErrorCode.Unsupported,
-        "Infer provider signAndSubmitTransaction() unavailable"
+        InferErrorCode.Unauthorized,
+        "Requested sender differs from the approved account"
       );
-    } catch (error) {
-      remapSignAndSubmitError(error);
-    }
+    if (wire.chainId !== undefined && wire.chainId !== chainId)
+      throw new InferAdapterError(
+        InferErrorCode.InvalidNetwork,
+        "Requested chain differs from the approved chain"
+      );
+    if (
+      this.options.networkOverride !== undefined &&
+      this.options.networkOverride !== network
+    )
+      throw new InferAdapterError(
+        InferErrorCode.InvalidNetwork,
+        "Approved wallet network differs from networkOverride"
+      );
+    if (
+      wire.options.expireTimestamp !== undefined &&
+      BigInt(wire.options.expireTimestamp) <=
+        BigInt(Math.floor(Date.now() / 1000))
+    )
+      throw new InferAdapterError(
+        InferErrorCode.InvalidParams,
+        "Approved transaction expiry has elapsed"
+      );
   }
 
   async signAndSubmitBCSTransaction(

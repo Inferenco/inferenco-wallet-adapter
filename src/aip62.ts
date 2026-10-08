@@ -1,4 +1,9 @@
 import {
+  normalizeSubmitInput,
+  type CanonicalTransactionInput
+} from "./integrationContract";
+import { hasNonDispatchEvidence } from "./nonDispatchEvidence";
+import {
   AccountInfo,
   CEDRA_CHAINS,
   UserResponseStatus,
@@ -73,7 +78,23 @@ export type InferConnectionHealthFeature = {
   };
 };
 
-export type InferCedraFeatures = CedraFeatures & InferCedraOnDisconnectFeature &
+export type InferTransactionSubmissionFeature = {
+  "inferenco:transactionSubmission": {
+    version: "1.0.0";
+    contractVersion: 1;
+    signAndSubmitTransaction: (
+      input: CanonicalTransactionInput,
+      options?: Pick<InferWalletOptions, "onInvocationPrepared">
+    ) => Promise<
+      | { status: UserResponseStatus.APPROVED; args: { hash: string } }
+      | { status: UserResponseStatus.REJECTED }
+    >;
+    isNotInvoked: typeof hasNonDispatchEvidence;
+  };
+};
+export type InferCedraFeatures = CedraFeatures &
+  InferCedraOnDisconnectFeature &
+  InferTransactionSubmissionFeature &
   InferRecoveredOutcomesFeature & InferConnectionHealthFeature;
 
 class InferWalletAccount implements CedraWalletAccount {
@@ -157,6 +178,29 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
         client.on("disconnect", callback);
       }
     },
+    "inferenco:transactionSubmission": {
+      version: "1.0.0",
+      contractVersion: 1,
+      isNotInvoked: hasNonDispatchEvidence,
+      signAndSubmitTransaction: async (input, options) => {
+        try {
+          return {
+            status: UserResponseStatus.APPROVED,
+            args: await client.signAndSubmitTransactionWithRestrictions(
+              input,
+              options
+            )
+          };
+        } catch (error) {
+          if (
+            error instanceof InferAdapterError &&
+            error.code === InferErrorCode.UserRejected
+          )
+            return { status: UserResponseStatus.REJECTED };
+          throw error;
+        }
+      }
+    },
     "inferenco:connectionHealth": {
       version: "1.0.0",
       get: () => client.checkConnectionHealth(),
@@ -180,11 +224,20 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
     "cedra:signMessage": {
       version: "1.0.0",
       signMessage: async (input) => {
-        const output = await client.signMessage(input);
+        try {
+          const output = await client.signMessage(input);
         return {
           status: UserResponseStatus.APPROVED,
           args: output
         };
+        } catch (error) {
+          if (
+            error instanceof InferAdapterError &&
+            error.code === InferErrorCode.UserRejected
+          )
+            return { status: UserResponseStatus.REJECTED };
+          throw error;
+        }
       }
     },
     "cedra:signTransaction": {
@@ -219,7 +272,12 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
       version: "1.1.0",
       signAndSubmitTransaction: async (input: CedraSignAndSubmitTransactionInput) => {
         try {
-          const result = await client.signAndSubmitTransaction(input);
+          const result = await client.signAndSubmitTransaction(
+            normalizeSubmitInput(
+              input,
+              "standard"
+            ) as unknown as CedraSignAndSubmitTransactionInput
+          );
           return {
             status: UserResponseStatus.APPROVED,
             args: result

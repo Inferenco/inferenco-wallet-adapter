@@ -8,7 +8,7 @@
   <a href="https://github.com/Inferenco/nova-plugin-wallet-adapter/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="license" /></a>
   <img src="https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/ESM%20%2B%20CJS-supported-brightgreen" alt="Module formats" />
-  <img src="https://img.shields.io/badge/version-0.2.0--rc.8-0a3d91" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.2.1--rc.1-0a3d91" alt="version" />
 </p>
 
 <p align="center">
@@ -17,6 +17,16 @@
 </p>
 
 ---
+
+## 0.2.1 migration and qualification
+
+This checkout is `0.2.1-rc.1`, with final `0.2.1` the release target. Publication and native/device acceptance are separate release gates. See the [integration contract](docs/integration-contract.md) for the exact peer matrix and bounded wire format.
+
+The standard `cedra:signAndSubmitTransaction` accepts wallet-standard `{payload,maxGasAmount?,gasUnitPrice?}`. SDK `{data,options}` convenience belongs to the class API. Applications that require expiry, sequence, sender or chain restrictions use the explicit `inferenco:transactionSubmission` feature and a peer advertising contract v1; missing capability rejects before dispatch. Required restrictions are never dropped to retry.
+
+Persist the descriptor in the awaited `onInvocationPrepared` hook before dispatch. After an interrupted request, use `inferenco:recoveredOutcomes.reconcileInvocation(invocationId)` or its existing read APIs to recover that original operation. Only `isNotInvoked(error, descriptor)` from the submission feature proves no dispatch for that exact invocation and commitment; a generic throw remains uncertain. A returned hash still requires application receipt/effect verification. Acknowledge only after durable application acceptance, or archive unresolved work only after independent reconciliation.
+
+Message approvals contain exact requested message/nonce/context and an SDK signature verified against the approved key. Only explicit `Rejected` means decline. The new labeled `cedra:message:v1` profile requires a qualified v1 peer; unsupported/incomplete legacy outcomes remain failures or unknown, and verified legacy raw creator authentication remains supported by consumers.
 
 ## Overview
 
@@ -63,7 +73,11 @@ Infer Desk's HTTP bridge binds at `http://127.0.0.1:21984/<token>/<route>` and r
 The adapter consumes either channel and prefixes every bridge URL with `/<token>/`. No dapp-side configuration is required.
 
 ```typescript
-import { readBridgeToken, bridgeUrlWithToken, MISSING_BRIDGE_TOKEN_MESSAGE } from "@inferenco/infer-wallet-adapter";
+import {
+  readBridgeToken,
+  bridgeUrlWithToken,
+  MISSING_BRIDGE_TOKEN_MESSAGE
+} from "@inferenco/infer-wallet-adapter";
 
 // The token is read at module-init time. After wallet restart, the
 // dapp re-reads on the next page load.
@@ -71,7 +85,9 @@ const token = readBridgeToken();
 console.log("current bridge token:", token);
 
 // Build a fully-qualified URL with the per-session token in the path.
-const url = bridgeUrlWithToken("/connect", { bridgeBaseUrl: "http://127.0.0.1:21984" });
+const url = bridgeUrlWithToken("/connect", {
+  bridgeBaseUrl: "http://127.0.0.1:21984"
+});
 // => "http://127.0.0.1:21984/<token>/connect"
 
 // If the dapp is opened outside Infer Desk, the adapter throws this:
@@ -98,7 +114,7 @@ Or register manually with options:
 import { registerInferWallet } from "@inferenco/infer-wallet-adapter/aip62";
 
 registerInferWallet({
-  forceRegistration: true,  // Register even without injected provider
+  forceRegistration: true // Register even without injected provider
 });
 ```
 
@@ -118,7 +134,7 @@ console.log(account.address);
 // Sign a message
 const response = await wallet.signMessage({
   message: "Hello Infer!",
-  nonce: "unique-nonce-123",
+  nonce: "unique-nonce-123"
 });
 
 // Sign and submit a transaction
@@ -126,8 +142,8 @@ const result = await wallet.signAndSubmitTransaction({
   data: {
     function: "0x1::coin::transfer",
     typeArguments: ["0x1::aptos_coin::AptosCoin"],
-    functionArguments: ["0xrecipient", 1000],
-  },
+    functionArguments: ["0xrecipient", 1000]
+  }
 });
 
 // Disconnect
@@ -143,7 +159,7 @@ import { InferClient } from "@inferenco/infer-wallet-adapter";
 
 const client = new InferClient({
   bridgeBaseUrl: "http://127.0.0.1:21984",
-  detectAliases: true,
+  detectAliases: true
 });
 
 const { account, network } = await client.connect();
@@ -159,7 +175,7 @@ If your dApp uses Cedra `WalletCore`, call the resume helper during provider boo
 ```typescript
 import {
   INFER_CONNECT_NAME,
-  tryResumeInferWalletConnection,
+  tryResumeInferWalletConnection
 } from "@inferenco/infer-wallet-adapter";
 
 await tryResumeInferWalletConnection(walletCore);
@@ -218,18 +234,18 @@ For more detail, see [Architecture docs](docs/architecture.md).
 
 The plugin adapter class, compatible with plugin-style wallet consumers.
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `connect()` | `Promise<AccountInfo>` | Connect to Infer Desk or Infer Wallet |
-| `account()` | `Promise<AccountInfo>` | Get current account info |
-| `disconnect()` | `Promise<void>` | Disconnect and clear session |
-| `signMessage(input)` | `Promise<CedraSignMessageOutput>` | Sign an arbitrary message |
-| `signTransaction(tx, opts?)` | `Promise<Uint8Array \| { authenticator, rawTransaction?: AnyRawTransaction }>` | Sign a transaction without submitting |
-| `signAndSubmitTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>` | Sign and submit a transaction |
-| `signAndSubmitBCSTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>` | Sign and submit (BCS variant) |
-| `onAccountChange(cb)` | `Promise<void>` | Subscribe to account changes |
-| `onNetworkChange(cb)` | `Promise<void>` | Subscribe to network changes |
-| `deeplinkProvider(url?)` | `string` | Generate a deeplink URL |
+| Method                                   | Returns                                                                        | Description                           |
+| ---------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------- |
+| `connect()`                              | `Promise<AccountInfo>`                                                         | Connect to Infer Desk or Infer Wallet |
+| `account()`                              | `Promise<AccountInfo>`                                                         | Get current account info              |
+| `disconnect()`                           | `Promise<void>`                                                                | Disconnect and clear session          |
+| `signMessage(input)`                     | `Promise<CedraSignMessageOutput>`                                              | Sign an arbitrary message             |
+| `signTransaction(tx, opts?)`             | `Promise<Uint8Array \| { authenticator, rawTransaction?: AnyRawTransaction }>` | Sign a transaction without submitting |
+| `signAndSubmitTransaction(tx, opts?)`    | `Promise<CedraSignAndSubmitTransactionOutput>`                                 | Sign and submit a transaction         |
+| `signAndSubmitBCSTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>`                                 | Sign and submit (BCS variant)         |
+| `onAccountChange(cb)`                    | `Promise<void>`                                                                | Subscribe to account changes          |
+| `onNetworkChange(cb)`                    | `Promise<void>`                                                                | Subscribe to network changes          |
+| `deeplinkProvider(url?)`                 | `string`                                                                       | Generate a deeplink URL               |
 
 `signTransaction` accepts prebuilt SDK transactions and Cedra wallet-standard v1.1
 inputs, including `secondarySigners` and fee payer fields. When the wallet returns
@@ -238,16 +254,16 @@ wrapper so secondary signer and fee payer metadata remains available for submiss
 
 **Properties:**
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `name` | `"Infer Connect"` | Wallet display name |
-| `url` | `string` | Wallet website URL |
-| `icon` | `string` | Base64 SVG icon |
-| `readyState` | `InferWalletReadyState` | Current detection state |
-| `connecting` | `boolean` | Connection in progress |
-| `connected` | `boolean` | Currently connected |
-| `publicAccount` | `InferAccountKeys` | Cached public key info |
-| `network` | `InferNetworkInfo` | Current network info |
+| Property        | Type                    | Description             |
+| --------------- | ----------------------- | ----------------------- |
+| `name`          | `"Infer Connect"`       | Wallet display name     |
+| `url`           | `string`                | Wallet website URL      |
+| `icon`          | `string`                | Base64 SVG icon         |
+| `readyState`    | `InferWalletReadyState` | Current detection state |
+| `connecting`    | `boolean`               | Connection in progress  |
+| `connected`     | `boolean`               | Currently connected     |
+| `publicAccount` | `InferAccountKeys`      | Cached public key info  |
+| `network`       | `InferNetworkInfo`      | Current network info    |
 
 ### `registerInferWallet(options?)`
 
@@ -262,18 +278,18 @@ Registers Infer Connect as an AIP-62 wallet-standard wallet. Implements all Cedr
 
 The core client powering both adapter surfaces. Use directly for advanced control.
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `connect()` | `Promise<{ account, network }>` | Connect to Infer Desk or Infer Wallet |
-| `disconnect()` | `Promise<void>` | Disconnect and revoke session |
-| `getAccount()` | `Promise<AccountInfo>` | Fetch account from provider or session |
-| `getNetwork()` | `Promise<NetworkInfo>` | Fetch current network |
-| `signMessage(input)` | `Promise<CedraSignMessageOutput>` | Sign message via active transport |
-| `signMessageAndVerify(input)` | `Promise<boolean>` | Sign and verify locally |
-| `signTransaction(tx, opts?)` | `Promise<InferSignTransactionResult>` | Sign transaction |
-| `signAndSubmitTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>` | Sign and submit |
-| `hasProvider()` | `boolean` | Check for injected provider |
-| `hasExternalSession()` | `boolean` | Check for stored Infer Desk or Infer Wallet session |
+| Method                                | Returns                                        | Description                                         |
+| ------------------------------------- | ---------------------------------------------- | --------------------------------------------------- |
+| `connect()`                           | `Promise<{ account, network }>`                | Connect to Infer Desk or Infer Wallet               |
+| `disconnect()`                        | `Promise<void>`                                | Disconnect and revoke session                       |
+| `getAccount()`                        | `Promise<AccountInfo>`                         | Fetch account from provider or session              |
+| `getNetwork()`                        | `Promise<NetworkInfo>`                         | Fetch current network                               |
+| `signMessage(input)`                  | `Promise<CedraSignMessageOutput>`              | Sign message via active transport                   |
+| `signMessageAndVerify(input)`         | `Promise<boolean>`                             | Sign and verify locally                             |
+| `signTransaction(tx, opts?)`          | `Promise<InferSignTransactionResult>`          | Sign transaction                                    |
+| `signAndSubmitTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>` | Sign and submit                                     |
+| `hasProvider()`                       | `boolean`                                      | Check for injected provider                         |
+| `hasExternalSession()`                | `boolean`                                      | Check for stored Infer Desk or Infer Wallet session |
 
 For the complete type reference, see [API Reference docs](docs/api-reference.md).
 
@@ -289,13 +305,13 @@ const wallet = new InferWallet({
   websiteUrl: "https://inferenco.com/infer-desk",
 
   // Registration behavior
-  forceRegistration: false,     // Register even without injected provider
-  desktopRegistration: true,    // Register on desktop browsers
-  detectAliases: true,          // Check window.cedra / window.aptos
+  forceRegistration: false, // Register even without injected provider
+  desktopRegistration: true, // Register on desktop browsers
+  detectAliases: true, // Check window.cedra / window.aptos
 
   // Network
-  networkOverride: undefined,   // Force specific network
-  fullnodeUrl: undefined,       // Custom fullnode for SDK operations
+  networkOverride: undefined, // Require the approved network before signing
+  fullnodeUrl: undefined, // Custom fullnode for SDK operations
 
   // Infer Desk (desktop bridge)
   bridgeBaseUrl: "http://127.0.0.1:21984",
@@ -308,7 +324,7 @@ const wallet = new InferWallet({
   websocketBaseUrl: "wss://nova-service-....run.app/v1/ws",
   mobilePollIntervalMs: 1000,
   mobileRequestTimeoutMs: 180000,
-  mobileSocketTimeoutMs: 15000,
+  mobileSocketTimeoutMs: 15000
 });
 ```
 
@@ -319,7 +335,10 @@ See [Configuration docs](docs/configuration.md) for detailed descriptions of eac
 All adapter errors are instances of `InferAdapterError` with a typed error code:
 
 ```typescript
-import { InferAdapterError, InferErrorCode } from "@inferenco/infer-wallet-adapter";
+import {
+  InferAdapterError,
+  InferErrorCode
+} from "@inferenco/infer-wallet-adapter";
 
 try {
   await wallet.connect();
@@ -340,16 +359,16 @@ try {
 }
 ```
 
-| Error Code | Value | Description |
-|------------|-------|-------------|
-| `UserRejected` | `USER_REJECTED` | User declined the request |
-| `Unauthorized` | `UNAUTHORIZED` | Session expired or invalid |
-| `Unsupported` | `UNSUPPORTED` | Operation not supported by provider |
-| `NotInstalled` | `NOT_INSTALLED` | No provider or bridge found |
-| `ConnectionTimeout` | `CONNECTION_TIMEOUT` | Bridge/relay connection timed out |
-| `InvalidParams` | `INVALID_PARAMS` | Invalid parameters provided |
-| `InvalidNetwork` | `INVALID_NETWORK` | Network mismatch or unavailable |
-| `InternalError` | `INTERNAL_ERROR` | Unexpected internal error |
+| Error Code          | Value                | Description                         |
+| ------------------- | -------------------- | ----------------------------------- |
+| `UserRejected`      | `USER_REJECTED`      | User declined the request           |
+| `Unauthorized`      | `UNAUTHORIZED`       | Session expired or invalid          |
+| `Unsupported`       | `UNSUPPORTED`        | Operation not supported by provider |
+| `NotInstalled`      | `NOT_INSTALLED`      | No provider or bridge found         |
+| `ConnectionTimeout` | `CONNECTION_TIMEOUT` | Bridge/relay connection timed out   |
+| `InvalidParams`     | `INVALID_PARAMS`     | Invalid parameters provided         |
+| `InvalidNetwork`    | `INVALID_NETWORK`    | Network mismatch or unavailable     |
+| `InternalError`     | `INTERNAL_ERROR`     | Unexpected internal error           |
 
 ## Provider Detection
 
@@ -374,12 +393,12 @@ Sessions are persisted in `localStorage` under the key `inferenco:infer-session`
 
 Communication between the dApp and Infer Wallet through nova-service is end-to-end encrypted:
 
-| Layer | Algorithm | Purpose |
-|-------|-----------|---------|
-| Key exchange | X25519 (ECDH) | Derive shared secret between dApp and wallet |
-| Key derivation | HKDF-SHA256 | Deterministic key from shared secret with `"infer-connect-relay"` info |
-| Encryption | XChaCha20-Poly1305 | Authenticated encryption of all request/response payloads |
-| Nonce | 24 random bytes | Per-message nonce prevents replay attacks |
+| Layer          | Algorithm          | Purpose                                                                |
+| -------------- | ------------------ | ---------------------------------------------------------------------- |
+| Key exchange   | X25519 (ECDH)      | Derive shared secret between dApp and wallet                           |
+| Key derivation | HKDF-SHA256        | Deterministic key from shared secret with `"infer-connect-relay"` info |
+| Encryption     | XChaCha20-Poly1305 | Authenticated encryption of all request/response payloads              |
+| Nonce          | 24 random bytes    | Per-message nonce prevents replay attacks                              |
 
 The relay server (nova-service) never sees plaintext request or response data.
 
@@ -387,11 +406,11 @@ The relay server (nova-service) never sees plaintext request or response data.
 
 The package ships three entry points:
 
-| Entry Point | Import Path | Contents |
-|-------------|-------------|----------|
-| Main | `@inferenco/infer-wallet-adapter` | `InferWallet`, `InferClient`, types, utilities, errors |
-| AIP-62 | `@inferenco/infer-wallet-adapter/aip62` | `createInferAIP62Wallet`, `registerInferWallet` |
-| Auto-register | `@inferenco/infer-wallet-adapter/auto-register` | Side-effect registration (import-only) |
+| Entry Point   | Import Path                                     | Contents                                               |
+| ------------- | ----------------------------------------------- | ------------------------------------------------------ |
+| Main          | `@inferenco/infer-wallet-adapter`               | `InferWallet`, `InferClient`, types, utilities, errors |
+| AIP-62        | `@inferenco/infer-wallet-adapter/aip62`         | `createInferAIP62Wallet`, `registerInferWallet`        |
+| Auto-register | `@inferenco/infer-wallet-adapter/auto-register` | Side-effect registration (import-only)                 |
 
 Both ESM and CommonJS builds are included with full TypeScript declarations.
 
@@ -399,16 +418,16 @@ Both ESM and CommonJS builds are included with full TypeScript declarations.
 
 When Infer Desk is running locally, the adapter communicates via HTTP:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/connect` | `GET` | Initiate connection request |
-| `/sign-message` | `POST` | Sign message request |
-| `/sign-transaction` | `POST` | Sign transaction request |
-| `/transaction` | `POST` | Sign and submit transaction |
-| `/request/{requestId}` | `GET` | Poll for request status |
-| `/session/{sessionId}` | `GET` | Validate existing session |
-| `/connection` | `DELETE` | Revoke connection |
-| `/session/{sessionId}` | `DELETE` | Revoke session |
+| Endpoint               | Method   | Description                 |
+| ---------------------- | -------- | --------------------------- |
+| `/connect`             | `GET`    | Initiate connection request |
+| `/sign-message`        | `POST`   | Sign message request        |
+| `/sign-transaction`    | `POST`   | Sign transaction request    |
+| `/transaction`         | `POST`   | Sign and submit transaction |
+| `/request/{requestId}` | `GET`    | Poll for request status     |
+| `/session/{sessionId}` | `GET`    | Validate existing session   |
+| `/connection`          | `DELETE` | Revoke connection           |
+| `/session/{sessionId}` | `DELETE` | Revoke session              |
 
 All operations use a poll-based flow: initiate a request, receive a `requestId`, then poll until the user approves or rejects in Infer Desk.
 
@@ -433,24 +452,24 @@ npm run typecheck
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | Transport mechanisms, connection flows, and system design |
-| [API Reference](docs/api-reference.md) | Complete type and method documentation |
-| [Configuration](docs/configuration.md) | All options with defaults and examples |
-| [Mobile Relay Protocol](docs/mobile-relay.md) | Infer Wallet end-to-end encrypted communication |
-| [Changelog](CHANGELOG.md) | Version history and release notes |
+| Document                                      | Description                                               |
+| --------------------------------------------- | --------------------------------------------------------- |
+| [Architecture](docs/architecture.md)          | Transport mechanisms, connection flows, and system design |
+| [API Reference](docs/api-reference.md)        | Complete type and method documentation                    |
+| [Configuration](docs/configuration.md)        | All options with defaults and examples                    |
+| [Mobile Relay Protocol](docs/mobile-relay.md) | Infer Wallet end-to-end encrypted communication           |
+| [Changelog](CHANGELOG.md)                     | Version history and release notes                         |
 
 ## Dependencies
 
-| Package | Purpose |
-|---------|---------|
-| `@cedra-labs/ts-sdk` | Transaction building, network utilities, SDK operations |
-| `@cedra-labs/wallet-standard` | AIP-62 wallet-standard types and registration |
-| `@noble/curves` | X25519 ECDH key exchange (Infer Wallet relay) |
-| `@noble/hashes` | SHA256, HKDF key derivation (Infer Wallet relay) |
-| `@noble/ciphers` | XChaCha20-Poly1305 authenticated encryption (Infer Wallet relay) |
-| `eventemitter3` | Event emission for account/network change subscriptions |
+| Package                       | Purpose                                                          |
+| ----------------------------- | ---------------------------------------------------------------- |
+| `@cedra-labs/ts-sdk`          | Transaction building, network utilities, SDK operations          |
+| `@cedra-labs/wallet-standard` | AIP-62 wallet-standard types and registration                    |
+| `@noble/curves`               | X25519 ECDH key exchange (Infer Wallet relay)                    |
+| `@noble/hashes`               | SHA256, HKDF key derivation (Infer Wallet relay)                 |
+| `@noble/ciphers`              | XChaCha20-Poly1305 authenticated encryption (Infer Wallet relay) |
+| `eventemitter3`               | Event emission for account/network change subscriptions          |
 
 ## License
 

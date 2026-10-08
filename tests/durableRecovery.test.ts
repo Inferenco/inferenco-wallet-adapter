@@ -92,7 +92,13 @@ describe("durable recovery across page and session boundaries", () => {
       expect(String(input)).toContain("/transaction-request/direct-desktop");
       return json({ status: "approved", requestId: "direct-desktop", hash });
     });
-    await expect(tryLocalBridgeSignAndSubmit({} as never, session)).resolves.toEqual({ hash });
+    await expect(tryLocalBridgeSignAndSubmit({
+          payload: {
+            function: "0x1::fixture::run",
+            typeArguments: [],
+            functionArguments: []
+          }
+        } as never, session)).resolves.toEqual({ hash });
     const [row] = await listRecoverableRequests();
     const calls = fetch.mock.calls.length;
     window.localStorage.clear();
@@ -123,7 +129,13 @@ describe("durable recovery across page and session boundaries", () => {
         encryptedResult: encryptJson({ hash }, mobile.sharedSecret!)
       });
     });
-    await expect(signAndSubmitViaMobileRelay({} as never, mobile,
+    await expect(signAndSubmitViaMobileRelay({
+          payload: {
+            function: "0x1::fixture::run",
+            typeArguments: [],
+            functionArguments: []
+          }
+        } as never, mobile,
       { mobileRequestTimeoutMs: 100 })).resolves.toEqual({ hash });
     const [row] = await listRecoverableRequests();
     const calls = fetch.mock.calls.length;
@@ -190,7 +202,13 @@ describe("durable recovery across page and session boundaries", () => {
     storeExternalSession(session);
     const fetch = vi.spyOn(globalThis, "fetch");
     let invocationId = "";
-    await expect(tryLocalBridgeSignAndSubmit({} as never, session, {
+    await expect(tryLocalBridgeSignAndSubmit({
+          payload: {
+            function: "0x1::fixture::run",
+            typeArguments: [],
+            functionArguments: []
+          }
+        } as never, session, {
       onInvocationPrepared: async (invocation) => {
         invocationId = invocation.invocationId;
         throw new Error("consumer journal unavailable");
@@ -220,7 +238,13 @@ describe("durable recovery across page and session boundaries", () => {
     storeExternalSession(session);
     vi.stubGlobal("indexedDB", undefined);
     const fetch = vi.spyOn(globalThis, "fetch");
-    await expect(tryLocalBridgeSignAndSubmit({} as never, session))
+    await expect(tryLocalBridgeSignAndSubmit({
+          payload: {
+            function: "0x1::fixture::run",
+            typeArguments: [],
+            functionArguments: []
+          }
+        } as never, session))
       .rejects.toMatchObject({ code: "REQUEST_NOT_INVOKED", dispatch: "not-invoked" });
     expect(fetch).not.toHaveBeenCalled();
   });

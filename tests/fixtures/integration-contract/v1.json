@@ -1,0 +1,334 @@
+{
+  "contractVersion": 1,
+  "bounds": {
+    "depth": 32,
+    "nodes": 10000,
+    "utf8Bytes": 262144
+  },
+  "scope": {
+    "origin": "https://fixture.example",
+    "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+    "network": "testnet",
+    "chainId": 2
+  },
+  "transactions": [
+    {
+      "id": "C01-standard",
+      "input": {
+        "payload": {
+          "function": "0x1::fixture::run",
+          "typeArguments": [],
+          "functionArguments": [
+            "7"
+          ]
+        },
+        "maxGasAmount": 1000
+      },
+      "expected": {
+        "contractVersion": 1,
+        "data": {
+          "function": "0x1::fixture::run",
+          "typeArguments": [],
+          "functionArguments": [
+            "7"
+          ]
+        },
+        "options": {
+          "maxGasAmount": "1000"
+        }
+      },
+      "requestCommitment": "09385a5da9aa9cd80be937af29cb4974d72ffc7739e1ef7cf447a9c8f2f4710f"
+    },
+    {
+      "id": "C03-mixed-options",
+      "input": {
+        "data": {
+          "function": "0x1::fixture::run",
+          "typeArguments": [],
+          "functionArguments": []
+        },
+        "gasUnitPrice": "9",
+        "options": {
+          "maxGasAmount": "1000",
+          "expireTimestamp": "2000000100"
+        }
+      },
+      "expected": {
+        "contractVersion": 1,
+        "data": {
+          "function": "0x1::fixture::run",
+          "typeArguments": [],
+          "functionArguments": []
+        },
+        "options": {
+          "gasUnitPrice": "9",
+          "maxGasAmount": "1000",
+          "expireTimestamp": "2000000100"
+        }
+      },
+      "requestCommitment": "869984eff10bb1737fff56b2f5388d98f05586c09552ef352799a660f96f99c9"
+    },
+    {
+      "id": "C11-relative-once",
+      "nowSeconds": 2000000000,
+      "input": {
+        "data": {
+          "function": "0x1::fixture::run",
+          "typeArguments": [],
+          "functionArguments": []
+        },
+        "options": {
+          "expirationSecondsFromNow": 100
+        }
+      },
+      "expected": {
+        "contractVersion": 1,
+        "data": {
+          "function": "0x1::fixture::run",
+          "typeArguments": [],
+          "functionArguments": []
+        },
+        "options": {
+          "expireTimestamp": "2000000100"
+        }
+      },
+      "requestCommitment": "af1f9233718a671c57aa8f3c920ebe97d3c4923fd78f6b1c100b7d29dfa963b5"
+    },
+    {
+      "id": "C04-canonical-integer-keys",
+      "input": {
+        "contractVersion": 1,
+        "data": {
+          "function": "0x1::fixture::run",
+          "typeArguments": [],
+          "functionArguments": [
+            {
+              "2": "two",
+              "10": "ten",
+              "a": [
+                2,
+                10
+              ]
+            }
+          ]
+        },
+        "options": {}
+      },
+      "expected": {
+        "contractVersion": 1,
+        "data": {
+          "function": "0x1::fixture::run",
+          "typeArguments": [],
+          "functionArguments": [
+            {
+              "2": "two",
+              "10": "ten",
+              "a": [
+                2,
+                10
+              ]
+            }
+          ]
+        },
+        "options": {}
+      },
+      "requestCommitment": "0ceb45c5f5c09332c8f0b6029be77deee43e8553f9a36949bd4879fb27af3a5a"
+    }
+  ],
+  "messages": [
+    {
+      "id": "C06-context-0",
+      "scope": {
+        "origin": "https://fixture.example",
+        "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "network": "testnet",
+        "chainId": 2
+      },
+      "input": {
+        "profile": "cedra:message:v1",
+        "message": "fixture challenge\nline 2",
+        "nonce": "fixture-nonce",
+        "address": false,
+        "application": false,
+        "chainId": false
+      },
+      "fullMessage": "CEDRA\nmessage: fixture challenge\nline 2\nnonce: fixture-nonce"
+    },
+    {
+      "id": "C06-context-1",
+      "scope": {
+        "origin": "https://fixture.example",
+        "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "network": "testnet",
+        "chainId": 2
+      },
+      "input": {
+        "profile": "cedra:message:v1",
+        "message": "fixture challenge\nline 2",
+        "nonce": "fixture-nonce",
+        "address": true,
+        "application": false,
+        "chainId": false
+      },
+      "fullMessage": "CEDRA\naddress: 0x0000000000000000000000000000000000000000000000000000000000000001\nmessage: fixture challenge\nline 2\nnonce: fixture-nonce"
+    },
+    {
+      "id": "C06-context-2",
+      "scope": {
+        "origin": "https://fixture.example",
+        "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "network": "testnet",
+        "chainId": 2
+      },
+      "input": {
+        "profile": "cedra:message:v1",
+        "message": "fixture challenge\nline 2",
+        "nonce": "fixture-nonce",
+        "address": false,
+        "application": true,
+        "chainId": false
+      },
+      "fullMessage": "CEDRA\napplication: https://fixture.example\nmessage: fixture challenge\nline 2\nnonce: fixture-nonce"
+    },
+    {
+      "id": "C06-context-3",
+      "scope": {
+        "origin": "https://fixture.example",
+        "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "network": "testnet",
+        "chainId": 2
+      },
+      "input": {
+        "profile": "cedra:message:v1",
+        "message": "fixture challenge\nline 2",
+        "nonce": "fixture-nonce",
+        "address": true,
+        "application": true,
+        "chainId": false
+      },
+      "fullMessage": "CEDRA\naddress: 0x0000000000000000000000000000000000000000000000000000000000000001\napplication: https://fixture.example\nmessage: fixture challenge\nline 2\nnonce: fixture-nonce"
+    },
+    {
+      "id": "C06-context-4",
+      "scope": {
+        "origin": "https://fixture.example",
+        "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "network": "testnet",
+        "chainId": 2
+      },
+      "input": {
+        "profile": "cedra:message:v1",
+        "message": "fixture challenge\nline 2",
+        "nonce": "fixture-nonce",
+        "address": false,
+        "application": false,
+        "chainId": true
+      },
+      "fullMessage": "CEDRA\nchainId: 2\nmessage: fixture challenge\nline 2\nnonce: fixture-nonce"
+    },
+    {
+      "id": "C06-context-5",
+      "scope": {
+        "origin": "https://fixture.example",
+        "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "network": "testnet",
+        "chainId": 2
+      },
+      "input": {
+        "profile": "cedra:message:v1",
+        "message": "fixture challenge\nline 2",
+        "nonce": "fixture-nonce",
+        "address": true,
+        "application": false,
+        "chainId": true
+      },
+      "fullMessage": "CEDRA\naddress: 0x0000000000000000000000000000000000000000000000000000000000000001\nchainId: 2\nmessage: fixture challenge\nline 2\nnonce: fixture-nonce"
+    },
+    {
+      "id": "C06-context-6",
+      "scope": {
+        "origin": "https://fixture.example",
+        "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "network": "testnet",
+        "chainId": 2
+      },
+      "input": {
+        "profile": "cedra:message:v1",
+        "message": "fixture challenge\nline 2",
+        "nonce": "fixture-nonce",
+        "address": false,
+        "application": true,
+        "chainId": true
+      },
+      "fullMessage": "CEDRA\napplication: https://fixture.example\nchainId: 2\nmessage: fixture challenge\nline 2\nnonce: fixture-nonce"
+    },
+    {
+      "id": "C06-context-7",
+      "scope": {
+        "origin": "https://fixture.example",
+        "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "network": "testnet",
+        "chainId": 2
+      },
+      "input": {
+        "profile": "cedra:message:v1",
+        "message": "fixture challenge\nline 2",
+        "nonce": "fixture-nonce",
+        "address": true,
+        "application": true,
+        "chainId": true
+      },
+      "fullMessage": "CEDRA\naddress: 0x0000000000000000000000000000000000000000000000000000000000000001\napplication: https://fixture.example\nchainId: 2\nmessage: fixture challenge\nline 2\nnonce: fixture-nonce"
+    }
+  ],
+  "negative": [
+    {
+      "id": "C02-conflicting-wrappers",
+      "input": {
+        "payload": {},
+        "data": {}
+      }
+    },
+    {
+      "id": "C03-conflicting-options",
+      "input": {
+        "data": {},
+        "maxGasAmount": "1",
+        "options": {
+          "maxGasAmount": "2"
+        }
+      }
+    },
+    {
+      "id": "C11-relative-and-absolute",
+      "input": {
+        "data": {},
+        "options": {
+          "expireTimestamp": "2000000100",
+          "expirationSecondsFromNow": 100
+        }
+      }
+    },
+    {
+      "id": "C19-unknown-version",
+      "input": {
+        "contractVersion": 2,
+        "data": {}
+      }
+    },
+    {
+      "id": "C05-negative-wire-number",
+      "input": {
+        "contractVersion": 1,
+        "data": {
+          "function": "0x1::fixture::run",
+          "typeArguments": [],
+          "functionArguments": [
+            -1
+          ]
+        },
+        "options": {}
+      }
+    }
+  ]
+}

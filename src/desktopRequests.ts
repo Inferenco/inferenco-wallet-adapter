@@ -6,7 +6,7 @@ import type { InferExternalSession, InferWalletOptions } from "./types";
 const STORAGE_PREFIX = "inferenco:infer-pending-desktop-request:";
 
 export type RecoverableMethod =
-  "signMessage" | "signTransaction" | "signAndSubmitTransaction";
+  | "signMessage" | "signTransaction" | "signAndSubmitTransaction";
 
 export interface PendingDesktopBridgeRequest {
   version: 2;
@@ -14,6 +14,10 @@ export interface PendingDesktopBridgeRequest {
   requestId: string;
   /** Generated before request creation; safe for application journals. */
   invocationId?: string;
+  requestCommitment?: string;
+  requestPayload?: unknown;
+  expectedMessageInput?: import("@cedra-labs/wallet-standard").CedraSignMessageInput;
+  signerPublicKey?: string;
   sessionId: string;
   address: string;
   network: string;

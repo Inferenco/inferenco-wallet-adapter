@@ -1,3 +1,5 @@
+import { normalizeSignMessageOutput } from "./conversion";
+import { canonicalAddress, requestCommitment } from "./integrationContract";
 import type {
   CedraSignAndSubmitTransactionOutput,
   CedraSignMessageOutput,
@@ -40,9 +42,14 @@ export interface DurableMobileRequestEnvelope {
 }
 
 export interface DurableInvocation {
+  requestCommitment?: string;
+  requestPayload?: unknown;
+  endpoint?: string;
+  signerPublicKey?: string;
+  updatedAt?: string;
   id: string;
   origin: string;
-  transport: InferExternalSession["transport"];
+  transport: InferExternalSession["transport"] | "injected";
   sessionId: string;
   address: string;
   network: string;
@@ -57,19 +64,30 @@ export interface DurableInvocation {
     expectedTransactionBcsHex?: string;
   };
   failureReason?: string;
+  final?: StoredFinal;
+  deliveryState?: "active" | "acknowledged" | "archived";
+  archive?: RecoveryArchive;
 }
 
-export type DurablePending = PendingDesktopBridgeRequest | PendingMobileRelayRequest;
+export type DurablePending =
+  | PendingDesktopBridgeRequest | PendingMobileRelayRequest;
 export type StoredFinal =
   | { status: "rejected" }
   | { status: "approved"; method: "signAndSubmitTransaction"; hash: string }
-  | { status: "approved"; method: "signMessage"; output: Record<string, unknown> }
-  | { status: "approved"; method: "signTransaction"; authenticatorHex: string; rawTransactionBcsHex: string };
+  | { status: "approved"; method: "signMessage"; output: Record<string, unknown>;
+    }
+  | {
+      status: "approved";
+      method: "signTransaction";
+      authenticatorHex: string;
+      rawTransactionBcsHex: string;
+    };
 
 /** Store only validated, serializable final output before returning it to a dapp. */
 export function serializeStoredFinal(
   method: DurablePending["method"],
-  output: CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput
+  output:
+    | CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput
 ): StoredFinal {
   if (method === "signAndSubmitTransaction") {
     const hash = (output as CedraSignAndSubmitTransactionOutput).hash;
@@ -77,15 +95,15 @@ export function serializeStoredFinal(
     return { status: "approved", method, hash };
   }
   if (method === "signMessage") {
-    const plain = JSON.parse(JSON.stringify(output)) as Record<string, unknown>;
-    if (typeof plain.address !== "string" || typeof plain.signature !== "string" ||
-        typeof plain.fullMessage !== "string" || typeof plain.message !== "string") {
-      throw new Error("Invalid signed message for persistent recovery");
-    }
+    const normalized = normalizeSignMessageOutput(output);
+    const plain = {
+      ...normalized,
+      signature: normalized.signature.toString()
+    } as unknown as Record<string, unknown>;
     return { status: "approved", method, output: plain };
   }
   const signed = output as CedraSignTransactionOutputV1_1 & {
-    authenticatorHex?: string; rawTransactionBcsHex?: string
+    authenticatorHex?: string; rawTransactionBcsHex?: string;
   };
   if (typeof signed.authenticatorHex !== "string" ||
       typeof signed.rawTransactionBcsHex !== "string") {
@@ -96,6 +114,7 @@ export function serializeStoredFinal(
 }
 
 export interface DurableRequest {
+  requestCommitment?: string;
   id: string;
   scopeKey: string;
   origin: string;
@@ -178,7 +197,8 @@ export function durableScopeKey(pending: DurablePending): string {
 }
 
 function sameScope(record: DurableRequest, pending: DurablePending): boolean {
-  return record.transport === (pending.version === 2 ? "desktop-bridge" : "mobile-relay") &&
+  return (
+    record.transport === (pending.version === 2 ? "desktop-bridge" : "mobile-relay") &&
     record.origin === (pending.origin ?? window.location.origin) &&
     record.sessionId === pending.sessionId &&
     record.address === pending.address &&
@@ -186,7 +206,9 @@ function sameScope(record: DurableRequest, pending: DurablePending): boolean {
     record.chainId === pending.chainId &&
     record.method === pending.method &&
     record.endpoint === pendingEndpoint(pending) &&
-    record.requestId === pending.requestId;
+    record.requestId === pending.requestId &&
+    record.requestCommitment === pending.requestCommitment
+  );
 }
 
 function validStoredRecord(row: DurableRequest): boolean {
@@ -206,7 +228,24 @@ function validStoredRecord(row: DurableRequest): boolean {
     const endpoint = new URL(row.endpoint);
     if (!["http:", "https:"].includes(endpoint.protocol) ||
         (row.transport === "desktop-bridge" && endpoint.origin !== row.endpoint)) return false;
-    return row.scopeKey === durableScopeKey(row.pending) && sameScope(row, row.pending);
+    if (
+      row.requestCommitment &&
+      requestCommitment(
+        row.method,
+        {
+          origin: row.origin,
+          accountAddress: canonicalAddress(row.address),
+          network: row.network,
+          chainId: row.chainId
+        },
+        row.pending.requestPayload
+      ) !== row.requestCommitment
+    )
+      return false;
+    return (
+      row.scopeKey === durableScopeKey(row.pending) &&
+      sameScope(row, row.pending)
+    );
   } catch {
     return false;
   }
@@ -251,7 +290,9 @@ export async function saveDurableRequest(
         method: pending.method, endpoint: pendingEndpoint(pending),
         pending, createdAt: now, updatedAt: now, revision: 1, state: "active",
         ...(pending.archive ? { archive: pending.archive } : {}),
-        ...(invocationId ? { invocationId } : {})
+        ...(invocationId ? { invocationId } : {}),
+        ...(pending.requestCommitment
+          ? { requestCommitment: pending.requestCommitment } : {})
       };
       if (pending.archive) result.state = "archived";
       store.add(result);
@@ -343,7 +384,7 @@ export async function transitionDurableRequest(
 export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
+    const tx = db.transaction([STORE, INVOCATIONS], "readwrite");
     const store = tx.objectStore(STORE);
     const cursor = store.openCursor();
     cursor.onsuccess = () => {
@@ -355,6 +396,20 @@ export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
           (row.state === "archived" && age > ARCHIVE_MS)) entry.delete();
       entry.continue();
     };
+    const invocations = tx.objectStore(INVOCATIONS).openCursor();
+    invocations.onsuccess = () => {
+      const entry = invocations.result;
+      if (!entry) return;
+      const row = entry.value as DurableInvocation;
+      const age = now - Date.parse(row.updatedAt ?? row.createdAt);
+      if (
+        row.transport === "injected" &&
+        ((row.deliveryState === "acknowledged" && age > ACK_TOMBSTONE_MS) ||
+          (row.deliveryState === "archived" && age > ARCHIVE_MS))
+      )
+        entry.delete();
+      entry.continue();
+    };
     tx.oncomplete = () => { db.close(); resolve(); };
     tx.onabort = () => { db.close(); reject(failure("Unable to prune old recovery evidence", tx.error)); };
     tx.onerror = () => { /* onabort rejects */ };
@@ -363,15 +418,25 @@ export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
 
 /** Persist an invocation identity before any request-creation POST. */
 export async function prepareDurableInvocation(
-  session: InferExternalSession,
-  method: DurablePending["method"]
+  session: Pick<
+    InferExternalSession,
+    "sessionId" | "address" | "network" | "chainId"
+  > & { transport: DurableInvocation["transport"] },
+  method: DurablePending["method"],
+  binding?: {
+    requestCommitment: string;
+    requestPayload: unknown;
+    endpoint: string;
+    signerPublicKey?: string;
+  }
 ): Promise<DurableInvocation> {
   const db = await openDatabase();
   const record: DurableInvocation = {
     id: randomUuid(), origin: window.location.origin, transport: session.transport,
     sessionId: session.sessionId, address: session.address, network: session.network,
     chainId: session.chainId, method, state: "prepared",
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    ...(binding ?? {})
   };
   return new Promise((resolve, reject) => {
     const tx = db.transaction(INVOCATIONS, "readwrite");
@@ -451,11 +516,89 @@ export async function listDurableInvocations(): Promise<DurableInvocation[]> {
     let rows: DurableInvocation[] = [];
     request.onsuccess = () => {
       rows = (request.result as DurableInvocation[]).filter((row) =>
-        row && row.origin === window.location.origin && typeof row.id === "string"
+        row && row.origin === window.location.origin && typeof row.id === "string" &&
+          row.id.length > 0 &&
+          ["mobile-relay", "desktop-bridge", "injected"].includes(
+            row.transport
+          ) &&
+          [
+            "signMessage",
+            "signTransaction",
+            "signAndSubmitTransaction"
+          ].includes(row.method) &&
+          ["prepared", "created", "unknown", "not-invoked"].includes(
+            row.state
+          ) &&
+          typeof row.sessionId === "string" &&
+          typeof row.address === "string" &&
+          /^0x[0-9a-fA-F]{1,64}$/.test(row.address) &&
+          typeof row.network === "string" &&
+          Number.isInteger(row.chainId) &&
+          row.chainId >= 0 &&
+          row.chainId <= 255 &&
+          (!row.requestCommitment ||
+            /^[0-9a-f]{64}$/.test(row.requestCommitment))
       );
     };
     tx.oncomplete = () => { db.close(); resolve(rows); };
     tx.onabort = () => { db.close(); reject(failure("Unable to inspect durable invocations", tx.error)); };
     tx.onerror = () => { /* onabort rejects */ };
+  });
+}
+
+/** Reuse the existing invocation table for injected outcomes and delivery CAS. */
+export async function updateInjectedInvocationEvidence(
+  id: string,
+  change: {
+    final?: StoredFinal;
+    deliveryState?: "acknowledged" | "archived";
+    archive?: RecoveryArchive;
+  }
+): Promise<void> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(INVOCATIONS, "readwrite"),
+      store = tx.objectStore(INVOCATIONS),
+      lookup = store.get(id);
+    lookup.onsuccess = () => {
+      const row = lookup.result as DurableInvocation | undefined;
+      if (
+        !row ||
+        row.origin !== window.location.origin ||
+        row.transport !== "injected" ||
+        row.state === "not-invoked" ||
+        (change.final &&
+          row.final &&
+          JSON.stringify(change.final) !== JSON.stringify(row.final)) ||
+        (change.final &&
+          !row.final &&
+          row.deliveryState &&
+          row.deliveryState !== "active") ||
+        (change.deliveryState === "acknowledged" && !row.final) ||
+        (change.deliveryState === "archived" && row.final) ||
+        (row.deliveryState &&
+          row.deliveryState !== "active" &&
+          row.deliveryState !== change.deliveryState)
+      ) {
+        tx.abort();
+        return;
+      }
+      store.put({ ...row, ...change, updatedAt: new Date().toISOString() });
+    };
+    tx.oncomplete = () => {
+      db.close();
+      announceRecordChange();
+      resolve();
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(
+        failure(
+          "Injected invocation evidence changed or could not be saved",
+          tx.error
+        )
+      );
+    };
+    tx.onerror = () => {};
   });
 }

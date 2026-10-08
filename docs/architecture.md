@@ -55,7 +55,11 @@ src/
 ├── mobileRelay.ts        # Infer Wallet relay REST transport (nova-service)
 ├── mobileSocket.ts       # Infer Wallet relay WebSocket transport
 ├── mobileCrypto.ts       # X25519 key exchange + XChaCha20-Poly1305 encryption
-├── conversion.ts         # Data normalization helpers (accounts, networks, txns)
+├── integrationContract.ts # Bounded wire codec, exact restrictions, commitments
+├── durableRecovery.ts    # Existing IndexedDB invocation/result evidence
+├── recovery.ts           # Read-only original-result recovery and delivery CAS
+├── nonDispatchEvidence.ts # Internal invocation-bound proof registry
+├── conversion.ts         # Data normalization and cryptographic result checks
 ├── deeplink.ts           # Deeplink URL generation
 ├── constants.ts          # Default URLs, timeouts, storage keys, icon
 ├── types.ts              # All TypeScript interfaces and type definitions
@@ -82,6 +86,7 @@ dApp  ◀── { status: "approved",     Infer Desk
 ```
 
 **Poll-based flow:**
+
 1. Initiate request → receive `requestId`
 2. Poll `/request/{requestId}` at 250ms intervals
 3. Status transitions: `pending` → `approved` | `rejected` | `expired`
@@ -89,16 +94,16 @@ dApp  ◀── { status: "approved",     Infer Desk
 
 **Endpoints:**
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/connect` | `GET` | Start connection |
-| `/sign-message` | `POST` | Sign a message |
-| `/sign-transaction` | `POST` | Sign a transaction |
-| `/transaction` | `POST` | Sign and submit |
-| `/request/{requestId}` | `GET` | Poll request status |
-| `/session/{sessionId}` | `GET` | Validate session |
-| `/connection` | `DELETE` | Revoke connection |
-| `/session/{sessionId}` | `DELETE` | Revoke session |
+| Endpoint               | Method   | Purpose             |
+| ---------------------- | -------- | ------------------- |
+| `/connect`             | `GET`    | Start connection    |
+| `/sign-message`        | `POST`   | Sign a message      |
+| `/sign-transaction`    | `POST`   | Sign a transaction  |
+| `/transaction`         | `POST`   | Sign and submit     |
+| `/request/{requestId}` | `GET`    | Poll request status |
+| `/session/{sessionId}` | `GET`    | Validate session    |
+| `/connection`          | `DELETE` | Revoke connection   |
+| `/session/{sessionId}` | `DELETE` | Revoke session      |
 
 **Session persistence:** Approved sessions are stored in `localStorage` as `InferExternalSession` with `transport: "desktop-bridge"`. On subsequent visits, the adapter validates the stored session against the bridge before reuse.
 
@@ -131,6 +136,7 @@ dApp (mobile browser)           nova-service (relay)         Infer Wallet App
 ```
 
 **Crypto flow:**
+
 1. dApp generates X25519 keypair
 2. dApp sends public key with pairing request to nova-service
 3. Wallet generates its own keypair, derives shared secret via ECDH
@@ -153,6 +159,7 @@ dApp  ◀──  { address, publicKey }       ◀──  Infer Extension
 ```
 
 **Detection priority (v0.3.0 rebrand):**
+
 1. `window.inferenco` (primary)
 2. `window.infer` (new rebrand namespace)
 3. `window.nova` (legacy alias, kept for transition; remove in 0.4.0)
@@ -208,12 +215,14 @@ Once connected, signing operations follow the same transport that was used to co
 **Injected provider:** Direct call → immediate result.
 
 **Infer Desk:**
+
 1. `POST /sign-message` (or `/sign-transaction`, `/transaction`) with payload
 2. Receive `requestId`
 3. Poll `/request/{requestId}` until user approves in Infer Desk
 4. Extract result from poll response
 
 **Infer Wallet:**
+
 1. Encrypt request payload with shared secret
 2. `POST /v1/requests` with encrypted payload to nova-service
 3. Launch deeplink for user to approve in Infer Wallet
@@ -291,12 +300,12 @@ Once connected, signing operations follow the same transport that was used to co
 
 ## Storage Keys
 
-| Key | Storage | Purpose |
-|-----|---------|---------|
-| `inferenco:nova-session` | `localStorage` | Active session (Infer Desk or Infer Wallet) |
-| `inferenco:nova-pending-mobile-pairing` | `localStorage` | Unfinished Infer Wallet pairing (survives reload) |
-| `inferenco:nova-callback-marker` | `sessionStorage` | Callback markers for pending deeplink flows |
-| `inferenco:nova-protocol-key` | `localStorage` | Wallet's public key received via callback |
+| Key                                     | Storage          | Purpose                                           |
+| --------------------------------------- | ---------------- | ------------------------------------------------- |
+| `inferenco:nova-session`                | `localStorage`   | Active session (Infer Desk or Infer Wallet)       |
+| `inferenco:nova-pending-mobile-pairing` | `localStorage`   | Unfinished Infer Wallet pairing (survives reload) |
+| `inferenco:nova-callback-marker`        | `sessionStorage` | Callback markers for pending deeplink flows       |
+| `inferenco:nova-protocol-key`           | `localStorage`   | Wallet's public key received via callback         |
 
 ## Error Flow
 
@@ -320,12 +329,20 @@ Provider error / HTTP status / WebSocket error
 
 The two products are completely independent:
 
-| Scenario | Infer Desk | Infer Wallet | What happens |
-|----------|:-:|:-:|--------|
-| Desktop + Infer Desk running | connected | &mdash; | Local bridge to Infer Desk |
-| Desktop + Infer Desk not running | &mdash; | &mdash; | Deeplink launches Infer Desk |
-| Mobile + nova-service up | &mdash; | connected | Encrypted relay to Infer Wallet |
-| Mobile + nova-service down | &mdash; | &mdash; | Connection error |
-| Extension installed (any platform) | &mdash; | &mdash; | Direct provider, no bridge or relay |
+| Scenario                           | Infer Desk | Infer Wallet | What happens                        |
+| ---------------------------------- | :--------: | :----------: | ----------------------------------- |
+| Desktop + Infer Desk running       | connected  |   &mdash;    | Local bridge to Infer Desk          |
+| Desktop + Infer Desk not running   |  &mdash;   |   &mdash;    | Deeplink launches Infer Desk        |
+| Mobile + nova-service up           |  &mdash;   |  connected   | Encrypted relay to Infer Wallet     |
+| Mobile + nova-service down         |  &mdash;   |   &mdash;    | Connection error                    |
+| Extension installed (any platform) |  &mdash;   |   &mdash;    | Direct provider, no bridge or relay |
 
 Infer Desk does not require nova-service. Infer Wallet does not require Infer Desk. A dApp using this adapter supports both automatically.
+
+## Contract v1 preparation and recovery
+
+All transports snapshot supported values through the bounded codec before dispatch. Standard, class convenience and explicit transaction restrictions normalize into separate documented forms. The adapter persists invocation scope, normalized content and SHA256 commitment in the existing IndexedDB store, then awaits application journal binding. Capability/network/expiry fences precede signing. Only an internal proof registry can attest no dispatch for the exact saved identity; unknown transport completion remains unknown.
+
+Desktop admission and read-only invocation/result routes extend the existing redb lifecycle. Mobile encrypted requests retain the existing relay envelope and durable native outcome store. Embedded provider calls pass scope/identity metadata separately from transaction options and recover with an authorized native readInvocation call. Complete validated results are persisted before direct return or recovery replay. Reconnect grants reading the original scope, never replacement execution. Consumer code verifies canonical transaction receipts and effects independently.
+
+Message profile v1 constructs its UTF-8 preimage before signing; the adapter checks the full requested preimage, selected key and real signature. Retention acknowledgment/archive only controls delivery and cleanup. See [the integration contract](integration-contract.md) for wire bounds, clocks, legacy handling and peer qualification.

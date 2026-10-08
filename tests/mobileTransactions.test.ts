@@ -106,15 +106,19 @@ describe("transaction relay delivery and recovery", () => {
   });
 
   it("settles a hidden tab at the deadline and retains its receipt", async () => {
+    vi.useFakeTimers();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     mockRelay(() => outcome({ status: "pending", encryptedResult: null }));
     const result = signAndSubmitViaMobileRelay(
       { data: { function: "0x1::account::transfer", functionArguments: [] } },
       session, { ...options, mobilePollIntervalMs: 10000, mobileRequestTimeoutMs: 20 }
     );
-    await expect(result).rejects.toMatchObject({
+    const settled = expect(result).rejects.toMatchObject({
       code: "REQUEST_OUTCOME_UNKNOWN", requestId: "request-1", dispatch: "unknown"
     });
+    await vi.advanceTimersByTimeAsync(100);
+    await settled;
+    vi.useRealTimers();
     expect(reads).toBe(2);
     expect(readPendingMobileRelayRequests(session)).toHaveLength(1);
   });

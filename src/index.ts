@@ -32,3 +32,5 @@ export * from "./mobileSocket";
 
 export * from "./recovery";
 export type { PendingDesktopBridgeRequest } from "./desktopRequests";
+
+export * from "./integrationContract";
