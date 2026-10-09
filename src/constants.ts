@@ -37,6 +37,21 @@ export const DEFAULT_DETECT_ALIASES = true;
 export const DEFAULT_REGISTER_FORCE = false;
 export const DEFAULT_DESKTOP_REGISTRATION = true;
 export const DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS = 1200;
+/** v0.2.1-rc.1 (first-time connect / no-new-tab): TOTAL budget for
+ * `POST /preauth-connect`, retries included. `bridgeConnectTimeoutMs`
+ * (1200 ms) is a per-request liveness probe that is deliberately too
+ * short for Chrome >=142's Local Network Access prompt: while the LNA
+ * prompt is pending the loopback fetch is held, the probe aborts, and
+ * the adapter used to treat the resulting `null` as "pre-auth
+ * unavailable" and fall through to the legacy `inferenco://login`
+ * deeplink — which makes the WALLET open a NEW TAB while the
+ * originating tab waits on a session it will never receive.
+ *
+ * The retry loop in `startPreauthConnect` therefore gives each attempt
+ * a much longer timeout (up to 10 s) and retries AbortError / HTTP 429
+ * until this budget is exhausted. Only then does it return `null`
+ * (the cold-start deeplink fallback described in SECURITY.md:275). */
+export const DEFAULT_BRIDGE_PREAUTH_START_TIMEOUT_MS = 30000;
 export const DEFAULT_BRIDGE_POLL_INTERVAL_MS = 250;
 export const DEFAULT_BRIDGE_POLL_TIMEOUT_MS = 120000;
 export const INFER_PROTOCOL_KEY_STORAGE_KEY = "inferenco:infer-protocol-key";

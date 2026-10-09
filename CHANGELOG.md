@@ -5,6 +5,14 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1-rc.1] - TBD
+
+### Fixed
+
+- First-time dApp connect from an external browser no longer opens a second tab. `startPreauthConnect` now wraps `POST /preauth-connect` in a bounded retry loop with a 30 s total budget (`bridgePreauthStartTimeoutMs` / `DEFAULT_BRIDGE_PREAUTH_START_TIMEOUT_MS`, per-attempt ceiling 10 s). A Chrome >=142 Local Network Access prompt that holds the loopback fetch past the old 1200 ms liveness probe rejects with a `DOMException` named `AbortError`; that is now retried after a 400 ms backoff instead of being collapsed into "pre-auth unavailable", which previously sent `InferClient.connect()` down the legacy `inferenco://login?redirect=…` deeplink and made the wallet `xdg-open` a new tab while the originating tab polled forever. HTTP 429 from the wallet's per-origin 1-per-5 s preauth rate limiter is retried honouring the wallet-supplied `retryAfterMs`.
+- `TypeError` (the user denied local-network access) is still non-retryable and still throws `InferAdapterError(BridgePrivateNetworkBlocked, …)` with zero retries, and 403/404/5xx/parse failures still return `null`. Consequently the legacy `inferenco://login?redirect=…` deeplink — and its new-tab behaviour in the wallet — is now reached **only** on a genuine cold start (connection refused / wallet not running), on 403/404 (wallet build too old to pre-auth), or on retry-budget exhaustion. It is no longer reached when the bridge merely stalled the fetch behind an LNA prompt, nor on a 429 rate-limit rejection.
+- New public option `bridgePreauthStartTimeoutMs?: number` on `InferWalletOptions` — the **total** budget for the `POST /preauth-connect` phase, retries included. Defaults to the newly exported `DEFAULT_BRIDGE_PREAUTH_START_TIMEOUT_MS = 30000`. Per-attempt timeout is `min(10000, remaining budget)`, floored at 1 ms; backoff between attempts is 400 ms. Note this is distinct from the existing `bridgeConnectTimeoutMs` (1200 ms), which remains the short per-request liveness probe used by the other bridge calls.
+
 ## [0.2.0-rc.24] - TBD
 
 ### Added

@@ -184,22 +184,70 @@ connect()
 ├─▶ 4. Detect environment
 │      └─ Mobile browser?
 │         ├─ Yes → Connect via Infer Wallet
-│         │        Create pairing on nova-service,
+│         │        Create pairing on the relay,
 │         │        launch inferenco:// deeplink,
 │         │        poll/websocket for approval
 │         │        └─ done
 │         │
-│         └─ No (desktop) → Connect via Infer Desk
-│                           GET localhost:21984/connect,
-│                           poll for approval
-│                           └─ If Infer Desk running → done
-│                           └─ If not → deeplink handoff
+│         └─ No (desktop) → Connect via Infer Desk — PRIMARY PATH
+│                           (no deeplink, no new tab)
 │
-└─▶ 5. Desktop deeplink handoff
-       Launch inferenco://login?redirect=...
-       Wait for callback via localStorage markers
-       └─ Timeout after ~120s if no response
+│                           startPreauthConnect(origin, options)
+│                           POST /preauth-connect   (token-less)
+│                           │
+│                           ├─ resolves with requestId
+│                           │     └─▶ pollPreauthUntilResolved(requestId)
+│                           │           races: GET /preauth-poll/<id>
+│                           │           against waitForExternalSession
+│                           │           (peer-tab / wallet-initiated wake)
+│                           │           └─ approved → store session → done
+│                           │           └─ rejected → throw UserRejected
+│                           │
+│                           └─ returns null  (see "When preauth is abandoned")
+│                                 │
+│                                 ▼
+│                           (fallback) tryLocalBridgeConnect()
+│                           GET /<token>/connect  (legacy wallet builds)
+│                           └─ If it yields a session → done
+│
+├─▶ 5. Desktop deeplink handoff  — LAST RESORT ONLY
+│       Launch inferenco://login?redirect=...
+│       Wait for callback via localStorage markers
+│       └─ The WALLET opens a NEW browser tab for this callback.
+│         Prefer the primary path above: the pre-auth poll delivers the
+│         session to the tab the user is already in, with no new tab and
+│         no callback-URL session params.
+│
+└─ (anywhere) waitForExternalSession
+       Race-loser cleanup for pollPreauthUntilResolved — resolves on a
+       session appearing in localStorage (peer-tab approval dispatches
+       the inferenco:infer-session-ready CustomEvent), else times out.
 ```
+
+### When preauth is abandoned (and the deeplink is reached)
+
+`startPreauthConnect` is a **bounded retry loop** (adapter 0.2.1-rc.1). The legacy
+deeplink is reached only when the loop gives up, which is one of:
+
+| Outcome | Retried? | Result |
+|---|---|---|
+| `AbortError` — Chrome >=142 LNA prompt *pending*, holding the loopback fetch | Yes (400 ms backoff, per-attempt ceiling 10 s) | keep trying until budget exhausted |
+| HTTP 429 — wallet per-origin 5 s rate limiter | Yes (honours `retryAfterMs` from the body) | keep trying until budget exhausted |
+| `TypeError` — user **denied** local-network access | **No** | throws `InferAdapterError(BridgePrivateNetworkBlocked)` |
+| 403 / 404 — wallet build without pre-auth | No | `null` → deeplink |
+| Connection refused / 5xx / parse failure | No | `null` → deeplink |
+| Budget exhausted on a retryable error | — | `null` → deeplink |
+
+The budget is `bridgePreauthStartTimeoutMs`, defaulting to
+`DEFAULT_BRIDGE_PREAUTH_START_TIMEOUT_MS = 30000`. It is **not** the same knob as
+`bridgeConnectTimeoutMs` (1200 ms), which stays the short per-request liveness
+probe for the other bridge calls.
+
+A denied permission and a pending permission are **different failure shapes**
+(`TypeError` vs `AbortError`). Before 0.2.1-rc.1 both collapsed into `null`, so a
+reachable wallet waiting on a permission prompt was indistinguishable from a
+wallet that was not running — which is what made the deeplink, and the new tab
+it causes in the wallet, fire spuriously.
 
 ## Signing Flow
 
