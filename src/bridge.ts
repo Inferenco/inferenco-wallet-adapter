@@ -214,7 +214,7 @@ function bridgeConnectTimeoutMs(options: InferWalletOptions = {}): number {
   return options.bridgeConnectTimeoutMs ?? DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS;
 }
 
-/** v0.2.1: TOTAL budget for `POST /preauth-connect`, retries included. */
+/** v0.2.1-rc.1: TOTAL budget for `POST /preauth-connect`, retries included. */
 function bridgePreauthStartTimeoutMs(options: InferWalletOptions = {}): number {
   return options.bridgePreauthStartTimeoutMs ?? DEFAULT_BRIDGE_PREAUTH_START_TIMEOUT_MS;
 }
@@ -1466,7 +1466,7 @@ async function pollBridge<T extends { status?: string; error?: string }>(
  * to deliver the session via a callback URL. The dapp's original
  * tab stays open the entire time.
  *
- * v0.2.1 — bounded retry around the POST. The single-shot 1200 ms
+ * v0.2.1-rc.1 — bounded retry around the POST. The single-shot 1200 ms
  * probe (`bridgeConnectTimeoutMs`) is a liveness probe, not a
  * connect deadline: on a first-time connect from a public HTTPS
  * origin Chrome >=142 holds the loopback fetch behind its Local
@@ -1516,18 +1516,18 @@ export interface PreauthStartResult {
   bridgeUrl?: string;
 }
 
-/** v0.2.1: per-attempt ceiling for one `POST /preauth-connect`.
+/** v0.2.1-rc.1: per-attempt ceiling for one `POST /preauth-connect`.
  * Deliberately far above `DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS` (1200 ms,
  * the liveness probe) so a user who is still answering Chrome's Local
  * Network Access prompt is absorbed inside a single attempt. */
 const PREAUTH_START_ATTEMPT_TIMEOUT_CAP_MS = 10000;
-/** v0.2.1: fixed backoff between retryable attempts. */
+/** v0.2.1-rc.1: fixed backoff between retryable attempts. */
 const PREAUTH_START_RETRY_BACKOFF_MS = 400;
-/** v0.2.1: fallback wait for a 429 whose body could not be parsed.
+/** v0.2.1-rc.1: fallback wait for a 429 whose body could not be parsed.
  * The wallet rate-limits 1 preauth-connect per origin per 5 s. */
 const PREAUTH_START_DEFAULT_RETRY_AFTER_MS = 5000;
 
-/** v0.2.1: true when the rejection is the `DOMException` that
+/** v0.2.1-rc.1: true when the rejection is the `DOMException` that
  * `fetchJsonWithTimeout`'s AbortController produces on timeout — i.e.
  * the browser held the loopback fetch (Chrome >=142 LNA prompt) or the
  * attempt outlived its own ceiling. */
@@ -1539,7 +1539,7 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-/** v0.2.1: pull `retryAfterMs` out of a 429 `BridgeHttpError`.
+/** v0.2.1-rc.1: pull `retryAfterMs` out of a 429 `BridgeHttpError`.
  * `BridgeHttpError.message` carries the raw response body, which for
  * the wallet's rate limiter is `{"error":"rate_limited","retryAfterMs":N}`.
  * An unparseable body falls back to the wallet's 5 s window. */
@@ -1555,7 +1555,7 @@ function retryAfterMsFromRateLimitError(error: BridgeHttpError): number {
   return PREAUTH_START_DEFAULT_RETRY_AFTER_MS;
 }
 
-/** v0.2.1: bounded `window.setTimeout` sleep. Uses the same
+/** v0.2.1-rc.1: bounded `window.setTimeout` sleep. Uses the same
  * `window.setTimeout` style as `pollBridge` so test fake-timers and
  * browser suspensions behave identically. */
 function delayMs(ms: number): Promise<void> {
@@ -1587,7 +1587,7 @@ export async function startPreauthConnect(input: {
     code_challenge: input.codeChallenge,
   });
 
-  // v0.2.1: total budget across all attempts.
+  // v0.2.1-rc.1: total budget across all attempts.
   const deadline = Date.now() + bridgePreauthStartTimeoutMs(options);
 
   for (;;) {
@@ -1631,7 +1631,7 @@ export async function startPreauthConnect(input: {
       // InferAdapterError && err.code === BRIDGE_PRIVATE_NETWORK_BLOCKED`
       // and render an actionable message.
       //
-      // v0.2.1: a TypeError is the user's explicit "deny", so it is
+      // v0.2.1-rc.1: a TypeError is the user's explicit "deny", so it is
       // NOT retried — retrying would swallow the actionable error the
       // rc.18 contract promises. The PENDING half of LNA (the prompt
       // is on screen, fetch held) rejects with `AbortError`, which is

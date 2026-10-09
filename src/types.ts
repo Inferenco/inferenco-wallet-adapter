@@ -89,7 +89,7 @@ export interface InferWalletOptions {
   websocketBaseUrl?: string;
   bridgeConnectTimeoutMs?: number;
   /**
-   * v0.2.1: TOTAL budget (milliseconds) for `POST /preauth-connect`,
+   * v0.2.1-rc.1: TOTAL budget (milliseconds) for `POST /preauth-connect`,
    * retries included. Distinct from `bridgeConnectTimeoutMs`, which is
    * a per-request liveness probe. A browser that holds the loopback
    * fetch behind a Chrome >=142 Local Network Access prompt aborts the

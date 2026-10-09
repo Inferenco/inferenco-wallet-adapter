@@ -37,7 +37,7 @@ export const DEFAULT_DETECT_ALIASES = true;
 export const DEFAULT_REGISTER_FORCE = false;
 export const DEFAULT_DESKTOP_REGISTRATION = true;
 export const DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS = 1200;
-/** v0.2.1 (first-time connect / no-new-tab): TOTAL budget for
+/** v0.2.1-rc.1 (first-time connect / no-new-tab): TOTAL budget for
  * `POST /preauth-connect`, retries included. `bridgeConnectTimeoutMs`
  * (1200 ms) is a per-request liveness probe that is deliberately too
  * short for Chrome >=142's Local Network Access prompt: while the LNA

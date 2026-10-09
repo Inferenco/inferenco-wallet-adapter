@@ -226,7 +226,7 @@ connect()
 
 ### When preauth is abandoned (and the deeplink is reached)
 
-`startPreauthConnect` is a **bounded retry loop** (adapter 0.2.1). The legacy
+`startPreauthConnect` is a **bounded retry loop** (adapter 0.2.1-rc.1). The legacy
 deeplink is reached only when the loop gives up, which is one of:
 
 | Outcome | Retried? | Result |
@@ -244,7 +244,7 @@ The budget is `bridgePreauthStartTimeoutMs`, defaulting to
 probe for the other bridge calls.
 
 A denied permission and a pending permission are **different failure shapes**
-(`TypeError` vs `AbortError`). Before 0.2.1 both collapsed into `null`, so a
+(`TypeError` vs `AbortError`). Before 0.2.1-rc.1 both collapsed into `null`, so a
 reachable wallet waiting on a permission prompt was indistinguishable from a
 wallet that was not running — which is what made the deeplink, and the new tab
 it causes in the wallet, fire spuriously.

@@ -330,7 +330,7 @@ describe("connect() does not fire deeplink when preauth succeeds", () => {
   });
 });
 /**
- * v0.2.1 — first-time connect / no-new-tab, at the `connect()` level.
+ * v0.2.1-rc.1 — first-time connect / no-new-tab, at the `connect()` level.
  *
  * The whole regression chain is exercised here end to end:
  *

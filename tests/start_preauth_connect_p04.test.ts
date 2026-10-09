@@ -7,7 +7,7 @@ import { InferAdapterError, InferErrorCode } from "../src/errors";
 const SAMPLE_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const SAMPLE_BRIDGE_URL = `http://127.0.0.1:21984/${SAMPLE_TOKEN}`;
 
-/** v0.2.1: the rejection shape produced by `fetchJsonWithTimeout`'s
+/** v0.2.1-rc.1: the rejection shape produced by `fetchJsonWithTimeout`'s
  * AbortController when the browser holds the loopback fetch behind
  * Chrome >=142's Local Network Access prompt. It is a `DOMException`,
  * NOT a `TypeError` — the distinction is the whole point of the fix. */
@@ -165,7 +165,7 @@ describe("BRIDGE_PRIVATE_NETWORK_BLOCKED is exported from package entry", () => 
 });
 
 /**
- * v0.2.1 — first-time connect / no-new-tab.
+ * v0.2.1-rc.1 — first-time connect / no-new-tab.
  *
  * Regression: on a first-ever connect from a public HTTPS origin,
  * Chrome >=142's Local Network Access prompt holds the loopback fetch.
@@ -177,7 +177,7 @@ describe("BRIDGE_PRIVATE_NETWORK_BLOCKED is exported from package entry", () => 
  *
  * The fix is a bounded retry loop around `POST /preauth-connect`.
  */
-describe("startPreauthConnect — bounded retry (0.2.1, first-time connect)", () => {
+describe("startPreauthConnect — bounded retry (0.2.1-rc.1, first-time connect)", () => {
   let originalFetch: typeof fetch;
 
   beforeEach(() => {
