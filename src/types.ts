@@ -88,6 +88,17 @@ export interface InferWalletOptions {
   relayBaseUrl?: string;
   websocketBaseUrl?: string;
   bridgeConnectTimeoutMs?: number;
+  /**
+   * v0.2.1: TOTAL budget (milliseconds) for `POST /preauth-connect`,
+   * retries included. Distinct from `bridgeConnectTimeoutMs`, which is
+   * a per-request liveness probe. A browser that holds the loopback
+   * fetch behind a Chrome >=142 Local Network Access prompt aborts the
+   * probe; the retry loop in `startPreauthConnect` uses this budget to
+   * keep retrying until the user answers the prompt, so no deeplink
+   * fallback (and therefore no new tab) is fired on a first-time
+   * connect. Default: `DEFAULT_BRIDGE_PREAUTH_START_TIMEOUT_MS` (30000).
+   */
+  bridgePreauthStartTimeoutMs?: number;
   bridgePollIntervalMs?: number;
   bridgePollTimeoutMs?: number;
   mobilePollIntervalMs?: number;

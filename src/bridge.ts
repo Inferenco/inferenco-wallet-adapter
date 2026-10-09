@@ -45,6 +45,7 @@ import {
   DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS,
   DEFAULT_BRIDGE_POLL_INTERVAL_MS,
   DEFAULT_BRIDGE_POLL_TIMEOUT_MS,
+  DEFAULT_BRIDGE_PREAUTH_START_TIMEOUT_MS,
   DEFAULT_DESKTOP_BRIDGE_URL,
   DEFAULT_DESKTOP_LOGIN_URL,
   DEFAULT_DEEPLINK_BASE_URL,
@@ -211,6 +212,11 @@ export function bridgeBaseUrl(options: InferWalletOptions = {}): string {
 
 function bridgeConnectTimeoutMs(options: InferWalletOptions = {}): number {
   return options.bridgeConnectTimeoutMs ?? DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS;
+}
+
+/** v0.2.1: TOTAL budget for `POST /preauth-connect`, retries included. */
+function bridgePreauthStartTimeoutMs(options: InferWalletOptions = {}): number {
+  return options.bridgePreauthStartTimeoutMs ?? DEFAULT_BRIDGE_PREAUTH_START_TIMEOUT_MS;
 }
 
 function bridgePollIntervalMs(options: InferWalletOptions = {}): number {
@@ -1460,10 +1466,35 @@ async function pollBridge<T extends { status?: string; error?: string }>(
  * to deliver the session via a callback URL. The dapp's original
  * tab stays open the entire time.
  *
- * Returns `null` if the bridge is unreachable (e.g., wallet not
- * running). The caller should fall back to `tryLocalBridgeConnect`
- * for the legacy token-gated path (used by the embedded webview
- * path via postMessage).
+ * v0.2.1 — bounded retry around the POST. The single-shot 1200 ms
+ * probe (`bridgeConnectTimeoutMs`) is a liveness probe, not a
+ * connect deadline: on a first-time connect from a public HTTPS
+ * origin Chrome >=142 holds the loopback fetch behind its Local
+ * Network Access prompt, the probe aborts with a `DOMException`
+ * named `AbortError`, and pre-fix that was folded into the same
+ * `null` as "bridge unreachable". `InferClient.connect()` then fell
+ * through to `launchDesktopOrMobileConnect()`, whose
+ * `inferenco://login?redirect=...` deeplink the wallet's no-new-tab
+ * arm cannot match (no `request=` param) — so the WALLET opened a
+ * NEW TAB with `xdg-open` while the originating tab polled
+ * localStorage for a session that never arrived.
+ *
+ * The retry loop therefore:
+ *   - gives each attempt a timeout of `min(10000, remaining budget)`
+ *     instead of the 1200 ms probe, so a user who takes a few
+ *     seconds to answer the LNA prompt is absorbed;
+ *   - retries `AbortError` (LNA prompt pending / wallet still
+ *     cold-starting) after a 400 ms backoff;
+ *   - retries HTTP 429 (the wallet rate-limits `POST /preauth-connect`
+ *     to 1 per origin per 5 s) honouring the wallet-supplied
+ *     `retryAfterMs`;
+ *   - keeps TypeError NON-retryable so a user who DENIES local-network
+ *     access still surfaces `BRIDGE_PRIVATE_NETWORK_BLOCKED`;
+ *   - returns `null` — and therefore falls back to the legacy deeplink
+ *     — only when the whole `bridgePreauthStartTimeoutMs` budget is
+ *     exhausted, or immediately for 403/404 (genuine unavailability /
+ *     origin mismatch). Per SECURITY.md:275 that fallback is preserved
+ *     "for the cold-start case only".
  */
 export interface PreauthStartResult {
   requestId: string;
@@ -1485,6 +1516,54 @@ export interface PreauthStartResult {
   bridgeUrl?: string;
 }
 
+/** v0.2.1: per-attempt ceiling for one `POST /preauth-connect`.
+ * Deliberately far above `DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS` (1200 ms,
+ * the liveness probe) so a user who is still answering Chrome's Local
+ * Network Access prompt is absorbed inside a single attempt. */
+const PREAUTH_START_ATTEMPT_TIMEOUT_CAP_MS = 10000;
+/** v0.2.1: fixed backoff between retryable attempts. */
+const PREAUTH_START_RETRY_BACKOFF_MS = 400;
+/** v0.2.1: fallback wait for a 429 whose body could not be parsed.
+ * The wallet rate-limits 1 preauth-connect per origin per 5 s. */
+const PREAUTH_START_DEFAULT_RETRY_AFTER_MS = 5000;
+
+/** v0.2.1: true when the rejection is the `DOMException` that
+ * `fetchJsonWithTimeout`'s AbortController produces on timeout — i.e.
+ * the browser held the loopback fetch (Chrome >=142 LNA prompt) or the
+ * attempt outlived its own ceiling. */
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
+/** v0.2.1: pull `retryAfterMs` out of a 429 `BridgeHttpError`.
+ * `BridgeHttpError.message` carries the raw response body, which for
+ * the wallet's rate limiter is `{"error":"rate_limited","retryAfterMs":N}`.
+ * An unparseable body falls back to the wallet's 5 s window. */
+function retryAfterMsFromRateLimitError(error: BridgeHttpError): number {
+  try {
+    const parsed = JSON.parse(error.message) as { retryAfterMs?: unknown };
+    if (typeof parsed?.retryAfterMs === "number" && parsed.retryAfterMs > 0) {
+      return parsed.retryAfterMs;
+    }
+  } catch {
+    // Body was not JSON (or not an object) — fall through.
+  }
+  return PREAUTH_START_DEFAULT_RETRY_AFTER_MS;
+}
+
+/** v0.2.1: bounded `window.setTimeout` sleep. Uses the same
+ * `window.setTimeout` style as `pollBridge` so test fake-timers and
+ * browser suspensions behave identically. */
+function delayMs(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 export async function startPreauthConnect(input: {
   origin: string;
   app: string;
@@ -1494,7 +1573,8 @@ export async function startPreauthConnect(input: {
 }): Promise<PreauthStartResult | null> {
   if (!isBrowser() || isMobileBrowser()) return null;
 
-  const base = bridgeBaseUrl(input.options ?? {});
+  const options = input.options ?? {};
+  const base = bridgeBaseUrl(options);
   // Strip any `/<token>` prefix from the configured bridge URL.
   // The pre-auth route is token-less; the wallet's `Origin`-based
   // auth is sufficient.
@@ -1507,66 +1587,99 @@ export async function startPreauthConnect(input: {
     code_challenge: input.codeChallenge,
   });
 
-  try {
-    const response = await fetchJsonWithTimeout<{
-      requestId: string;
-      pollUrl: string;
-      bridgeUrl: string;
-      status?: string;
-    }>(url, bridgeConnectTimeoutMs(input.options ?? {}), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body,
-    });
-    return {
-      requestId: response.requestId,
-      pollUrl: response.pollUrl,
-      bridgeUrl: response.bridgeUrl,
-    };
-  } catch (error) {
-    // P-04 (HTTPS connect reload, 0.2.0-rc.18): when the fetch
-    // throws a TypeError, this is the canonical signal that the
-    // browser blocked the cross-origin request (most commonly
-    // Chrome ≥142's Local Network Access / PNA enforcement when
-    // a public HTTPS origin tries to reach loopback). Surface a
-    // TYPED error so dApps can match `err instanceof
-    // InferAdapterError && err.code === BRIDGE_PRIVATE_NETWORK_BLOCKED`
-    // and render an actionable message.
-    //
-    // Connection refused / ECONNREFUSED throws WITHOUT a
-    // TypeError (it's a `TypeError` from fetch on some browsers
-    // but a `DOMException` or `Error` with a different message
-    // on others). We branch on `TypeError` strictly so that
-    // connection-refused falls through to the generic error
-    // path (`return null` below) and stays backward-compatible
-    // with rc.16's "silently null on connection failure"
-    // semantics.
-    if (error instanceof TypeError) {
-      // Wrap in InferAdapterError so consumers can do
-      // `instanceof` + `err.code === BRIDGE_PRIVATE_NETWORK_BLOCKED`.
-      // We throw it (not return null) so the caller can decide
-      // how to handle it — pre-fix this function silently
-      // returned null, which masked the actual cause and
-      // triggered the spurious deeplink-fallback re-navigation
-      // (the "page reload" UX bug).
-      throw new InferAdapterError(
-        InferErrorCode.BridgePrivateNetworkBlocked,
-        "Browser blocked access to the local wallet bridge (PNA / LNA). " +
-          "Public HTTPS origins need explicit local-network permission to " +
-          "reach the loopback wallet bridge. See infer-connect skill 'Bridge " +
-          "Private Network Blocked' section for the dApp-side recovery UX.",
-        error
-      );
+  // v0.2.1: total budget across all attempts.
+  const deadline = Date.now() + bridgePreauthStartTimeoutMs(options);
+
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      // Budget exhausted: last-resort cold-start deeplink fallback.
+      return null;
+    }
+    const attemptTimeoutMs = Math.max(
+      1,
+      Math.min(PREAUTH_START_ATTEMPT_TIMEOUT_CAP_MS, remaining)
+    );
+
+    let waitBeforeRetryMs: number | null = null;
+    try {
+      const response = await fetchJsonWithTimeout<{
+        requestId: string;
+        pollUrl: string;
+        bridgeUrl: string;
+        status?: string;
+      }>(url, attemptTimeoutMs, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body,
+      });
+      return {
+        requestId: response.requestId,
+        pollUrl: response.pollUrl,
+        bridgeUrl: response.bridgeUrl,
+      };
+    } catch (error) {
+      // P-04 (HTTPS connect reload, 0.2.0-rc.18): when the fetch
+      // throws a TypeError, this is the canonical signal that the
+      // browser DENIED the cross-origin request (most commonly
+      // Chrome ≥142's Local Network Access / PNA enforcement when
+      // a public HTTPS origin tries to reach loopback). Surface a
+      // TYPED error so dApps can match `err instanceof
+      // InferAdapterError && err.code === BRIDGE_PRIVATE_NETWORK_BLOCKED`
+      // and render an actionable message.
+      //
+      // v0.2.1: a TypeError is the user's explicit "deny", so it is
+      // NOT retried — retrying would swallow the actionable error the
+      // rc.18 contract promises. The PENDING half of LNA (the prompt
+      // is on screen, fetch held) rejects with `AbortError`, which is
+      // handled by the retry arm below.
+      if (error instanceof TypeError) {
+        // Wrap in InferAdapterError so consumers can do
+        // `instanceof` + `err.code === BRIDGE_PRIVATE_NETWORK_BLOCKED`.
+        // We throw it (not return null) so the caller can decide
+        // how to handle it — pre-fix this function silently
+        // returned null, which masked the actual cause and
+        // triggered the spurious deeplink-fallback re-navigation
+        // (the "page reload" UX bug).
+        throw new InferAdapterError(
+          InferErrorCode.BridgePrivateNetworkBlocked,
+          "Browser blocked access to the local wallet bridge (PNA / LNA). " +
+            "Public HTTPS origins need explicit local-network permission to " +
+            "reach the loopback wallet bridge. See infer-connect skill 'Bridge " +
+            "Private Network Blocked' section for the dApp-side recovery UX.",
+          error
+        );
+      }
+
+      // Retry arm 1: the fetch was held past our per-attempt ceiling
+      // (LNA prompt still on screen, or the wallet is still
+      // cold-starting its listener). Fixed backoff, then retry inside
+      // the remaining budget.
+      if (isAbortError(error)) {
+        waitBeforeRetryMs = PREAUTH_START_RETRY_BACKOFF_MS;
+      } else if (
+        error instanceof BridgeHttpError &&
+        error.status === 429
+      ) {
+        // Retry arm 2: the wallet rate-limits preauth-connect to 1 per
+        // origin per 5 s. An immediate retry would 429 again, so honour
+        // the wallet-advertised `retryAfterMs`.
+        waitBeforeRetryMs = retryAfterMsFromRateLimitError(error);
+      }
+
+      // Not retryable: 403/404 (genuine unavailability / origin
+      // mismatch), 5xx, ECONNREFUSED, parse errors. Preserve the legacy
+      // "return null" semantics so existing dApps fall through to the
+      // deeplink fallback path.
+      if (waitBeforeRetryMs === null) return null;
     }
 
-    // Connection refused / ECONNREFUSED / 5xx / parse error:
-    // preserve the legacy "return null" semantics so existing
-    // dApps fall through to the deeplink fallback path (where
-    // appropriate).
-    return null;
+    const budgetLeft = deadline - Date.now();
+    if (budgetLeft <= 0) return null;
+    await delayMs(Math.min(waitBeforeRetryMs, budgetLeft));
   }
 }
 
