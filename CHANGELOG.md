@@ -5,7 +5,13 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1-rc.1] - TBD
+## [0.2.1] - 2026-10-10
+
+### Changed
+
+- Stable re-release of the `0.2.1-rc.1` content (the bounded preauth retry fix). The published tarball differs from `0.2.1-rc.1` only in the embedded `package.json` version string; the `dist/` payload is byte-identical. The `latest` dist-tag moved from `0.2.0` to `0.2.1`; the `rc` dist-tag still points at `0.2.1-rc.1`.
+
+## [0.2.1-rc.1] - 2026-10-09
 
 ### Fixed
 
