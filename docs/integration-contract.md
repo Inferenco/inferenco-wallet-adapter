@@ -1,6 +1,8 @@
 # Infer Connect integration contract v1
 
-Status: implementation contract for 0.2.1-rc.1; final release target 0.2.1. Local conformance is separate from native/device/release qualification.
+Status (2026-10-11): integration repairs on fix/infer-connect-0.2.2-rc.1, updated with origin/main at 391c674. The package version remains upstream 0.2.1; this branch is not a published release. The 0.2.1-rc.1 artifact evidence and original 0.2.1 qualification target below describe the pre-merge checkpoint, not qualification of this merged source. Local conformance remains separate from native/device/release qualification.
+
+Post-merge validation: 472 tests passed and 6 opt-in live tests skipped; TypeScript checking and the ESM/CJS/declaration build passed. Upstream first-time preauth retry behavior and release metadata are retained. Native/device qualification remains pending.
 
 ## Public inputs and capabilities
 
