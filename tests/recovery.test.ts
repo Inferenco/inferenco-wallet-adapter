@@ -1,3 +1,4 @@
+import { listDurableInvocations, listDurableRequests, pruneDurableEvidence } from "../src/durableRecovery";
 import {
   storeExternalSession,
   tryLocalBridgeSignAndSubmit,
@@ -97,6 +98,9 @@ describe("exact-ID signing recovery", () => {
     expect(await listRecoverableRequests()).toEqual([]);
     expect(posts).toBe(1);
     expect(cancels).toBe(0);
+    await pruneDurableEvidence(Date.now() + 31 * 86400000);
+    expect(await listDurableRequests()).toHaveLength(0);
+    expect(await listDurableInvocations()).toHaveLength(0);
   });
 
   it("treats a different desktop request ID as unknown and retains the receipt", async () => {

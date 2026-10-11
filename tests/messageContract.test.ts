@@ -175,3 +175,14 @@ describe("real Ed25519 message bindings and truthful outcomes", () => {
       _resetBridgeTokenForTesting();
     });
 });
+
+it.each([["profile"], ["publicKey"], ["profile", "publicKey"]])("rejects a signed v1 response missing %j", async (...missing) => {
+  const input = { message: "challenge", nonce: "nonce" };
+  const result: Record<string, unknown> = output(input);
+  for (const field of missing) delete result[field];
+  provider(async () => ({ status: "Approved", args: result }));
+  const client = new InferClient();
+  try {
+    await expect(client.signMessage(input)).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  } finally { client.dispose(); }
+});

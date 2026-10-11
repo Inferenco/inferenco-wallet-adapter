@@ -2610,6 +2610,7 @@ export interface ReadResultForSessionArgs {
   scope: ReadResultForSessionScope;
   /** InferWalletOptions propagated from the caller (token, timeouts). */
   options?: InferWalletOptions;
+  session?: InferExternalSession;
 }
 
 /** Mirrors `RecoveredRequestOutcome` minus `recoveryId` / `transport` /
@@ -2619,16 +2620,8 @@ export interface ReadResultForSessionArgs {
  * wire payload into the AIP-63 / `cedra:signAndSubmitTransaction`
  * shape Desk stored. */
 export type ReadResultForSessionResult =
-  | {
-      ok: true;
-      status: "approved" | "rejected";
-      hash?: string;
-      payload:
-        | CedraSignMessageOutput
-        | CedraSignTransactionOutputV1_1
-        | CedraSignAndSubmitTransactionOutput;
-      finalizedAt: string;
-    }
+  | { ok: true; status: "approved" | "rejected"; hash?: string; payload: unknown; finalizedAt: string }
+  | { ok: true; status: "pending" | "unknown"; transactionHash?: string; reason?: string }
   | { ok: false; reason: "scope_mismatch" | "not_found" | "unavailable" };
 
 function parseReadResultScope(
@@ -2669,7 +2662,9 @@ function parseReadResultScope(
 export async function readResultForSession(
   args: ReadResultForSessionArgs
 ): Promise<ReadResultForSessionResult> {
-  const opts = args.options ?? {};
+  const opts = args.session
+    ? { ...args.options, bridgeBaseUrl: sessionBridgeBaseUrl(args.session, args.options ?? {}) }
+    : args.options ?? {};
   if (typeof window === "undefined") {
     return { ok: false, reason: "unavailable" };
   }
@@ -2731,11 +2726,7 @@ export async function readResultForSession(
     typeof record.requestId !== "string" ||
     record.requestId !== args.requestId ||
     typeof record.sessionId !== "string" ||
-    record.sessionId !== args.newSessionId ||
-    typeof record.finalizedAt !== "string" ||
-    (record.status !== "approved" && record.status !== "rejected") ||
-    !record.payload ||
-    typeof record.payload !== "object"
+    record.sessionId !== args.newSessionId
   ) {
     return { ok: false, reason: "unavailable" };
   }
@@ -2760,28 +2751,55 @@ export async function readResultForSession(
   ) {
     return { ok: false, reason: "scope_mismatch" };
   }
-  const out: {
-    ok: true;
-    status: "approved" | "rejected";
-    hash?: string;
-    payload:
-      | CedraSignMessageOutput
-      | CedraSignTransactionOutputV1_1
-      | CedraSignAndSubmitTransactionOutput;
-    finalizedAt: string;
-  } = {
-    ok: true,
-    status: record.status,
-    payload: record.payload as
-      | CedraSignMessageOutput
-      | CedraSignTransactionOutputV1_1
-      | CedraSignAndSubmitTransactionOutput,
-    finalizedAt: record.finalizedAt
-  };
-  if (typeof record.hash === "string" && isValidTransactionHash(record.hash)) {
-    out.hash = record.hash;
+  if (record.status === "pending" || record.status === "unknown") {
+    if (!args.requestCommitment || !args.invocationId)
+      return { ok: false, reason: "unavailable" };
+    if (record.hash !== undefined &&
+        (args.scope.method !== "signAndSubmitTransaction" || !isValidTransactionHash(record.hash)))
+      return { ok: false, reason: "unavailable" };
+    return {
+      ok: true, status: record.status,
+      ...(record.hash === undefined ? {} : { transactionHash: (record.hash as string).toLowerCase() }),
+      ...(record.status === "unknown" ? { reason: "original_execution_unresolved" } : {})
+    };
   }
-  return out;
+  if ((record.status !== "approved" && record.status !== "rejected") ||
+      typeof record.finalizedAt !== "string" ||
+      (record.status === "approved" && (!record.payload || typeof record.payload !== "object" || Array.isArray(record.payload))) ||
+      (record.hash !== undefined && !isValidTransactionHash(record.hash)))
+    return { ok: false, reason: "unavailable" };
+  return { ok: true, status: record.status, payload: record.payload,
+    finalizedAt: record.finalizedAt,
+    ...(record.hash === undefined ? {} : { hash: record.hash as string }) };
+
+}
+
+/** Scoped retention acknowledgement; separate from request creation and execution. */
+export async function acknowledgeDesktopResult(args: ReadResultForSessionArgs): Promise<void> {
+  if (!args.invocationId || !args.requestCommitment || !args.session)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Original invocation and current session are required for acknowledgement");
+  const opts = { ...args.options, bridgeBaseUrl: sessionBridgeBaseUrl(args.session, args.options ?? {}) };
+  const url = new URL(bridgePathWithToken("/acknowledge-result/" + encodeURIComponent(args.requestId), opts), args.bridgeOrigin);
+  const response = encodeWireValue(await fetchJsonWithTimeout<unknown>(url.toString(), bridgeConnectTimeoutMs(opts), {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: args.newSessionId, origin: args.scope.origin,
+      accountAddress: args.scope.accountAddress, network: args.scope.network,
+      chainId: args.scope.chainId, method: args.scope.method,
+      invocationId: args.invocationId, requestCommitment: args.requestCommitment
+    })
+  }));
+  if (!response || typeof response !== "object" || Array.isArray(response))
+    throw new InferAdapterError(InferErrorCode.InternalError, "Malformed retention acknowledgement");
+  const scope = response.scope;
+  if (response.status !== "acknowledged" || response.contractVersion !== 1 ||
+      response.invocationId !== args.invocationId || response.requestId !== args.requestId ||
+      response.requestCommitment !== args.requestCommitment || response.method !== args.scope.method ||
+      !scope || typeof scope !== "object" || Array.isArray(scope) ||
+      scope.origin !== args.scope.origin || scope.network !== args.scope.network ||
+      scope.chainId !== args.scope.chainId ||
+      canonicalAddress(scope.accountAddress) !== canonicalAddress(args.scope.accountAddress))
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Retention acknowledgement differs from the original request");
 }
 
 export async function tryLocalBridgeSignMessage(

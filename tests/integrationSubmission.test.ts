@@ -185,11 +185,16 @@ describe("public invocation commitment and zero-dispatch evidence", () => {
               method: "signAndSubmitTransaction"
             }
           });
-        if (u.pathname.endsWith("/transaction-request/original-request"))
+        if (u.pathname.endsWith("/read-result/original-request"))
           return json({
-            requestId: "original-request",
-            status: "approved",
-            hash
+            contractVersion: 1,
+            invocationId: admitted!.invocationId,
+            requestCommitment: admitted!.requestCommitment,
+            requestId: "original-request", sessionId: session.sessionId,
+            scope: { origin: window.location.origin, transport: "desktop-bridge",
+              accountAddress: canonicalAddress(session.address), network: "testnet",
+              chainId: 2, method: "signAndSubmitTransaction" },
+            status: "approved", payload: { hash }, finalizedAt: new Date().toISOString()
           });
         throw new Error("Unexpected read " + u.pathname);
       });

@@ -393,6 +393,11 @@ export function assertSignedMessageBinding(
 ): void {
   const request = validateMessageInput(input);
   const fields = output as unknown as Record<string, unknown>;
+  if (request.profile === MESSAGE_PROFILE && fields.profile !== MESSAGE_PROFILE)
+    throw new InferAdapterError(
+      InferErrorCode.InternalError,
+      "Requested v1 message result is missing its profile"
+    );
   if (output.message !== request.message || output.nonce !== request.nonce)
     throw new InferAdapterError(
       InferErrorCode.InternalError,

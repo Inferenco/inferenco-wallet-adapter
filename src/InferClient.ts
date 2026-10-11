@@ -494,6 +494,7 @@ async function pollPreauthUntilResolved(
 
 export class InferClient extends EventEmitter<InferClientEvents> {
   private provider?: InferProvider;
+  private injectedScopeRevision = 0;
   private accountInfo: AccountInfo | null = null;
   private networkInfo: NetworkInfo | null = null;
   /** v0.2.0-rc.8 (Phase 5 UX): opt-in session liveness handle. */
@@ -1034,6 +1035,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
   }
 
   async disconnect(): Promise<void> {
+    this.injectedScopeRevision++;
     const provider = this.refreshProvider();
     const externalSession = readExternalSession();
     this.disconnectEmitted = false;
@@ -1087,6 +1089,40 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     }
   }
 
+  private assertInjectedProvider(
+    provider: InferProvider,
+    contractVersion: InferProvider["integrationContractVersion"],
+    scopeRevision: number
+  ): void {
+    if (this.refreshProvider() !== provider ||
+        this.injectedScopeRevision !== scopeRevision ||
+        provider.integrationContractVersion !== contractVersion)
+      throw new InferAdapterError(InferErrorCode.Unauthorized,
+        "Injected provider changed during request preparation");
+  }
+
+  /** Recheck the live provider after application persistence; caches are not a dispatch fence. */
+  private async assertLiveInjectedScope(
+    provider: InferProvider,
+    account: AccountInfo,
+    network: NetworkInfo,
+    contractVersion: InferProvider["integrationContractVersion"]
+  ): Promise<void> {
+    const scopeRevision = this.injectedScopeRevision;
+    this.assertInjectedProvider(provider, contractVersion, scopeRevision);
+    if (!provider.account || !provider.network)
+      throw new InferAdapterError(InferErrorCode.Unauthorized,
+        "Injected provider cannot confirm the original account and network");
+    const liveAccount = normalizeProviderAccount(unwrap(await provider.account()));
+    const liveNetwork = normalizeNetwork(unwrap(await provider.network()));
+    this.assertInjectedProvider(provider, contractVersion, scopeRevision);
+    if (canonicalAddress(liveAccount.address.toString()) !== canonicalAddress(account.address.toString()) ||
+        liveAccount.publicKey.toString().toLowerCase() !== account.publicKey.toString().toLowerCase() ||
+        liveNetwork.name !== network.name || liveNetwork.chainId !== network.chainId)
+      throw new InferAdapterError(InferErrorCode.Unauthorized,
+        "Injected account or network changed during request preparation");
+  }
+
   private async prepareInjectedSigning(
     provider: InferProvider,
     method: DurableInvocation["method"],
@@ -1094,6 +1130,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     account: AccountInfo,
     network: NetworkInfo
   ) {
+    const contractVersion = provider.integrationContractVersion;
     const scope = {
       origin: typeof window === "undefined" ? "" : window.location.origin,
       accountAddress: canonicalAddress(account.address.toString()),
@@ -1118,12 +1155,15 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         requestCommitment: requestCommitment(method, scope, payload),
         requestPayload: payload,
         endpoint: scope.origin,
-        signerPublicKey: account.publicKey.toString()
+        signerPublicKey: account.publicKey.toString(),
+        remoteAcknowledgementRequired: contractVersion === 1 &&
+          typeof provider.acknowledgeInvocation === "function"
       }
     );
     const descriptor = Object.freeze(invocationDescriptor(invocation));
     try {
       await this.options.onInvocationPrepared?.(descriptor);
+      await this.assertLiveInjectedScope(provider, account, network, contractVersion);
       if (
         provider.integrationContractVersion !== undefined &&
         provider.integrationContractVersion !== 1
@@ -1338,13 +1378,21 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         }
         if (
           provider.integrationContractVersion !== 1 &&
-          this.options.networkOverride !== undefined &&
-          (await this.getNetwork()).name !== this.options.networkOverride
+          this.options.networkOverride !== undefined
         ) {
-          throw new InferAdapterError(
-            InferErrorCode.InvalidNetwork,
-            "Approved network differs from networkOverride"
-          );
+          const contractVersion = provider.integrationContractVersion;
+          const scopeRevision = this.injectedScopeRevision;
+          this.assertInjectedProvider(provider, contractVersion, scopeRevision);
+          if (!provider.network)
+            throw new InferAdapterError(InferErrorCode.InvalidNetwork,
+              "Legacy provider cannot confirm the required signing network");
+          const liveNetwork = normalizeNetwork(unwrap(await provider.network()));
+          this.assertInjectedProvider(provider, contractVersion, scopeRevision);
+          if (liveNetwork.name !== this.options.networkOverride)
+            throw new InferAdapterError(
+              InferErrorCode.InvalidNetwork,
+              "Approved network differs from networkOverride"
+            );
         }
         let response: unknown;
         try {
@@ -1496,6 +1544,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
       if (provider?.signAndSubmitTransaction) {
         const account = await this.getAccount();
         const network = await this.getNetwork();
+        const contractVersion = provider.integrationContractVersion;
         const scope = {
           origin: typeof window === "undefined" ? "" : window.location.origin,
           accountAddress: canonicalAddress(account.address.toString()),
@@ -1523,12 +1572,16 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
               wire
             ),
             requestPayload: wire,
-            endpoint: scope.origin
+            endpoint: scope.origin,
+            remoteAcknowledgementRequired: contractVersion === 1 &&
+              typeof provider.acknowledgeInvocation === "function"
           }
         );
         const descriptor = Object.freeze(invocationDescriptor(invocation));
+        let providerInput: CanonicalTransactionInput | ReturnType<typeof legacySubmitInput>;
         try {
           await callOptions.onInvocationPrepared?.(descriptor);
+          await this.assertLiveInjectedScope(provider, account, network, contractVersion);
           if (
             provider.integrationContractVersion !== undefined &&
             provider.integrationContractVersion !== 1
@@ -1553,6 +1606,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
             scope.chainId,
             scope.network
           );
+          providerInput = provider.integrationContractVersion === 1 ? wire : legacySubmitInput(wire);
         } catch (cause) {
           await updateDurableInvocation(invocation.id, "not-invoked").catch(
             () => undefined
@@ -1566,9 +1620,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         let providerResult: unknown;
         try {
           providerResult = await provider.signAndSubmitTransaction(
-            (provider.integrationContractVersion === 1
-              ? wire
-              : legacySubmitInput(wire)) as unknown as InferTransactionPayload,
+            providerInput as unknown as InferTransactionPayload,
             provider.integrationContractVersion === 1
               ? {
                   contractVersion: 1,
@@ -1717,6 +1769,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
 
     if (provider?.onAccountChange) {
       await provider.onAccountChange((account) => {
+        this.injectedScopeRevision++;
         this.accountInfo = normalizeProviderAccount(account);
         this.emit("accountChange", this.accountInfo);
       });
@@ -1724,6 +1777,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
 
     if (provider?.onNetworkChange) {
       await provider.onNetworkChange((network) => {
+        this.injectedScopeRevision++;
         this.networkInfo = normalizeNetwork(network);
         this.emit("networkChange", this.networkInfo);
       });

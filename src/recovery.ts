@@ -10,12 +10,14 @@ import type {
   CedraSignTransactionOutputV1_1
 } from "@cedra-labs/wallet-standard";
 import { BridgeHttpError, readExternalSession, readDesktopBridgeRequestOnce, readResultForSession,
-  lookupDesktopInvocation
+  lookupDesktopInvocation,
+  acknowledgeDesktopResult
 } from "./bridge";
 import { archivePendingDesktopBridgeRequest, clearPendingDesktopBridgeRequest, desktopBridgeOrigin, readPendingDesktopBridgeRequests, type RecoverableMethod } from "./desktopRequests";
 import {
-  listDurableRequests, listDurableInvocations, saveDurableRequest, saveDurableFinal, serializeStoredFinal, transitionDurableRequest,
+  listDurableRequests, listDurableInvocations, getDurableInvocation, findDurableRequests, saveDurableRequest, saveDurableFinal, serializeStoredFinal, transitionDurableRequest,
   updateDurableInvocation,
+  saveDurableTransactionHash,
   updateInjectedInvocationEvidence,
   type DurableRequest,
   type DurableInvocation,
@@ -102,14 +104,16 @@ export async function reconcileRecoverableInvocation(
   if (typeof window === "undefined") {
     throw new InferAdapterError(InferErrorCode.Unsupported, "Recovery requires a browser");
   }
-  const invocation = (await listDurableInvocations()).find((row) => row.id === invocationId);
+  const invocation = await getDurableInvocation(invocationId);
   if (!invocation) {
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Invocation is not bound to this browser origin");
   }
   if (invocation.requestId && invocation.transport !== "injected") {
     try {
-      return await readRecoverableRequest(invocation.requestId, options);
+      const linked = await findDurableRequests(invocation.requestId, invocation);
+      if (linked.length !== 1) throw new Error("Original invocation receipt is unavailable");
+      return await readRecoverableRequest(linked[0]!.id, options);
     } catch {
       // A receipt may have been saved before the durable request was created.
     }
@@ -186,7 +190,7 @@ export async function relaunchRecoverableInvocation(
   invocationId: string,
   options: InferWalletOptions = {}
 ): Promise<void> {
-  const invocation = (await listDurableInvocations()).find((row) => row.id === invocationId);
+  const invocation = await getDurableInvocation(invocationId);
   if (!invocation || invocation.transport !== "mobile-relay" || !invocation.requestId) {
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Reconcile the original mobile request before relaunch");
@@ -210,14 +214,14 @@ export type RecoveredInvocationOutcome =
   | { invocationId: string; status: "unknown"; reason: string };
 
 export type RecoveredRequestOutcome =
-  | (RecoverableRequest & { status: "pending" })
+  | (RecoverableRequest & { status: "pending"; transactionHash?: string })
   | (RecoverableRequest & { status: "approved"; output:
         | CedraSignMessageOutput
         | CedraSignTransactionOutputV1_1
         | CedraSignAndSubmitTransactionOutput;
     })
   | (RecoverableRequest & { status: "rejected" })
-  | (RecoverableRequest & { status: "unknown"; reason: string });
+  | (RecoverableRequest & { status: "unknown"; reason: string; transactionHash?: string });
 
 const inFlight = new Map<string, Promise<RecoveredRequestOutcome>>();
 
@@ -296,6 +300,11 @@ async function records(options: InferWalletOptions): Promise<DurableRequest[]> {
   return listDurableRequests();
 }
 
+async function exactRecord(id: string, options: InferWalletOptions): Promise<DurableRequest> {
+  await migrateCurrentTab(readExternalSession(), options);
+  return findExact(await findDurableRequests(id), id);
+}
+
 function findExact(rows: DurableRequest[], id: string): DurableRequest {
   const matches = rows.filter((row) => row.id === id || row.requestId === id);
   if (matches.length !== 1) {
@@ -311,6 +320,28 @@ function findExact(rows: DurableRequest[], id: string): DurableRequest {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Cached hash evidence stays useful when the wallet is temporarily unavailable. */
+function uncertainExecution(row: DurableRequest | DurableInvocation): { transactionHash?: string } {
+  try {
+    if (row.method === "signAndSubmitTransaction" && row.requestCommitment &&
+        isValidTransactionHash(row.transactionHash) &&
+        requestCommitment(row.method, {
+          origin: row.origin, accountAddress: canonicalAddress(row.address),
+          network: row.network, chainId: row.chainId
+        }, "pending" in row ? row.pending.requestPayload : row.requestPayload) === row.requestCommitment)
+      return { transactionHash: row.transactionHash };
+  } catch { /* Invalid stored bindings never become execution evidence. */ }
+  return {};
+}
+
+function explicitRejectedPayload(payload: unknown): boolean {
+  if (payload === undefined) return true;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const fields = Object.getOwnPropertyDescriptors(payload);
+  return Object.keys(fields).length === 1 && "value" in (fields.error ?? {}) &&
+    fields.error!.value === "user_rejected";
 }
 
 function replay(row: DurableRequest): RecoveredRequestOutcome | null {
@@ -549,9 +580,6 @@ async function authorizedReadDesktopBridge(
   options: InferWalletOptions,
   base: ReturnType<typeof descriptor>
 ): Promise<RecoveredRequestOutcome | null> {
-  // The IPC bridge authenticates per-session URL token. The token is
-  // stored in sessionStorage by the postMessage flow; if it's not
-  // present, the endpoint cannot be reached → fall back to rc.21.
   const result = await readResultForSession({
     invocationId: row.invocationId,
     requestCommitment: row.requestCommitment,
@@ -559,30 +587,46 @@ async function authorizedReadDesktopBridge(
     requestId: row.requestId,
     newSessionId: session.sessionId,
     scope: {
-      origin: row.origin,
-      transport: "desktop-bridge",
-      accountAddress: row.address,
-      network: row.network,
-      chainId: row.chainId,
-      method: row.method
+      origin: row.origin, transport: "desktop-bridge", accountAddress: row.address,
+      network: row.network, chainId: row.chainId, method: row.method
     },
-    options
+    session, options
   });
   if (!result.ok) return null;
-  if (result.status === "rejected") {
-    try {
-      await saveDurableFinal(row.id, { status: "rejected" });
-    } catch {
-      return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
-    }
-    return { ...base, status: "rejected" };
-  }
   try {
-    await saveDurableFinal(row.id, serializeStoredFinal(row.method, result.payload));
-  } catch {
-    return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
+    if (result.status === "pending" || result.status === "unknown") {
+      if (result.transactionHash) {
+        await saveDurableTransactionHash(row.id, result.transactionHash);
+        row.transactionHash = result.transactionHash;
+      }
+      return result.status === "pending"
+        ? { ...base, status: "pending", ...uncertainExecution(row) }
+        : { ...base, status: "unknown", reason: result.reason ?? "original_execution_unresolved", ...uncertainExecution(row) };
+    }
+    if (result.status === "rejected") {
+      if (!explicitRejectedPayload(result.payload) || result.hash !== undefined)
+        throw new Error("Ambiguous recovered rejection");
+      await saveDurableFinal(row.id, { status: "rejected" });
+      return { ...base, status: "rejected" };
+    }
+    if (result.status !== "approved") throw new Error("Unsupported recovered outcome");
+    const output = validateInjectedApproval({
+      method: row.method, origin: row.origin, address: row.address,
+      network: row.network, chainId: row.chainId,
+      requestPayload: row.pending.expectedMessageInput ?? row.pending.requestPayload,
+      signerPublicKey: row.pending.signerPublicKey,
+      expectedTransactionBcsHex: row.pending.expectedTransactionBcsHex
+    }, result.payload);
+    if (result.hash !== undefined &&
+        (row.method !== "signAndSubmitTransaction" ||
+          (output as CedraSignAndSubmitTransactionOutput).hash.toLowerCase() !== result.hash.toLowerCase()))
+      throw new Error("Recovered transaction identities differ");
+    await saveDurableFinal(row.id, serializeStoredFinal(row.method, output));
+    return { ...base, status: "approved", output };
+  } catch (cause) {
+    return { ...base, status: "unknown", ...uncertainExecution(row),
+      reason: cause instanceof Error ? cause.message : "Recovered result could not be validated or saved" };
   }
-  return { ...base, status: "approved", output: result.payload };
 }
 
 function injectedDescriptor(row: DurableInvocation): RecoverableRequest {
@@ -600,7 +644,11 @@ function injectedDescriptor(row: DurableInvocation): RecoverableRequest {
     method: row.method
   };
 }
-function validateInjectedApproval(row: DurableInvocation, payload: unknown) {
+function validateInjectedApproval(
+  row: Pick<DurableInvocation, "method" | "origin" | "address" | "network" | "chainId" | "requestPayload" | "signerPublicKey"> &
+    { expectedTransactionBcsHex?: string },
+  payload: unknown
+) {
   const scope = {
     origin: row.origin,
     accountAddress: canonicalAddress(row.address),
@@ -636,7 +684,7 @@ function validateInjectedApproval(row: DurableInvocation, payload: unknown) {
       ? (row.requestPayload as { rawTransactionBcsHex?: string })
           .rawTransactionBcsHex
       : undefined;
-  return deserializeSignTransactionResult(payload, expected);
+  return deserializeSignTransactionResult(payload, row.expectedTransactionBcsHex ?? expected);
 }
 function replayInjected(
   row: DurableInvocation
@@ -696,7 +744,7 @@ async function readInjectedInvocationOnce(
     )
       return {
         ...base,
-        status: "unknown",
+        status: "unknown", ...uncertainExecution(row),
         reason: "invocation_commitment_mismatch"
       };
     const final = replayInjected(row);
@@ -711,7 +759,7 @@ async function readInjectedInvocationOnce(
     )
       return {
         ...base,
-        status: "unknown",
+        status: "unknown", ...uncertainExecution(row),
         reason: "invocation_lookup_unavailable"
       };
     const unwrap = (value: unknown): unknown => {
@@ -737,7 +785,7 @@ async function readInjectedInvocationOnce(
     )
       return {
         ...base,
-        status: "unknown",
+        status: "unknown", ...uncertainExecution(row),
         reason: "current_provider_scope_mismatch"
       };
     const network = normalizeNetwork(
@@ -751,7 +799,7 @@ async function readInjectedInvocationOnce(
     )
       return {
         ...base,
-        status: "unknown",
+        status: "unknown", ...uncertainExecution(row),
         reason: "current_provider_scope_mismatch"
       };
     const result = encodeWireValue(
@@ -771,18 +819,28 @@ async function readInjectedInvocationOnce(
     )
       return {
         ...base,
-        status: "unknown",
+        status: "unknown", ...uncertainExecution(row),
         reason: "native_invocation_scope_mismatch"
       };
-    if (result.status === "pending") return { ...base, status: "pending" };
-    if (result.status === "rejected" && result.payload === undefined) {
+    if (result.status === "pending" || result.status === "unknown") {
+      if (result.hash !== undefined) {
+        if (row.method !== "signAndSubmitTransaction" || !isValidTransactionHash(result.hash))
+          throw new Error("Invalid recovered execution identity");
+        await saveDurableTransactionHash(row.id, result.hash, true);
+        row.transactionHash = result.hash.toLowerCase();
+      }
+      return result.status === "pending"
+        ? { ...base, status: "pending", ...uncertainExecution(row) }
+        : { ...base, status: "unknown", reason: "original_execution_unresolved", ...uncertainExecution(row) };
+    }
+    if (result.status === "rejected" && explicitRejectedPayload(result.payload) && result.hash === undefined) {
       await updateInjectedInvocationEvidence(row.id, {
         final: { status: "rejected" }
       });
       return { ...base, status: "rejected" };
     }
     if (result.status !== "approved")
-      return { ...base, status: "unknown", reason: String(result.status) };
+      return { ...base, status: "unknown", ...uncertainExecution(row), reason: String(result.status) };
     const output = validateInjectedApproval(row, result.payload);
     await updateInjectedInvocationEvidence(row.id, {
       final: serializeStoredFinal(row.method, output)
@@ -791,7 +849,7 @@ async function readInjectedInvocationOnce(
   } catch {
     return {
       ...base,
-      status: "unknown",
+      status: "unknown", ...uncertainExecution(row),
       reason: "native_invocation_read_unavailable"
     };
   }
@@ -836,23 +894,32 @@ export async function readRecoverableRequest(
     );
   }
   if (requestIdOrRecoveryId.startsWith("invocation:")) {
-    const invocation = (await listDurableInvocations()).find(
-      (row) =>
-        row.id === requestIdOrRecoveryId.slice(11) &&
-        row.transport === "injected"
-    );
-    if (!invocation)
+    const invocation = await getDurableInvocation(requestIdOrRecoveryId.slice(11));
+    if (!invocation || invocation.transport !== "injected")
       throw new InferAdapterError(
         InferErrorCode.Unauthorized,
         "Unknown injected invocation handle"
       );
     return readInjectedInvocation(invocation, options);
   }
-  const row = findExact(await records(options), requestIdOrRecoveryId);
+  const row = await exactRecord(requestIdOrRecoveryId, options);
   const locallyVerified = replay(row);
   if (locallyVerified) return locallyVerified;
   const base = descriptor(row);
   const session = readExternalSession();
+  if (row.transport === "desktop-bridge" && row.requestCommitment && row.invocationId &&
+      session?.integrationContractVersion === 1 && session.capabilities?.durableInvocationLookup &&
+      sameScope(row, session) && sameBridgeOrigin(row, session, options)) {
+    const existing = inFlight.get(row.id);
+    if (existing) return existing;
+    const task = (async (): Promise<RecoveredRequestOutcome> => {
+      const authorized = await authorizedReadDesktopBridge(row, session, options, base);
+      return authorized ?? { ...base, status: "unknown", ...uncertainExecution(row), reason: "durable_result_unavailable" };
+    })();
+    inFlight.set(row.id, task);
+    try { return await task; }
+    finally { inFlight.delete(row.id); }
+  }
   if (!matchingSession(row, session, options)) {
     // v0.2.0-rc.22 (A1): if no verified local final is available and the
     // original session is gone, attempt the authorized-read fallback
@@ -876,7 +943,7 @@ export async function readRecoverableRequest(
         if (authorized) return authorized;
       }
     }
-    return { ...base, status: "unknown",
+    return { ...base, status: "unknown", ...uncertainExecution(row),
       reason: "Original wallet session cannot authenticate a remote read; reconnect or reconcile externally" };
   }
   const existing = inFlight.get(row.id);
@@ -888,9 +955,9 @@ export async function readRecoverableRequest(
         const { pending, status } = await readMobileRelayRequestOnce(
           row.requestId, session, options, row.pending as Extract<DurableRequest["pending"], { version: 1 }>
         );
-        if (status.status === "pending") return { ...base, status: "pending" };
+        if (status.status === "pending") return { ...base, status: "pending", ...uncertainExecution(row) };
         if (status.status !== "approved" && status.status !== "rejected") {
-          return { ...base, status: "unknown", reason: "Relay returned " + status.status };
+          return { ...base, status: "unknown", ...uncertainExecution(row), reason: "Relay returned " + status.status };
         }
         outcome = { ...base, status: "approved",
           output: decodeMobileRelayResult(status, pending, session) };
@@ -898,15 +965,15 @@ export async function readRecoverableRequest(
         const result = await readDesktopBridgeRequestOnce(
           row.requestId, session, options, row.pending as Extract<DurableRequest["pending"], { version: 2 }>
         );
-        if (result.status === "pending") return { ...base, status: "pending" };
-        if (!result.output) return { ...base, status: "unknown", reason: "Missing approved output" };
+        if (result.status === "pending") return { ...base, status: "pending", ...uncertainExecution(row) };
+        if (!result.output) return { ...base, status: "unknown", ...uncertainExecution(row), reason: "Missing approved output" };
         outcome = { ...base, status: "approved", output: result.output };
       }
     } catch (error) {
       if (error instanceof InferAdapterError && error.code === InferErrorCode.UserRejected) {
         outcome = { ...base, status: "rejected" };
       } else {
-        return { ...base, status: "unknown", reason:
+        return { ...base, status: "unknown", ...uncertainExecution(row), reason:
           error instanceof Error ? error.message : "Result could not be validated" };
       }
     }
@@ -916,7 +983,7 @@ export async function readRecoverableRequest(
         : serializeStoredFinal(row.method, outcome.output));
       return outcome;
     } catch {
-      return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
+      return { ...base, status: "unknown", ...uncertainExecution(row), reason: "Verified outcome could not be saved durably" };
     }
   })();
   inFlight.set(row.id, task);
@@ -924,30 +991,98 @@ export async function readRecoverableRequest(
   finally { inFlight.delete(row.id); }
 }
 
-/** Acknowledgement is an awaitable exact-record CAS after durable app acceptance. */
+/** Check optional native retention support without weakening original scope. */
+async function acknowledgeNativeResult(row: DurableInvocation, options: InferWalletOptions): Promise<void> {
+  const final = replayInjected(row);
+  if (!final || (final.status !== "approved" && final.status !== "rejected"))
+    throw new InferAdapterError(InferErrorCode.InternalError, "Read a verified final outcome before acknowledging this request");
+  if (row.deliveryState === "acknowledged") return;
+  // Explicit false is admission-time evidence of an incapable peer, not a later downgrade.
+  if (row.remoteAcknowledgementRequired === false) return;
+  const provider = detectProvider(options);
+  if (!provider ||
+      (row.remoteAcknowledgementRequired === true &&
+       (provider.integrationContractVersion !== 1 || !provider.acknowledgeInvocation)))
+    throw new InferAdapterError(InferErrorCode.Unauthorized,
+      "Reconnect the original acknowledgement-capable wallet to retain a retryable acknowledgement");
+  const scope = { origin: row.origin, accountAddress: canonicalAddress(row.address), network: row.network, chainId: row.chainId };
+  if (!row.requestCommitment ||
+      requestCommitment(row.method, scope, row.requestPayload) !== row.requestCommitment ||
+      !provider.account || !provider.network)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement requires the original invocation binding");
+  const unwrap = (value: unknown): unknown => {
+    if (value && typeof value === "object" && "status" in value) {
+      const fields = value as { status?: unknown; args?: unknown };
+      return fields.status === "Approved" && Object.keys(fields).length === 2 ? fields.args : null;
+    }
+    return value;
+  };
+  const account = unwrap(await provider.account()) as { address?: unknown } | null;
+  const network = normalizeNetwork(unwrap(await provider.network()) as Parameters<typeof normalizeNetwork>[0]);
+  if (!account || canonicalAddress(String(account.address)) !== scope.accountAddress ||
+      network.name !== scope.network || network.chainId !== scope.chainId)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Current native scope differs from the original request");
+  if (detectProvider(options) !== provider)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Native provider changed before acknowledgement");
+  // Historical rows lack a capability marker. A present, scope-checked mobile/legacy
+  // provider without this optional API is known incapable; absence alone is not proof.
+  if (!provider.acknowledgeInvocation) return;
+  if (provider.integrationContractVersion !== 1)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement requires contract v1");
+  const result = encodeWireValue(await provider.acknowledgeInvocation(row.id, row.requestCommitment));
+  if (!result || typeof result !== "object" || Array.isArray(result))
+    throw new InferAdapterError(InferErrorCode.InternalError, "Malformed native acknowledgement");
+  const returned = result.scope;
+  if (result.status !== "acknowledged" || result.contractVersion !== 1 ||
+      result.invocationId !== row.id || result.requestCommitment !== row.requestCommitment ||
+      result.method !== row.method || typeof result.requestId !== "string" || !result.requestId ||
+      (row.requestId !== undefined && result.requestId !== row.requestId) ||
+      !returned || typeof returned !== "object" || Array.isArray(returned) ||
+      returned.origin !== scope.origin || returned.accountAddress !== scope.accountAddress ||
+      returned.network !== scope.network || returned.chainId !== scope.chainId)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement differs from the original request");
+}
+
+/** Remote retention acknowledgement precedes the local delivery CAS so failures remain retryable. */
 export async function acknowledgeRecoverableRequest(
   requestIdOrRecoveryId: string,
   options: InferWalletOptions = {}
 ): Promise<void> {
   if (requestIdOrRecoveryId.startsWith("invocation:")) {
-    await updateInjectedInvocationEvidence(requestIdOrRecoveryId.slice(11), {
-      deliveryState: "acknowledged"
-    });
+    const row = await getDurableInvocation(requestIdOrRecoveryId.slice(11));
+    if (!row || row.transport !== "injected") throw new InferAdapterError(InferErrorCode.Unauthorized, "Unknown native invocation");
+    await acknowledgeNativeResult(row, options);
+    await updateInjectedInvocationEvidence(row.id, { deliveryState: "acknowledged" });
     return;
   }
-  const row = findExact(await records(options), requestIdOrRecoveryId);
-  if (!row.final) {
-    throw new InferAdapterError(InferErrorCode.InternalError,
-      "Read a verified final outcome before acknowledging this request");
+  const row = await exactRecord(requestIdOrRecoveryId, options);
+  const final = replay(row);
+  if (!final || (final.status !== "approved" && final.status !== "rejected"))
+    throw new InferAdapterError(InferErrorCode.InternalError, "Read a verified final outcome before acknowledging this request");
+  if (row.state === "acknowledged") return;
+  const session = readExternalSession();
+  // Missing historical metadata is not proof of a legacy peer: retain possible
+  // Desktop v1 debt until its original result is remotely acknowledged.
+  if (row.transport === "desktop-bridge" && row.remoteAcknowledgementRequired !== false &&
+      (row.remoteAcknowledgementRequired === true || (row.requestCommitment && row.invocationId))) {
+    if (!row.requestCommitment || !row.invocationId ||
+        session?.integrationContractVersion !== 1 || !session.capabilities?.durableInvocationLookup ||
+        !sameScope(row, session) || !sameBridgeOrigin(row, session, options))
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "Reconnect the original account and network to acknowledge its retained result");
+    await acknowledgeDesktopResult({
+      invocationId: row.invocationId, requestCommitment: row.requestCommitment,
+      bridgeOrigin: row.endpoint, requestId: row.requestId, newSessionId: session.sessionId,
+      scope: { origin: row.origin, transport: "desktop-bridge", accountAddress: row.address,
+        network: row.network, chainId: row.chainId, method: row.method },
+      session, options
+    });
   }
   await transitionDurableRequest(row.id, "acknowledge");
-  if (matchingSession(row, readExternalSession(), options)) {
+  if (matchingSession(row, session, options)) {
     try {
       if (row.transport === "mobile-relay") clearPendingMobileRelayRequest(row.requestId);
       else clearPendingDesktopBridgeRequest(row.requestId);
-    } catch {
-      // The committed IDB tombstone is authoritative.
-    }
+    } catch { /* The committed IDB tombstone is authoritative. */ }
   }
 }
 
@@ -964,7 +1099,7 @@ export async function archiveRecoverableRequest(
     });
     return;
   }
-  const row = findExact(await records(options), requestIdOrRecoveryId);
+  const row = await exactRecord(requestIdOrRecoveryId, options);
   if (row.state !== "active") {
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Request is not active in this browser origin");

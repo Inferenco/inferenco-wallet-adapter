@@ -42,6 +42,9 @@ export interface DurableMobileRequestEnvelope {
 }
 
 export interface DurableInvocation {
+  /** Absent on historical rows; false records an originally incapable peer. */
+  remoteAcknowledgementRequired?: boolean;
+  transactionHash?: string;
   requestCommitment?: string;
   requestPayload?: unknown;
   endpoint?: string;
@@ -114,6 +117,8 @@ export function serializeStoredFinal(
 }
 
 export interface DurableRequest {
+  remoteAcknowledgementRequired?: boolean;
+  transactionHash?: string;
   requestCommitment?: string;
   id: string;
   scopeKey: string;
@@ -263,6 +268,14 @@ export async function saveDurableRequest(
   if ((pending.origin ?? window.location.origin) !== window.location.origin) {
     throw new InferAdapterError(InferErrorCode.Unauthorized, "Recovery request origin changed");
   }
+  const invocation = invocationId ? await getDurableInvocation(invocationId) : undefined;
+  const boundInvocation = invocation &&
+    invocation.origin === (pending.origin ?? window.location.origin) &&
+    invocation.transport === (pending.version === 2 ? "desktop-bridge" : "mobile-relay") &&
+    invocation.sessionId === pending.sessionId &&
+    canonicalAddress(invocation.address) === canonicalAddress(pending.address) &&
+    invocation.network === pending.network && invocation.chainId === pending.chainId &&
+    invocation.method === pending.method && invocation.requestCommitment === pending.requestCommitment;
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
@@ -291,6 +304,8 @@ export async function saveDurableRequest(
         pending, createdAt: now, updatedAt: now, revision: 1, state: "active",
         ...(pending.archive ? { archive: pending.archive } : {}),
         ...(invocationId ? { invocationId } : {}),
+        ...(boundInvocation && invocation.remoteAcknowledgementRequired !== undefined
+          ? { remoteAcknowledgementRequired: invocation.remoteAcknowledgementRequired } : {}),
         ...(pending.requestCommitment
           ? { requestCommitment: pending.requestCommitment } : {})
       };
@@ -319,6 +334,52 @@ export async function listDurableRequests(): Promise<DurableRequest[]> {
   });
 }
 
+/** Use existing keys for opaque handles and linked invocations. Bare request IDs
+ * retain a cursor fallback so duplicate IDs across sessions remain ambiguous. */
+export async function findDurableRequests(
+  id: string,
+  invocation?: DurableInvocation
+): Promise<DurableRequest[]> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly"), store = tx.objectStore(STORE);
+    const matches: DurableRequest[] = [];
+    const direct = store.get(id);
+    direct.onsuccess = () => {
+      if (!invocation && direct.result && validStoredRecord(direct.result)) {
+        matches.push(direct.result);
+        return;
+      }
+      if (invocation?.requestId === id) {
+        const lookup = store.index("scopeKey").get(JSON.stringify([
+          invocation.origin, invocation.transport, invocation.sessionId, id
+        ]));
+        lookup.onsuccess = () => {
+          const row = lookup.result as DurableRequest | undefined;
+          if (row && validStoredRecord(row) && row.method === invocation.method &&
+              canonicalAddress(row.address) === canonicalAddress(invocation.address) &&
+              row.network === invocation.network && row.chainId === invocation.chainId &&
+              row.requestCommitment === invocation.requestCommitment &&
+              (!row.invocationId || row.invocationId === invocation.id))
+            matches.push(row);
+        };
+        return;
+      }
+      const cursor = store.index("origin").openCursor(window.location.origin);
+      cursor.onsuccess = () => {
+        const entry = cursor.result;
+        if (!entry) return;
+        const row = entry.value as DurableRequest;
+        if (row.requestId === id && validStoredRecord(row)) matches.push(row);
+        entry.continue();
+      };
+    };
+    tx.oncomplete = () => { db.close(); resolve(matches); };
+    tx.onabort = () => { db.close(); reject(failure("Unable to inspect the original recovery record", tx.error)); };
+    tx.onerror = () => { /* onabort rejects */ };
+  });
+}
+
 export async function saveDurableFinal(id: string, final: StoredFinal): Promise<DurableRequest> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
@@ -330,7 +391,10 @@ export async function saveDurableFinal(id: string, final: StoredFinal): Promise<
     lookup.onsuccess = () => {
       const row = lookup.result as DurableRequest | undefined;
       if (!row || row.origin !== window.location.origin || row.state !== "active" ||
-          (row.final && JSON.stringify(row.final) !== JSON.stringify(final))) {
+          (row.final && JSON.stringify(row.final) !== JSON.stringify(final)) ||
+          (row.transactionHash && (final.status !== "approved" ||
+            final.method !== "signAndSubmitTransaction" ||
+            final.hash.toLowerCase() !== row.transactionHash.toLowerCase()))) {
         tx.abort();
         return;
       }
@@ -345,6 +409,44 @@ export async function saveDurableFinal(id: string, final: StoredFinal): Promise<
     tx.oncomplete = () => { db.close(); if (changed) announceRecordChange(); resolve(result!); };
     tx.onabort = () => { db.close(); reject(failure("Verified result could not be saved for this exact request", tx.error)); };
     tx.onerror = () => { /* onabort rejects */ };
+  });
+}
+
+/** Persist scoped execution evidence without inventing a terminal outcome. */
+export async function saveDurableTransactionHash(id: string, hash: string, injected = false): Promise<void> {
+  if (!isValidTransactionHash(hash)) throw failure("Invalid transaction identity");
+  hash = hash.toLowerCase();
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(injected ? INVOCATIONS : STORE, "readwrite");
+    const store = tx.objectStore(injected ? INVOCATIONS : STORE);
+    const lookup = store.get(id);
+    let changed = false;
+    lookup.onsuccess = () => {
+      const row = lookup.result as DurableRequest | DurableInvocation | undefined;
+      if (!row || row.origin !== window.location.origin || !row.requestCommitment ||
+          row.method !== "signAndSubmitTransaction" ||
+          (row.transactionHash && row.transactionHash.toLowerCase() !== hash) ||
+          (row.final && (row.final.status !== "approved" ||
+            row.final.method !== "signAndSubmitTransaction" || row.final.hash.toLowerCase() !== hash))) {
+        tx.abort(); return;
+      }
+      try {
+        if (requestCommitment(row.method, {
+          origin: row.origin, accountAddress: canonicalAddress(row.address),
+          network: row.network, chainId: row.chainId
+        }, "pending" in row ? row.pending.requestPayload : row.requestPayload) !== row.requestCommitment) {
+          tx.abort(); return;
+        }
+      } catch { tx.abort(); return; }
+      if (row.transactionHash === hash) return;
+      store.put({ ...row, transactionHash: hash, updatedAt: new Date().toISOString(),
+        ...("revision" in row ? { revision: row.revision + 1 } : {}) });
+      changed = true;
+    };
+    tx.oncomplete = () => { db.close(); if (changed) announceRecordChange(); resolve(); };
+    tx.onabort = () => { db.close(); reject(failure("Transaction identity conflicts with the original request", tx.error)); };
+    tx.onerror = () => {};
   });
 }
 
@@ -392,8 +494,25 @@ export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
       if (!entry) return;
       const row = entry.value as DurableRequest;
       const age = now - Date.parse(row.updatedAt);
-      if ((row.state === "acknowledged" && age > ACK_TOMBSTONE_MS) ||
-          (row.state === "archived" && age > ARCHIVE_MS)) entry.delete();
+      if (validStoredRecord(row) &&
+          ((row.state === "acknowledged" && !!row.final && age > ACK_TOMBSTONE_MS) ||
+           (row.state === "archived" && !!row.archive && age > ARCHIVE_MS))) {
+        entry.delete();
+        if (row.invocationId) {
+          const lookup = tx.objectStore(INVOCATIONS).get(row.invocationId);
+          lookup.onsuccess = () => {
+            const invocation = lookup.result as DurableInvocation | undefined;
+            // Only a linked completed delivery is eligible; orphan/uncertain work survives.
+            if (invocation && validStoredInvocation(invocation) && invocation.origin === row.origin &&
+                invocation.transport === row.transport && invocation.requestId === row.requestId &&
+                invocation.sessionId === row.sessionId && invocation.method === row.method &&
+                invocation.address === row.address && invocation.network === row.network &&
+                invocation.chainId === row.chainId &&
+                invocation.requestCommitment === row.requestCommitment)
+              tx.objectStore(INVOCATIONS).delete(invocation.id);
+          };
+        }
+      }
       entry.continue();
     };
     const invocations = tx.objectStore(INVOCATIONS).openCursor();
@@ -403,7 +522,7 @@ export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
       const row = entry.value as DurableInvocation;
       const age = now - Date.parse(row.updatedAt ?? row.createdAt);
       if (
-        row.transport === "injected" &&
+        row.origin === window.location.origin && row.transport === "injected" &&
         ((row.deliveryState === "acknowledged" && age > ACK_TOMBSTONE_MS) ||
           (row.deliveryState === "archived" && age > ARCHIVE_MS))
       )
@@ -421,13 +540,15 @@ export async function prepareDurableInvocation(
   session: Pick<
     InferExternalSession,
     "sessionId" | "address" | "network" | "chainId"
-  > & { transport: DurableInvocation["transport"] },
+  > & Pick<InferExternalSession, "integrationContractVersion" | "capabilities"> &
+    { transport: DurableInvocation["transport"] },
   method: DurablePending["method"],
   binding?: {
     requestCommitment: string;
     requestPayload: unknown;
     endpoint: string;
     signerPublicKey?: string;
+    remoteAcknowledgementRequired?: boolean;
   }
 ): Promise<DurableInvocation> {
   const db = await openDatabase();
@@ -436,6 +557,10 @@ export async function prepareDurableInvocation(
     sessionId: session.sessionId, address: session.address, network: session.network,
     chainId: session.chainId, method, state: "prepared",
     createdAt: new Date().toISOString(),
+    ...(session.transport === "desktop-bridge" ? {
+      remoteAcknowledgementRequired: session.integrationContractVersion === 1 &&
+        session.capabilities?.durableInvocationLookup === true
+    } : {}),
     ...(binding ?? {})
   };
   return new Promise((resolve, reject) => {
@@ -508,15 +633,8 @@ export async function updateDurableInvocation(
   });
 }
 
-export async function listDurableInvocations(): Promise<DurableInvocation[]> {
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(INVOCATIONS, "readonly");
-    const request = tx.objectStore(INVOCATIONS).getAll();
-    let rows: DurableInvocation[] = [];
-    request.onsuccess = () => {
-      rows = (request.result as DurableInvocation[]).filter((row) =>
-        row && row.origin === window.location.origin && typeof row.id === "string" &&
+function validStoredInvocation(row: DurableInvocation): boolean {
+  return !!(row && row.origin === window.location.origin && typeof row.id === "string" &&
           row.id.length > 0 &&
           ["mobile-relay", "desktop-bridge", "injected"].includes(
             row.transport
@@ -537,8 +655,33 @@ export async function listDurableInvocations(): Promise<DurableInvocation[]> {
           row.chainId >= 0 &&
           row.chainId <= 255 &&
           (!row.requestCommitment ||
-            /^[0-9a-f]{64}$/.test(row.requestCommitment))
-      );
+            /^[0-9a-f]{64}$/.test(row.requestCommitment)));
+}
+
+/** Exact-ID lookup keeps single-operation recovery independent of historical payload volume. */
+export async function getDurableInvocation(id: string): Promise<DurableInvocation | undefined> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(INVOCATIONS, "readonly");
+    const request = tx.objectStore(INVOCATIONS).get(id);
+    let row: DurableInvocation | undefined;
+    request.onsuccess = () => {
+      if (validStoredInvocation(request.result)) row = request.result;
+    };
+    tx.oncomplete = () => { db.close(); resolve(row); };
+    tx.onabort = () => { db.close(); reject(failure("Unable to inspect the original invocation", tx.error)); };
+    tx.onerror = () => { /* onabort rejects */ };
+  });
+}
+
+export async function listDurableInvocations(): Promise<DurableInvocation[]> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(INVOCATIONS, "readonly");
+    const request = tx.objectStore(INVOCATIONS).getAll();
+    let rows: DurableInvocation[] = [];
+    request.onsuccess = () => {
+      rows = (request.result as DurableInvocation[]).filter(validStoredInvocation);
     };
     tx.oncomplete = () => { db.close(); resolve(rows); };
     tx.onabort = () => { db.close(); reject(failure("Unable to inspect durable invocations", tx.error)); };
@@ -567,6 +710,9 @@ export async function updateInjectedInvocationEvidence(
         row.origin !== window.location.origin ||
         row.transport !== "injected" ||
         row.state === "not-invoked" ||
+        (change.final && row.transactionHash &&
+          (change.final.status !== "approved" || change.final.method !== "signAndSubmitTransaction" ||
+            change.final.hash.toLowerCase() !== row.transactionHash.toLowerCase())) ||
         (change.final &&
           row.final &&
           JSON.stringify(change.final) !== JSON.stringify(row.final)) ||

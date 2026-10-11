@@ -433,6 +433,8 @@ export type InferExternalSignTransactionInput =
   | InferExternalWalletStandardSignInput;
 
 export interface InferProvider {
+  /** Acknowledge a retained terminal native outcome; never authorizes execution. */
+  acknowledgeInvocation?: (invocationId: string, requestCommitment: string) => Promise<unknown>;
   /** Authorized read of a retained native invocation; this must never execute it. */
   readInvocation?: (
     invocationId: string,
