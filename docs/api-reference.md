@@ -667,7 +667,7 @@ Exported from the main entry point. See [Mobile Relay Protocol](mobile-relay.md)
 | `pollMobileRelayRequest(options)`           | Poll for request result            |
 | `waitForMobileSocket(options)`              | Wait for WebSocket notification    |
 
-## Contract v1 and original-invocation recovery (0.2.1)
+## Contract v1 and original-invocation recovery (0.2.2-rc.1)
 
 The complete normative forms and compatibility matrix are in [integration-contract.md](integration-contract.md). `inferenco:transactionSubmission` is version `1.0.0`, has `contractVersion:1` and exposes:
 

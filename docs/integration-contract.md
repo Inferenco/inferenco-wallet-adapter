@@ -1,8 +1,8 @@
 # Infer Connect integration contract v1
 
-Status (2026-10-11): integration repairs on fix/infer-connect-0.2.2-rc.1, updated with origin/main at 391c674. The package version remains upstream 0.2.1; this branch is not a published release. The 0.2.1-rc.1 artifact evidence and original 0.2.1 qualification target below describe the pre-merge checkpoint, not qualification of this merged source. Local conformance remains separate from native/device/release qualification.
+Status (2026-10-11): integration repairs on fix/infer-connect-0.2.2-rc.1, updated with origin/main at 391c674. The package version is 0.2.2-rc.1, targeting final 0.2.2 after qualification; this branch is not a published release and retains the upstream 0.2.1 preauth retry fix. The 0.2.1-rc.1 artifact evidence and original 0.2.1 qualification target describe the pre-merge checkpoint, not qualification of this merged source. Local conformance remains separate from native/device/release qualification.
 
-Post-merge validation: 472 tests passed and 6 opt-in live tests skipped; TypeScript checking and the ESM/CJS/declaration build passed. Upstream first-time preauth retry behavior and release metadata are retained. Native/device qualification remains pending.
+Post-merge validation: 472 tests passed and 6 opt-in live tests skipped; TypeScript checking and the ESM/CJS/declaration build passed. Upstream first-time preauth retry behavior is retained; the current candidate version is updated separately to 0.2.2-rc.1. Native/device qualification remains pending.
 
 ## Public inputs and capabilities
 
@@ -63,12 +63,12 @@ Desk lifecycle is durably queued->claimed->signed/submitting->terminal. Cancella
 
 | Adapter                      | Peer                     | Supported behavior                                                                                            |
 | ---------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| 0.2.1-rc.1 / candidate 0.2.1 | v1 qualified Desk/mobile | v1 capabilities only after actual source/parser/runtime qualification                                         |
-| 0.2.1-rc.1 / candidate 0.2.1 | legacy or no capability  | bounded legacy standard subset; required restrictions fail pre-dispatch; recovery unavailable remains unknown |
-| 0.2.0 or older               | new Desk/mobile          | explicitly retained bounded legacy routes; no v1 capability assumed by caller                                 |
+| 0.2.2-rc.1 / candidate 0.2.2 | v1 qualified Desk/mobile | v1 capabilities only after actual source/parser/runtime qualification                                         |
+| 0.2.2-rc.1 / candidate 0.2.2 | legacy or no capability  | bounded legacy standard subset; required restrictions fail pre-dispatch; recovery unavailable remains unknown |
+| 0.2.1 or older               | new Desk/mobile          | explicitly retained bounded legacy routes; no v1 capability assumed by caller                                 |
 | any                          | unknown contract version | deterministic pre-sign rejection                                                                              |
 
-Repaired NFT consumer minimum is final 0.2.1 after qualification, excluding 0.2.0 and earlier prereleases. Prerelease artifact tests do not authorize final release publication or native/device acceptance. Corpus manifest hashes pin the exact same vectors across repositories. C01-C19 cover canonical/standard/convenience inputs, mixed restrictions, native bytes/integers, no-dispatch, message bindings/outcomes, fixed expiry, lost admission/results, renewed scope, corruption/retention, cancellation/crash barriers, packed consumers and version matrix. Record evidence per requirement in the operations-base progress document.
+The planned repaired NFT consumer minimum is final 0.2.2 after qualification, excluding released 0.2.1 and older versions and all prereleases. Prerelease artifact tests do not authorize final release publication or native/device acceptance. Corpus manifest hashes pin the exact same vectors across repositories. C01-C19 cover canonical/standard/convenience inputs, mixed restrictions, native bytes/integers, no-dispatch, message bindings/outcomes, fixed expiry, lost admission/results, renewed scope, corruption/retention, cancellation/crash barriers, packed consumers and version matrix. Record evidence per requirement in the operations-base progress document.
 
 Original execution evidence and retention acknowledgement: pending/unknown public recovery outcomes may contain `transactionHash`, a strict 32-byte hex identity authenticated against the original invocation, commitment and scope. This evidence is persisted independently of terminal results and survives a later wallet outage. It is not an approval or a confirmed chain receipt; applications must verify the original receipt/effects and must never replace the submission. A conflicting later hash is rejected. Desktop recovery applies the same message signature/preimage and exact-BCS validation and SDK hydration before both first return and local replay.
 

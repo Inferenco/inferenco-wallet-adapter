@@ -8,7 +8,7 @@
   <a href="https://github.com/Inferenco/nova-plugin-wallet-adapter/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="license" /></a>
   <img src="https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/ESM%20%2B%20CJS-supported-brightgreen" alt="Module formats" />
-  <img src="https://img.shields.io/badge/version-0.2.1-0a3d91" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.2.2--rc.1-0a3d91" alt="version" />
 </p>
 
 <p align="center">
@@ -18,9 +18,9 @@
 
 ---
 
-## 0.2.1 migration and qualification
+## 0.2.2 migration and qualification
 
-This checkout is `0.2.1-rc.1`, with final `0.2.1` the release target. Publication and native/device acceptance are separate release gates. See the [integration contract](docs/integration-contract.md) for the exact peer matrix and bounded wire format.
+This checkout is `0.2.2-rc.1`, with final `0.2.2` the release target; it includes the released `0.2.1` preauth retry fix. Publication and native/device acceptance are separate release gates. See the [integration contract](docs/integration-contract.md) for the exact peer matrix and bounded wire format.
 
 The standard `cedra:signAndSubmitTransaction` accepts wallet-standard `{payload,maxGasAmount?,gasUnitPrice?}`. SDK `{data,options}` convenience belongs to the class API. Applications that require expiry, sequence, sender or chain restrictions use the explicit `inferenco:transactionSubmission` feature and a peer advertising contract v1; missing capability rejects before dispatch. Required restrictions are never dropped to retry.
 

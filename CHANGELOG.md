@@ -5,6 +5,17 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2-rc.1] - Unreleased
+
+### Changed
+
+- Prepare the integration repair candidate as `0.2.2-rc.1`, retaining the released `0.2.1` first-time preauth retry behavior. Native/device qualification and publication remain pending.
+
+### Fixed
+
+- Preserve original invocation scope and uncertain transaction identities during recovery; validate complete results before replay and retain remote acknowledgement obligations across peer loss.
+- Recheck live injected account/network scope before dispatch and prune only eligible linked terminal evidence.
+
 ## [0.2.1] - 2026-10-10
 
 ### Changed

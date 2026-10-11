@@ -338,6 +338,6 @@ const wallet = new InferWallet({
 });
 ```
 
-## Invocation preparation (0.2.1)
+## Invocation preparation (0.2.2-rc.1)
 
 `onInvocationPrepared` may return a Promise. The adapter awaits it after its own durable invocation save and before dispatch, so applications can durably bind invocationId, requestCommitment and immutable scope to reviewed intent. Rejecting the hook prevents dispatch; only the public submission feature's isNotInvoked method verifies the resulting invocation-bound proof. Required v1 restrictions select the explicit transactionSubmission feature; applications must not set internal requireContractVersion flags to infer native support. Peer support comes from versioned capabilities and qualification, as documented in [integration-contract.md](integration-contract.md).
