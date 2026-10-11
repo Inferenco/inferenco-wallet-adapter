@@ -1858,19 +1858,14 @@ interface PreauthApprovedFlat {
   sessionId: string;
   bridgeUrl: string;
   walletName: string;
+  integrationContractVersion?: InferExternalSession["integrationContractVersion"];
+  capabilities?: InferExternalSession["capabilities"];
 }
 
-function preauthFlatToSession(flat: PreauthApprovedFlat): InferExternalSession {
-  return {
-    transport: "desktop-bridge",
-    address: flat.address,
-    publicKey: flat.publicKey,
-    network: flat.network,
-    chainId: flat.chainId,
-    sessionId: flat.sessionId,
-    bridgeUrl: flat.bridgeUrl,
-    walletName: flat.walletName
-  };
+function preauthFlatToSession(flat: PreauthApprovedFlat): InferExternalSession | null {
+  // Use the same version/capability boundary as session refresh and recovery.
+  // Preauth must not silently downgrade a v1 peer to the legacy contract.
+  return parseExternalSession({ ...flat, transport: "desktop-bridge" });
 }
 
 export async function pollPreauthConnect(input: {
@@ -1901,10 +1896,9 @@ export async function pollPreauthConnect(input: {
         typeof flat.sessionId === "string" &&
         typeof flat.bridgeUrl === "string"
       ) {
-        return {
-          status: "approved",
-          session: preauthFlatToSession(flat)
-        };
+        const session = preauthFlatToSession(flat);
+        if (!session) return null;
+        return { status: "approved", session };
       }
       return null;
     }

@@ -17,7 +17,7 @@ import {
   type DurableInvocation
 } from "./durableRecovery";
 import { invocationDescriptor } from "./recovery";
-import EventEmitter from "eventemitter3";
+import { EventEmitter } from "eventemitter3";
 import type { AnyRawTransaction, Network } from "@cedra-labs/ts-sdk";
 import type {
   AccountInfo,
