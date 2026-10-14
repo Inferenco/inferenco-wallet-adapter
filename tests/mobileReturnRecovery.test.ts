@@ -2,7 +2,7 @@ import {
   connectViaMobileRelay, mobileWalletLaunchUrl, resumeMobileRelaySession,
   signAndSubmitViaMobileRelay
 } from "../src/mobileRelay";
-import { storeExternalSession } from "../src/bridge";
+import { readExternalSession, storeExternalSession } from "../src/bridge";
 import { storePendingMobileRelayRequest } from "../src/mobileRequests";
 import { hasLiveOriginalMobileTab, installMobileReturnOwnerResponder } from "../src/mobileReturnCoordinator";
 import { listDurableInvocations, listDurableRequests, saveDurableRequest, saveDurableFinal } from "../src/durableRecovery";
@@ -60,7 +60,8 @@ describe("mobile return without callback navigation", () => {
               pairingId: "pair-1", status: "approved",
               encryptedResult: encryptJson({
                 address: "0x1", publicKey: "0x2", network: "testnet",
-                chainId: 2, walletName: "Infer Wallet"
+                chainId: 2, walletName: "Infer Wallet", integrationContractVersion: 1,
+                capabilities: { durableExternalSubmissionRecovery: true }
               }, shared),
               dappSessionToken: "session-token", walletPublicKey: wallet.publicKey,
               sessionId: "session-1"
@@ -72,6 +73,7 @@ describe("mobile return without callback navigation", () => {
       relayBaseUrl: relay, mobilePollIntervalMs: 2, mobileRequestTimeoutMs: 200
     });
     await expect(create).resolves.toMatchObject({ sessionId: "session-1", address: "0x1" });
+    expect(readExternalSession()).toMatchObject({ integrationContractVersion: 1, capabilities: { durableExternalSubmissionRecovery: true } });
     expect(createCalls).toBe(1);
     expect(pairingReads).toBeGreaterThan(1);
   });

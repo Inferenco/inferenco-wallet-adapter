@@ -27,6 +27,7 @@ import type {
   ArchivedRecoverableRequest,
   RecoverableRequest,
   RecoverableInvocation,
+  RecoveryReadOptions,
   RecoveredRequestOutcome
 } from "./recovery";
 import {
@@ -178,8 +179,8 @@ export class InferWallet
     return this.client.listArchivedRecoverableRequests();
   }
 
-  readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
-    return this.client.readRecoverableRequest(requestId);
+  readRecoverableRequest(requestId: string, readOptions: RecoveryReadOptions = {}): Promise<RecoveredRequestOutcome> {
+    return this.client.readRecoverableRequest(requestId, readOptions);
   }
 
   acknowledgeRecoverableRequest(requestId: string): Promise<void> {

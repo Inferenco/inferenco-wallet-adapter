@@ -18,6 +18,7 @@ import {
   listDurableRequests, listDurableInvocations, getDurableInvocation, findDurableRequests, saveDurableRequest, saveDurableFinal, serializeStoredFinal, transitionDurableRequest,
   updateDurableInvocation,
   saveDurableTransactionHash,
+  saveDurableExternalTransactionRecovery,
   updateInjectedInvocationEvidence,
   type DurableRequest,
   type DurableInvocation,
@@ -35,6 +36,7 @@ import {
   decodeMobileRelayResult,
   getReadGrant,
   mintReadGrant,
+  launchMobileRelayRecoveryRead,
   readMobileRelayRequestOnce,
   reconcileMobileRelayInvocationReceipt,
   relaunchMobileRelayInvocation,
@@ -43,6 +45,7 @@ import {
 } from "./mobileRelay";
 import { archivePendingMobileRelayRequest, clearPendingMobileRelayRequest, readPendingMobileRelayRequests } from "./mobileRequests";
 import { makeRecoveryArchive, type RecoveryArchive } from "./requestArchive";
+import { validateExternalTransactionRecovery, type ExternalTransactionRecovery } from "./externalTransactionRecovery";
 import type { InferExternalSession, InferWalletOptions } from "./types";
 
 export interface RecoverableRequest {
@@ -213,7 +216,14 @@ export type RecoveredInvocationOutcome =
   | RecoveredRequestOutcome
   | { invocationId: string; status: "unknown"; reason: string };
 
+export type RecoveryReadOptions = Readonly<{
+  /** Explicit user action only; background reads never open the wallet. */
+  allowMobileRecoveryHandoff?: boolean;
+}>;
+
 export type NativeExecutionEvidence = Readonly<{
+  submissionDisposition?: "not-submitted";
+  failureCode?: "EXECUTION_FAILED_BEFORE_BROADCAST";
   submissionAcceptance?: "unknown" | "accepted";
   chainStatus?: "unknown" | "pending" | "confirmed" | "aborted";
   chainVersion?: string;
@@ -328,9 +338,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Cached hash evidence stays useful when the wallet is temporarily unavailable. */
-function uncertainExecution(row: DurableRequest | DurableInvocation): { transactionHash?: string } {
+function externalEvidenceFields(evidence: ExternalTransactionRecovery): NativeExecutionEvidence & { transactionHash?: string } {
+  return {
+    ...(evidence.transactionHash ? { transactionHash: evidence.transactionHash } : {}),
+    ...(evidence.submissionAcceptance ? { submissionAcceptance: evidence.submissionAcceptance } : {}),
+    ...(evidence.chainStatus ? { chainStatus: evidence.chainStatus } : {}),
+    ...(evidence.chainVersion ? { chainVersion: evidence.chainVersion } : {}),
+    ...(evidence.status === "not-submitted" ? { submissionDisposition: "not-submitted" as const, failureCode: evidence.failureCode } : {})
+  };
+}
+function externalOutcome(row: DurableRequest): RecoveredRequestOutcome | null {
+  if (!row.externalTransactionRecovery) return null;
   try {
+    const evidence = validateExternalTransactionRecovery(row.externalTransactionRecovery, row);
+    const fields = externalEvidenceFields(evidence);
+    return evidence.status === "approved"
+      ? { ...descriptor(row), ...fields, status: "approved", output: { hash: evidence.transactionHash! } }
+      : { ...descriptor(row), ...fields, status: "unknown", reason: evidence.status === "not-submitted" ? "transaction_not_submitted" : "original_execution_unresolved" };
+  } catch { return null; }
+}
+/** Cached evidence stays useful when the wallet is temporarily unavailable. */
+function uncertainExecution(row: DurableRequest | DurableInvocation): NativeExecutionEvidence & { transactionHash?: string } {
+  try {
+    if ("pending" in row && row.externalTransactionRecovery)
+      return externalEvidenceFields(validateExternalTransactionRecovery(row.externalTransactionRecovery, row));
     if (row.method === "signAndSubmitTransaction" && row.requestCommitment &&
         isValidTransactionHash(row.transactionHash) &&
         requestCommitment(row.method, {
@@ -361,7 +392,7 @@ function replay(row: DurableRequest): RecoveredRequestOutcome | null {
   try {
     if (final.method === "signAndSubmitTransaction") {
       if (!isValidTransactionHash(final.hash)) throw new Error("Invalid saved transaction hash");
-      return { ...base, status: "approved", output: { hash: final.hash } };
+      return { ...base, ...uncertainExecution(row), status: "approved", output: { hash: final.hash } };
     }
     if (final.method === "signMessage") {
       const output =
@@ -449,10 +480,29 @@ function sameBridgeOrigin(row: DurableRequest, session: InferExternalSession | n
  * non-success path so the caller can fall back to rc.21 behavior
  * (`{status: "unknown"}`).
  */
+const mobileRecoveryReads = new Map<string, Promise<RecoveredRequestOutcome | null>>();
 async function authorizedReadMobileRelay(
   row: DurableRequest,
   session: InferExternalSession,
-  base: ReturnType<typeof descriptor>
+  base: ReturnType<typeof descriptor>,
+  options: InferWalletOptions = {},
+  readOptions: RecoveryReadOptions = {}
+): Promise<RecoveredRequestOutcome | null> {
+  const key = JSON.stringify([row.id, session.sessionId, readOptions.allowMobileRecoveryHandoff === true]);
+  const existing = mobileRecoveryReads.get(key);
+  if (existing) return existing;
+  const task = performAuthorizedMobileRead(row, session, base, options, readOptions).catch(() =>
+    ({ ...base, status: "unknown" as const, ...uncertainExecution(row), reason: "authorized_recovery_unavailable" }));
+  mobileRecoveryReads.set(key, task);
+  try { return await task; }
+  finally { mobileRecoveryReads.delete(key); }
+}
+async function performAuthorizedMobileRead(
+  row: DurableRequest,
+  session: InferExternalSession,
+  base: ReturnType<typeof descriptor>,
+  options: InferWalletOptions = {},
+  readOptions: RecoveryReadOptions = {}
 ): Promise<RecoveredRequestOutcome | null> {
   if (!session.relayBaseUrl || !session.dappSessionToken || !session.sharedSecret) return null;
   // The relay's S1 endpoint REQUIRES `method` in the scope (it validates
@@ -467,6 +517,13 @@ async function authorizedReadMobileRelay(
     ...(row.invocationId ? { invocationId: row.invocationId } : {}),
     newSessionId: session.sessionId
   };
+  const assertCurrentSession = () => {
+    const current = readExternalSession();
+    if (!current || !sameScope(row, current) || current.sessionId !== session.sessionId ||
+        current.dappSessionToken !== session.dappSessionToken || current.sharedSecret !== session.sharedSecret ||
+        !sameRelayBaseUrl(row, current)) throw new Error("Recovery authorization changed");
+  };
+  assertCurrentSession();
   const mint = await mintReadGrant({
     relayBaseUrl: session.relayBaseUrl,
     requestId: row.requestId,
@@ -478,17 +535,31 @@ async function authorizedReadMobileRelay(
     return null;
   }
 
+  assertCurrentSession();
   const deadline = Date.now() + READ_GRANT_POLL_TIMEOUT_MS;
   let grant: ReadGrantDescriptor | null = null;
+  let handoffOpened = false;
   while (Date.now() < deadline) {
     const poll = await getReadGrant({
       relayBaseUrl: session.relayBaseUrl,
       requestId: row.requestId,
       dappSessionToken: session.dappSessionToken
     });
+    assertCurrentSession();
     if (!poll.ok) return null;
     grant = poll.grant;
+    if (grant.grantId !== mint.grantId || grant.requestId !== row.requestId ||
+        grant.scope.origin !== row.origin || canonicalAddress(grant.scope.accountAddress) !== canonicalAddress(row.address) ||
+        grant.scope.network !== row.network || grant.scope.chainId !== row.chainId || grant.scope.method !== row.method ||
+        (grant.scope.invocationId ?? null) !== (row.invocationId ?? null))
+      return { ...base, status: "unknown", ...uncertainExecution(row), reason: "read_grant_binding_changed" };
     if (grant.status === "fulfilled") break;
+    if (!handoffOpened && readOptions.allowMobileRecoveryHandoff === true &&
+        session.capabilities?.durableExternalSubmissionRecovery === true &&
+        row.method === "signAndSubmitTransaction" && grant.status === "pending_fulfillment") {
+      launchMobileRelayRecoveryRead(grant, row.sessionId, session, options);
+      handoffOpened = true;
+    }
     // Terminal grant states ("expired" / "denied" — the relay's enum)
     // cannot become fulfilled; fall back to rc.21 behavior. The relay
     // usually signals these via HTTP 410, which lands in the
@@ -496,10 +567,12 @@ async function authorizedReadMobileRelay(
     if (grant.status === "expired" || grant.status === "denied") {
       return null;
     }
+    if (session.capabilities?.durableExternalSubmissionRecovery === true && !readOptions.allowMobileRecoveryHandoff)
+      return { ...base, status: "unknown", ...uncertainExecution(row), reason: "wallet_read_required" };
     await new Promise((resolve) => window.setTimeout(resolve, READ_GRANT_POLL_INTERVAL_MS));
   }
   if (!grant || grant.status !== "fulfilled" || !grant.redeliveredEncryptedResult) {
-    return { ...base, status: "unknown", reason: "grant_pending_timeout" };
+    return { ...base, status: "unknown", ...uncertainExecution(row), reason: "grant_pending_timeout" };
   }
 
   // The wallet (W2) sealed the original result under the NEW session's
@@ -514,9 +587,18 @@ async function authorizedReadMobileRelay(
   try {
     decoded = decryptJson<unknown>(grant.redeliveredEncryptedResult, session.sharedSecret);
   } catch {
-    return { ...base, status: "unknown", reason: "decrypt_failed" };
+    return { ...base, status: "unknown", ...uncertainExecution(row), reason: "decrypt_failed" };
   }
 
+  if (isRecord(decoded) && "recoverySchema" in decoded) {
+    try {
+      assertCurrentSession();
+      validateExternalTransactionRecovery(decoded, row);
+      const saved = await saveDurableExternalTransactionRecovery(row.id, decoded);
+      assertCurrentSession();
+      return externalOutcome(saved);
+    } catch { return { ...base, status: "unknown", ...uncertainExecution(row), reason: "external_recovery_evidence_invalid_or_unavailable" }; }
+  }
   let output:
     | CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput;
   try {
@@ -564,7 +646,9 @@ async function authorizedReadMobileRelay(
   // ordering invariant so a follow-up read locally replays without
   // re-querying the relay.
   try {
+    assertCurrentSession();
     await saveDurableFinal(row.id, serializeStoredFinal(row.method, output));
+    assertCurrentSession();
   } catch {
     return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
   }
@@ -953,7 +1037,8 @@ export async function listArchivedRecoverableRequests(
 /** Read only the original request. A locally verified final result replays without network access. */
 export async function readRecoverableRequest(
   requestIdOrRecoveryId: string,
-  options: InferWalletOptions = {}
+  options: InferWalletOptions = {},
+  readOptions: RecoveryReadOptions = {}
 ): Promise<RecoveredRequestOutcome> {
   if (typeof window === "undefined") {
     throw new InferAdapterError(InferErrorCode.Unsupported, "Recovery requires a browser"
@@ -971,20 +1056,23 @@ export async function readRecoverableRequest(
   const row = await exactRecord(requestIdOrRecoveryId, options);
   const locallyVerified = replay(row);
   if (locallyVerified) return locallyVerified;
+  const cached = externalOutcome(row);
+  if (cached?.submissionDisposition === "not-submitted") return cached;
   const base = descriptor(row);
   const session = readExternalSession();
+  const readKey = JSON.stringify([row.id, readOptions.allowMobileRecoveryHandoff === true]);
   if (row.transport === "desktop-bridge" && row.requestCommitment && row.invocationId &&
       session?.integrationContractVersion === 1 && session.capabilities?.durableInvocationLookup &&
       sameScope(row, session) && sameBridgeOrigin(row, session, options)) {
-    const existing = inFlight.get(row.id);
+    const existing = inFlight.get(readKey);
     if (existing) return existing;
     const task = (async (): Promise<RecoveredRequestOutcome> => {
       const authorized = await authorizedReadDesktopBridge(row, session, options, base);
       return authorized ?? { ...base, status: "unknown", ...uncertainExecution(row), reason: "durable_result_unavailable" };
     })();
-    inFlight.set(row.id, task);
+    inFlight.set(readKey, task);
     try { return await task; }
-    finally { inFlight.delete(row.id); }
+    finally { inFlight.delete(readKey); }
   }
   if (!matchingSession(row, session, options)) {
     // v0.2.0-rc.22 (A1): if no verified local final is available and the
@@ -1002,7 +1090,7 @@ export async function readRecoverableRequest(
     // that older relay/Desk deployments see no behavior change.
     if (sameScope(row, session)) {
       if (row.transport === "mobile-relay" && sameRelayBaseUrl(row, session)) {
-        const authorized = await authorizedReadMobileRelay(row, session!, base);
+        const authorized = await authorizedReadMobileRelay(row, session!, base, options, readOptions);
         if (authorized) return authorized;
       } else if (row.transport === "desktop-bridge" && sameBridgeOrigin(row, session, options)) {
         const authorized = await authorizedReadDesktopBridge(row, session!, options, base);
@@ -1012,7 +1100,7 @@ export async function readRecoverableRequest(
     return { ...base, status: "unknown", ...uncertainExecution(row),
       reason: "Original wallet session cannot authenticate a remote read; reconnect or reconcile externally" };
   }
-  const existing = inFlight.get(row.id);
+  const existing = inFlight.get(readKey);
   if (existing) return existing;
   const task = (async (): Promise<RecoveredRequestOutcome> => {
     let outcome: RecoveredRequestOutcome;
@@ -1021,7 +1109,13 @@ export async function readRecoverableRequest(
         const { pending, status } = await readMobileRelayRequestOnce(
           row.requestId, session, options, row.pending as Extract<DurableRequest["pending"], { version: 1 }>
         );
-        if (status.status === "pending") return { ...base, status: "pending", ...uncertainExecution(row) };
+        if (status.status !== "approved" && (status.status !== "rejected" || status.errorCode === "EXECUTION_FAILED_BEFORE_BROADCAST") &&
+            row.method === "signAndSubmitTransaction" && row.requestCommitment &&
+            session.capabilities?.durableExternalSubmissionRecovery === true) {
+          const recovered = await authorizedReadMobileRelay(row, session, base, options, readOptions);
+          if (recovered) return recovered;
+        }
+        if (status.status === "pending") return cached ?? { ...base, status: "pending", ...uncertainExecution(row) };
         if (status.status !== "approved" && status.status !== "rejected") {
           return { ...base, status: "unknown", ...uncertainExecution(row), reason: "Relay returned " + status.status };
         }
@@ -1052,9 +1146,9 @@ export async function readRecoverableRequest(
       return { ...base, status: "unknown", ...uncertainExecution(row), reason: "Verified outcome could not be saved durably" };
     }
   })();
-  inFlight.set(row.id, task);
+  inFlight.set(readKey, task);
   try { return await task; }
-  finally { inFlight.delete(row.id); }
+  finally { inFlight.delete(readKey); }
 }
 
 /** Check optional native retention support without weakening original scope. */

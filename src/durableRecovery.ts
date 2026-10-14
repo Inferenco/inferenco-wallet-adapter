@@ -11,6 +11,8 @@ import type { PendingMobileRelayRequest } from "./mobileRequests";
 import type { RecoveryArchive } from "./requestArchive";
 import type { InferExternalSession } from "./types";
 
+import { validateExternalTransactionRecovery, mergeExternalTransactionRecovery, type ExternalTransactionRecovery } from "./externalTransactionRecovery";
+
 const DB_NAME = "inferenco:infer-recovery";
 const DB_VERSION = 1;
 const STORE = "requests";
@@ -38,7 +40,7 @@ export interface DurableMobileRequestEnvelope {
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
   callbackUrl: string;
   encryptedRequest: string;
-  requestMetadata: { origin: string; appName: string };
+  requestMetadata: { origin: string; appName: string; invocationId?: string; requestCommitment?: string };
 }
 
 export interface DurableInvocation {
@@ -117,6 +119,7 @@ export function serializeStoredFinal(
 }
 
 export interface DurableRequest {
+  externalTransactionRecovery?: ExternalTransactionRecovery;
   remoteAcknowledgementRequired?: boolean;
   transactionHash?: string;
   requestCommitment?: string;
@@ -391,6 +394,7 @@ export async function saveDurableFinal(id: string, final: StoredFinal): Promise<
     lookup.onsuccess = () => {
       const row = lookup.result as DurableRequest | undefined;
       if (!row || row.origin !== window.location.origin || row.state !== "active" ||
+          (row.externalTransactionRecovery?.status === "not-submitted") ||
           (row.final && JSON.stringify(row.final) !== JSON.stringify(final)) ||
           (row.transactionHash && (final.status !== "approved" ||
             final.method !== "signAndSubmitTransaction" ||
@@ -409,6 +413,37 @@ export async function saveDurableFinal(id: string, final: StoredFinal): Promise<
     tx.oncomplete = () => { db.close(); if (changed) announceRecordChange(); resolve(result!); };
     tx.onabort = () => { db.close(); reject(failure("Verified result could not be saved for this exact request", tx.error)); };
     tx.onerror = () => { /* onabort rejects */ };
+  });
+}
+
+/** Atomically retain authenticated recovery evidence and any accepted result. */
+export async function saveDurableExternalTransactionRecovery(id: string, value: unknown): Promise<DurableRequest> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    let result: DurableRequest | undefined;
+    const lookup = store.get(id);
+    lookup.onsuccess = () => {
+      const row = lookup.result as DurableRequest | undefined;
+      try {
+        if (!row || row.origin !== window.location.origin || row.transport !== "mobile-relay" || row.state !== "active") throw new Error();
+        const next = validateExternalTransactionRecovery(value, row);
+        const previous = row.externalTransactionRecovery && validateExternalTransactionRecovery(row.externalTransactionRecovery, row);
+        const evidence = mergeExternalTransactionRecovery(previous, next);
+        if ((row.transactionHash && evidence.transactionHash !== row.transactionHash) ||
+            (row.final && (row.final.status !== "approved" || row.final.method !== "signAndSubmitTransaction" || row.final.hash !== evidence.transactionHash))) throw new Error();
+        const final: StoredFinal | undefined = evidence.status === "approved"
+          ? { status: "approved", method: "signAndSubmitTransaction", hash: evidence.transactionHash! } : row.final;
+        result = { ...row, externalTransactionRecovery: evidence,
+          ...(evidence.transactionHash ? { transactionHash: evidence.transactionHash } : {}),
+          ...(final ? { final } : {}), updatedAt: new Date().toISOString(), revision: row.revision + 1 };
+        store.put(result);
+      } catch { tx.abort(); }
+    };
+    tx.oncomplete = () => { db.close(); announceRecordChange(); resolve(result!); };
+    tx.onabort = () => { db.close(); reject(failure("External recovery evidence conflicts with the original request", tx.error)); };
+    tx.onerror = () => {};
   });
 }
 
@@ -590,7 +625,9 @@ export async function saveDurableMobileInvocationEnvelope(
           row.transport !== "mobile-relay" || row.state !== "prepared" ||
           row.mobileRequest || row.id !== envelope.clientInvocationId ||
           row.sessionId !== envelope.sessionId || row.method !== envelope.method ||
-          envelope.requestMetadata.origin !== row.origin) {
+          envelope.requestMetadata.origin !== row.origin ||
+          (envelope.requestMetadata.invocationId !== undefined && envelope.requestMetadata.invocationId !== row.id) ||
+          (envelope.requestMetadata.requestCommitment !== undefined && envelope.requestMetadata.requestCommitment !== row.requestCommitment)) {
         tx.abort();
         return;
       }

@@ -102,6 +102,7 @@ import {
 } from "./recovery";
 import type {
   ArchivedRecoverableRequest,
+  RecoveryReadOptions,
   RecoveredRequestOutcome,
   RecoverableRequest,
   RecoverableInvocation,
@@ -651,9 +652,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     return listArchivedRecoverableRequests(this.options);
   }
 
-  async readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
+  async readRecoverableRequest(requestId: string, readOptions: RecoveryReadOptions = {}): Promise<RecoveredRequestOutcome> {
     await this.assertBoundNativeHandle(requestId);
-    const result = await readRecoverableRequest(requestId, this.options);
+    const result = await readRecoverableRequest(requestId, this.options, readOptions);
     await this.assertBoundNativeHandle(requestId);
     return result;
   }

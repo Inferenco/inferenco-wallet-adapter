@@ -173,6 +173,8 @@ export interface InferIntegrationCapabilities {
   messageProfile?: "cedra:message:v1";
   completeResults?: boolean;
   durableInvocationLookup?: boolean;
+  /** Exact external transaction evidence can be delivered through a read-only handoff. */
+  durableExternalSubmissionRecovery?: boolean;
   /** True only with wallet persistence acknowledged before native broadcast. */
   durableInvocationSubmission?: boolean;
 }

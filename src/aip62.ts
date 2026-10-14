@@ -217,7 +217,7 @@ export function createInferAIP62Wallet(options: InferWalletOptions = {}): CedraW
       relaunchInvocation: (invocationId) => client.relaunchRecoverableInvocation(invocationId),
       subscribe: (callback) => client.subscribeRecoveredOutcomes(callback),
       listArchived: () => client.listArchivedRecoverableRequests(),
-      read: (requestId) => client.readRecoverableRequest(requestId),
+      read: (requestId, readOptions) => client.readRecoverableRequest(requestId, readOptions),
       acknowledge: (requestId) => client.acknowledgeRecoverableRequest(requestId),
       archive: (requestId, reference) => client.archiveRecoverableRequest(requestId, reference)
     },

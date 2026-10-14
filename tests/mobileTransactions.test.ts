@@ -63,6 +63,28 @@ function outcome(overrides: Record<string, unknown> = {}) {
 const submit = () => signAndSubmitViaMobileRelay({ data: { function: "0x1::account::transfer", functionArguments: ["0x2", "7"] } }, session, options);
 
 describe("transaction relay delivery and recovery", () => {
+  it("does not treat a wallet-reported pre-broadcast failure as user rejection or proven recovery", async () => {
+    session.integrationContractVersion = 1;
+    session.capabilities = { durableExternalSubmissionRecovery: true };
+    status = { status: "rejected", encryptedResult: null, errorCode: "EXECUTION_FAILED_BEFORE_BROADCAST" };
+    mockRelay();
+    await expect(submit()).rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN", dispatch: "unknown" });
+    expect(posted).toHaveLength(1);
+  });
+  it.each([true, false])("gates authenticated invocation binding on external recovery capability %s", async (capable) => {
+    session.integrationContractVersion = 1;
+    session.capabilities = { durableExternalSubmissionRecovery: capable };
+    mockRelay(); await submit();
+    const wrapper = decryptJson<Record<string, unknown>>(posted[0]!.encryptedRequest as string, session.sharedSecret!);
+    const metadata = posted[0]!.requestMetadata as Record<string, unknown>;
+    if (capable) {
+      expect(wrapper.invocationId).toBe(posted[0]!.clientInvocationId);
+      expect(metadata.invocationId).toBe(wrapper.invocationId);
+      expect(metadata.requestCommitment).toBe(wrapper.requestCommitment);
+    } else {
+      expect(wrapper).not.toHaveProperty("invocationId"); expect(metadata).not.toHaveProperty("invocationId");
+    }
+  });
   it.each(["unavailable", "silent", "throws"])("polls with a %s WebSocket and no callback marker", async (mode) => {
     const close = vi.fn();
     if (mode !== "unavailable") {

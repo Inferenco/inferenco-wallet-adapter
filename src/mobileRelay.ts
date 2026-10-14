@@ -137,6 +137,23 @@ function launch(url: string, options: InferWalletOptions): void {
   window.location.href = mobileWalletLaunchUrl(url, options);
 }
 
+/** Explicit recovery activation carries only opaque IDs; no approval or signing route. */
+export function launchMobileRelayRecoveryRead(grant: ReadGrantDescriptor, originSessionId: string, session: InferExternalSession, options: InferWalletOptions = {}): void {
+  const ids = [grant.grantId, grant.requestId, originSessionId, session.sessionId];
+  if (ids.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) ||
+      session.capabilities?.durableExternalSubmissionRecovery !== true ||
+      grant.status === "fulfilled" || Date.parse(grant.expiresAt) <= Date.now() || !Number.isFinite(Date.parse(grant.expiresAt)))
+    throw new InferAdapterError(InferErrorCode.InvalidParams, "Invalid read-only recovery grant");
+  const target = new URL("inferenco://recover");
+  target.searchParams.set("grantId", grant.grantId);
+  target.searchParams.set("requestId", grant.requestId);
+  target.searchParams.set("originSessionId", originSessionId);
+  target.searchParams.set("authorizedSessionId", session.sessionId);
+  // The recovery parser accepts only these four IDs; its own handler returns to
+  // the trusted original callback. Do not append the approval return-mode flag.
+  launch(target.toString(), { ...options, mobileReturnMode: undefined });
+}
+
 function isFinalStatus(status: string | undefined): boolean {
   return (
     status === "approved" ||
@@ -964,6 +981,7 @@ async function startRequest(
         session.integrationContractVersion === 1
           ? {
               contractVersion: 1,
+              ...(session.capabilities?.durableExternalSubmissionRecovery === true ? { invocationId: invocation.id } : {}),
               requestCommitment: invocation.requestCommitment,
               scope: {
                 origin: window.location.origin,
@@ -981,7 +999,9 @@ async function startRequest(
             : payload,
         session.sharedSecret
       ),
-      requestMetadata: { origin: window.location.origin, appName: appName() }
+      requestMetadata: { origin: window.location.origin, appName: appName(),
+        ...(session.capabilities?.durableExternalSubmissionRecovery === true
+          ? { invocationId: invocation.id, requestCommitment: invocation.requestCommitment } : {}) }
     };
     await saveDurableMobileInvocationEnvelope(
       invocation.id,
@@ -1164,7 +1184,9 @@ export function decodeMobileRelayResult(
     pending.network !== session.network ||
     pending.chainId !== session.chainId ||
     pending.method !== status.method ||
-    pending.requestId !== status.requestId
+    pending.requestId !== status.requestId ||
+    (status.requestMetadata?.invocationId !== undefined && status.requestMetadata.invocationId !== pending.invocationId) ||
+    (status.requestMetadata?.requestCommitment !== undefined && status.requestMetadata.requestCommitment !== pending.requestCommitment)
   ) {
     throw new InferAdapterError(
       InferErrorCode.Unauthorized,
@@ -1275,7 +1297,9 @@ async function completeMobileResult(
       throw cause;
     }
     throw unresolvedRequestError(
-      "Wallet result could not be validated",
+      status.errorCode === "EXECUTION_FAILED_BEFORE_BROADCAST"
+        ? "Wallet reported a pre-submission failure; read the original request to verify its outcome"
+        : "Wallet result could not be validated",
       invocationId,
       pending.requestId,
       cause
@@ -1373,16 +1397,17 @@ function isCleanRequestMetadata(value: unknown): boolean {
   if (value === undefined || value === null) return true;
   if (!isRecord(value)) return false;
   return (
-    Object.keys(value).every((key) => key === "origin" || key === "appName") &&
-    isNullableString(value.origin) &&
-    isNullableString(value.appName)
+    Object.keys(value).every((key) => ["origin", "appName", "invocationId", "requestCommitment"].includes(key)) &&
+    isNullableString(value.origin) && isNullableString(value.appName) &&
+    (value.invocationId === undefined || (typeof value.invocationId === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(value.invocationId))) &&
+    (value.requestCommitment === undefined || (typeof value.requestCommitment === "string" && /^[0-9a-f]{64}$/.test(value.requestCommitment)))
   );
 }
 
 function isCleanMobileTransactionRejection(
   status: InferMobileRequestStatus
 ): boolean {
-  if (status.status !== "rejected") return false;
+  if (status.status !== "rejected" || status.errorCode === "EXECUTION_FAILED_BEFORE_BROADCAST") return false;
   const record = status as unknown as Record<string, unknown>;
   if (
     !Object.keys(record).every((key) => MOBILE_REJECTION_ALLOWED_KEYS.has(key))
