@@ -221,6 +221,8 @@ export type RecoveryReadOptions = Readonly<{
   allowMobileRecoveryHandoff?: boolean;
 }>;
 
+/** Request status describes the wallet operation, not the chain. Only explicit
+ * chainStatus with an exact transaction identity is node transaction evidence. */
 export type NativeExecutionEvidence = Readonly<{
   submissionDisposition?: "not-submitted";
   failureCode?: "EXECUTION_FAILED_BEFORE_BROADCAST";
@@ -338,20 +340,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function externalEvidenceFields(evidence: ExternalTransactionRecovery): NativeExecutionEvidence & { transactionHash?: string } {
+function externalEvidenceFields(evidence: ExternalTransactionRecovery, freshRead = false): NativeExecutionEvidence & { transactionHash?: string } {
   return {
     ...(evidence.transactionHash ? { transactionHash: evidence.transactionHash } : {}),
     ...(evidence.submissionAcceptance ? { submissionAcceptance: evidence.submissionAcceptance } : {}),
-    ...(evidence.chainStatus ? { chainStatus: evidence.chainStatus } : {}),
+    // Pending is a transient node observation; cached evidence cannot prove it is still pending.
+    ...(evidence.chainStatus ? { chainStatus: evidence.chainStatus === "pending" && !freshRead ? "unknown" as const : evidence.chainStatus } : {}),
     ...(evidence.chainVersion ? { chainVersion: evidence.chainVersion } : {}),
     ...(evidence.status === "not-submitted" ? { submissionDisposition: "not-submitted" as const, failureCode: evidence.failureCode } : {})
   };
 }
-function externalOutcome(row: DurableRequest): RecoveredRequestOutcome | null {
+function externalOutcome(row: DurableRequest, freshRead = false): RecoveredRequestOutcome | null {
   if (!row.externalTransactionRecovery) return null;
   try {
     const evidence = validateExternalTransactionRecovery(row.externalTransactionRecovery, row);
-    const fields = externalEvidenceFields(evidence);
+    const fields = externalEvidenceFields(evidence, freshRead);
     return evidence.status === "approved"
       ? { ...descriptor(row), ...fields, status: "approved", output: { hash: evidence.transactionHash! } }
       : { ...descriptor(row), ...fields, status: "unknown", reason: evidence.status === "not-submitted" ? "transaction_not_submitted" : "original_execution_unresolved" };
@@ -596,7 +599,7 @@ async function performAuthorizedMobileRead(
       validateExternalTransactionRecovery(decoded, row);
       const saved = await saveDurableExternalTransactionRecovery(row.id, decoded);
       assertCurrentSession();
-      return externalOutcome(saved);
+      return externalOutcome(saved, true);
     } catch { return { ...base, status: "unknown", ...uncertainExecution(row), reason: "external_recovery_evidence_invalid_or_unavailable" }; }
   }
   let output:
@@ -968,7 +971,7 @@ async function readInjectedInvocationOnce(
         await saveDurableTransactionHash(row.id, recoveredHash, true);
         await nativeProviderBinding(options)?.assertScope(scope);
         row.transactionHash = recoveredHash.toLowerCase();
-      } else if (evidence.chainStatus === "confirmed" || evidence.chainStatus === "aborted" ||
+      } else if (evidence.chainStatus === "pending" || evidence.chainStatus === "confirmed" || evidence.chainStatus === "aborted" ||
                  evidence.submissionAcceptance === "accepted") {
         throw new Error("Native execution evidence lacks identity");
       }

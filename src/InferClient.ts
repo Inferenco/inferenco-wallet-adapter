@@ -499,6 +499,10 @@ async function pollPreauthUntilResolved(
 export class InferClient extends EventEmitter<InferClientEvents> {
   private provider?: InferProvider;
   private injectedScopeRevision = 0;
+  private connectionRevision = 0;
+  private subscriptionRevision = 0;
+  private disconnectOperation: Promise<void> | null = null;
+  private connectionOperation: { promise: Promise<{ account: AccountInfo; network: NetworkInfo | null }>; cancel: () => void } | null = null;
   private accountInfo: AccountInfo | null = null;
   private networkInfo: NetworkInfo | null = null;
   /** v0.2.0-rc.8 (Phase 5 UX): opt-in session liveness handle. */
@@ -682,6 +686,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.invalidateConnection();
+    this.accountInfo = null;
+    this.networkInfo = null;
     if (this.livenessHandle !== null) clearInterval(this.livenessHandle);
     this.livenessHandle = null;
     if (typeof window !== "undefined") {
@@ -912,22 +919,53 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     return { account, network };
   }
 
-  async connect(): Promise<{ account: AccountInfo; network: NetworkInfo | null;
-  }> {
+  private invalidateConnection(): void {
+    this.connectionRevision++;
+    this.subscriptionRevision++;
+    this.connectionOperation?.cancel();
+    this.connectionOperation = null;
+  }
+
+  connect(): Promise<{ account: AccountInfo; network: NetworkInfo | null }> {
+    if (this.disposed) return Promise.reject(new InferAdapterError(InferErrorCode.Unauthorized, "Connection client was disposed"));
+    if (this.disconnectOperation) return Promise.reject(new InferAdapterError(InferErrorCode.Unauthorized, "Disconnect is still in progress"));
+    if (this.connectionOperation) return this.connectionOperation.promise;
+    const revision = ++this.connectionRevision;
+    this.disconnectEmitted = false;
+    let cancel!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      cancel = () => reject(new InferAdapterError(InferErrorCode.Unauthorized, "Connection operation was cancelled"));
+    });
+    const operation = { promise: Promise.race([this.connectOnce(revision), cancelled]).finally(() => {
+      if (this.connectionOperation === operation) this.connectionOperation = null;
+    }), cancel };
+    this.connectionOperation = operation;
+    return operation.promise;
+  }
+
+  private async connectOnce(revision: number): Promise<{ account: AccountInfo; network: NetworkInfo | null }> {
+    const assertCurrent = () => {
+      if (this.disposed || revision !== this.connectionRevision)
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Connection operation was superseded");
+    };
     try {
       const provider = this.refreshProvider();
       if (provider?.connect) {
         const account = normalizeProviderAccount(unwrap(await provider.connect()));
+        assertCurrent();
+        if (this.refreshProvider() !== provider)
+          throw new InferAdapterError(InferErrorCode.Unauthorized, "Connection provider changed");
+        const network = provider.network ? normalizeNetwork(unwrap(await provider.network())) : null;
+        assertCurrent();
+        if (this.refreshProvider() !== provider)
+          throw new InferAdapterError(InferErrorCode.Unauthorized, "Connection provider changed");
         this.accountInfo = account;
-
-        if (provider.network) {
-          this.networkInfo = normalizeNetwork(unwrap(await provider.network()));
-        }
-
-        return { account, network: this.networkInfo };
+        this.networkInfo = network;
+        return { account, network };
       }
 
-      const resumedMobileSession = await resumeMobileRelaySession(this.options);
+      const resumedMobileSession = await resumeMobileRelaySession(this.options, assertCurrent);
+      assertCurrent();
       if (resumedMobileSession) {
         return this.connectResultFromExternalSession(resumedMobileSession);
       }
@@ -942,7 +980,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
       // waitForExternalSession times out because nothing consumed
       // the params.
       const consumedCallback = await consumeExternalCallbackIfPresent(this.options);
+      assertCurrent();
       const externalSession = await readValidatedExternalSession(this.options);
+      assertCurrent();
       if (externalSession) {
         // v0.2.0-rc.8: a successful connect resets the disconnect
         // gate so future disconnect events can fire again.
@@ -959,15 +999,18 @@ export class InferClient extends EventEmitter<InferClientEvents> {
         // within a few ticks.
         for (let i = 0; i < 20; i += 1) {
           const pending = await readValidatedExternalSession(this.options);
+          assertCurrent();
           if (pending) {
             return this.connectResultFromExternalSession(pending);
           }
           await new Promise((r) => setTimeout(r, 50));
+          assertCurrent();
         }
       }
 
 if (typeof window !== "undefined" && isMobileBrowser()) {
-        const mobileSession = await connectViaMobileRelay(this.options);
+        const mobileSession = await connectViaMobileRelay(this.options, assertCurrent);
+        assertCurrent();
         return this.connectResultFromExternalSession(mobileSession);
       }
 
@@ -992,11 +1035,13 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
           app,
           options: this.options
         });
+        assertCurrent();
         if (preauth) {
           const session = await pollPreauthUntilResolved(
             preauth.requestId,
             this.options
           );
+          assertCurrent();
           if (session) {
             return this.connectResultFromExternalSession(session);
           }
@@ -1015,9 +1060,11 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
       }
 
       const bridgedAccount = await tryLocalBridgeConnect(this.options);
+      assertCurrent();
       if (bridgedAccount) {
-        this.accountInfo = bridgedAccount;
         const bridgedSession = await readValidatedExternalSession(this.options);
+        assertCurrent();
+        this.accountInfo = bridgedAccount;
         this.networkInfo = bridgedSession
           ? normalizeNetwork({
               name: bridgedSession.network as Network,
@@ -1031,9 +1078,11 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         launchDesktopOrMobileConnect(this.options);
 
         const retriedAccount = await retryLocalBridgeConnectAfterDeeplink(this.options);
+        assertCurrent();
         if (retriedAccount) {
-          this.accountInfo = retriedAccount;
           const retriedSession = await readValidatedExternalSession(this.options);
+          assertCurrent();
+          this.accountInfo = retriedAccount;
           this.networkInfo = retriedSession
             ? normalizeNetwork({
                 name: retriedSession.network as Network,
@@ -1044,6 +1093,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         }
 
         const handoffSession = await waitForExternalSession(this.options);
+        assertCurrent();
         if (handoffSession) {
           return this.connectResultFromExternalSession(handoffSession);
         }
@@ -1092,7 +1142,17 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     }
   }
 
-  async disconnect(): Promise<void> {
+  disconnect(): Promise<void> {
+    if (this.disconnectOperation) return this.disconnectOperation;
+    const operation = this.disconnectOnce().finally(() => {
+      if (this.disconnectOperation === operation) this.disconnectOperation = null;
+    });
+    this.disconnectOperation = operation;
+    return operation;
+  }
+
+  private async disconnectOnce(): Promise<void> {
+    this.invalidateConnection();
     this.injectedScopeRevision++;
     const provider = this.refreshProvider();
     const externalSession = readExternalSession();
@@ -1843,17 +1903,24 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
 
   async subscribe(): Promise<void> {
     const provider = this.refreshProvider();
+    const revision = this.subscriptionRevision;
+    const current = () => {
+      if (this.disposed || revision !== this.subscriptionRevision) return false;
+      try { return this.refreshProvider() === provider; } catch { return false; }
+    };
 
     if (provider?.onAccountChange) {
       await provider.onAccountChange((account) => {
+        if (!current()) return;
         this.injectedScopeRevision++;
         this.accountInfo = normalizeProviderAccount(account);
         this.emit("accountChange", this.accountInfo);
       });
     }
 
-    if (provider?.onNetworkChange) {
+    if (current() && provider?.onNetworkChange) {
       await provider.onNetworkChange((network) => {
+        if (!current()) return;
         this.injectedScopeRevision++;
         this.networkInfo = normalizeNetwork(network);
         this.emit("networkChange", this.networkInfo);

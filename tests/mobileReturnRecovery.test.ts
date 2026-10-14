@@ -2,7 +2,7 @@ import {
   connectViaMobileRelay, mobileWalletLaunchUrl, resumeMobileRelaySession,
   signAndSubmitViaMobileRelay
 } from "../src/mobileRelay";
-import { readExternalSession, storeExternalSession } from "../src/bridge";
+import { readExternalSession, storeExternalSession, clearPendingMobilePairing, storePendingMobilePairing } from "../src/bridge";
 import { storePendingMobileRelayRequest } from "../src/mobileRequests";
 import { hasLiveOriginalMobileTab, installMobileReturnOwnerResponder } from "../src/mobileReturnCoordinator";
 import { listDurableInvocations, listDurableRequests, saveDurableRequest, saveDurableFinal } from "../src/durableRecovery";
@@ -36,8 +36,14 @@ describe("mobile return without callback navigation", () => {
     expect(target.searchParams.get("walletClaimToken")).toBe("secret");
   });
 
-  it("polls pairing approval without websocket event or callback marker", async () => {
-    vi.stubGlobal("WebSocket", undefined);
+  it.each(["unavailable", "stalled"])("polls pairing approval with %s websocket and no callback marker", async (socketMode) => {
+    class StalledSocket {
+      static CONNECTING = 0;
+      readyState = 0;
+      addEventListener() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", socketMode === "stalled" ? StalledSocket : undefined);
     const wallet = createKeyPair();
     let shared = "";
     let pairingReads = 0, createCalls = 0;
@@ -97,6 +103,25 @@ describe("mobile return without callback navigation", () => {
     await expect(resumed).rejects.toMatchObject({ code: "USER_REJECTED" });
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch.mock.calls.every(([, init]) => init?.method !== "POST")).toBe(true);
+  });
+
+  it.each(["cleared", "replaced"])("rejects an old pairing result after its pending record is %s", async (change) => {
+    vi.stubGlobal("WebSocket", undefined);
+    const dapp = createKeyPair(), wallet = createKeyPair();
+    const pending = { pairingId: "pair-old", dappPairingToken: "old-token", privateKey: dapp.privateKey,
+      publicKey: dapp.publicKey, relayBaseUrl: relay, expiresAt: expiresAt() };
+    storePendingMobilePairing(pending);
+    let finish!: (response: Response) => void;
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const resumed = resumeMobileRelaySession({ relayBaseUrl: relay, mobileRequestTimeoutMs: 50 });
+    const rejected = expect(resumed).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    if (change === "cleared") clearPendingMobilePairing();
+    else storePendingMobilePairing({ ...pending, pairingId: "pair-new", dappPairingToken: "new-token" });
+    finish(json({ pairingId: "pair-old", status: "approved", sessionId: "old-session", dappSessionToken: "old-session-token",
+      walletPublicKey: wallet.publicKey, encryptedResult: encryptJson({ address: "0x1", publicKey: "0x2", network: "testnet", chainId: 2 }, deriveSharedSecret(wallet.privateKey, dapp.publicKey)) }));
+    await rejected; expect(readExternalSession()).toBeNull();
+    if (change === "replaced") expect(localStorage.getItem("inferenco:infer-pending-mobile-pairing")).toContain("pair-new");
   });
 
   it("resumes an approved saved pairing after reload with no callback marker or launch", async () => {

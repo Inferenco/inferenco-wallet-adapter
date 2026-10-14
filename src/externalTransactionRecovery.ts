@@ -70,13 +70,13 @@ export function mergeExternalTransactionRecovery(previous: ExternalTransactionRe
     return next;
   }
   if (previous.transactionHash && next.transactionHash && previous.transactionHash !== next.transactionHash) invalid();
-  if (previous.transactionHash && !next.transactionHash) return previous;
+  if (previous.transactionHash && !next.transactionHash) return previous.chainStatus === "pending"
+    ? { ...previous, chainStatus: "unknown" } : previous;
   const committed = previous.chainStatus === "confirmed" || previous.chainStatus === "aborted";
   if (committed && (next.chainStatus === "confirmed" || next.chainStatus === "aborted") &&
       (previous.chainStatus !== next.chainStatus || previous.chainVersion !== next.chainVersion)) invalid();
   return { ...next,
     ...(previous.submissionAcceptance === "accepted" ? { submissionAcceptance: "accepted" as const } : {}),
-    ...(committed ? { chainStatus: previous.chainStatus, chainVersion: previous.chainVersion } : {}),
-    ...(previous.chainStatus === "pending" && next.chainStatus === "unknown" ? { chainStatus: "pending" as const } : {})
+    ...(committed ? { chainStatus: previous.chainStatus, chainVersion: previous.chainVersion } : {})
   };
 }

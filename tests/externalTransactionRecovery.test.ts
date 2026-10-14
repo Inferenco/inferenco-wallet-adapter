@@ -57,6 +57,21 @@ describe("external transaction recovery evidence", () => {
     expect(fetch.mock.calls.some(([input]) => String(input).endsWith("/read-grant"))).toBe(true);
     expect(fetch.mock.calls.every(([input]) => !String(input).endsWith("/v1/requests"))).toBe(true);
   });
+  it("does not replay a historical node-pending observation as a fresh chain status", async () => {
+    const { row, session } = await fixture(); const fetch = serve(session, envelope({ chainStatus: "pending" }));
+    expect(await readRecoverableRequest(row.id)).toMatchObject({ transactionHash: hash, chainStatus: "pending" });
+    localStorage.clear(); fetch.mockClear();
+    expect(await readRecoverableRequest(row.id)).toMatchObject({ transactionHash: hash, chainStatus: "unknown" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([true, false])("keeps the identity but does not promote an unknown read to pending (hash present: %s)", async (hasHash) => {
+    const { row, session } = await fixture(); const fetch = serve(session, envelope({ chainStatus: "pending" }));
+    await readRecoverableRequest(row.id); fetch.mockRestore();
+    const next: Record<string, unknown> = envelope();
+    if (!hasHash) { delete next.transactionHash; delete next.submissionAcceptance; delete next.chainStatus; }
+    serve(session, next);
+    expect(await readRecoverableRequest(row.id)).toMatchObject({ transactionHash: hash, chainStatus: "unknown" });
+  });
   it("distinguishes proven non-submission from user rejection and retains it across reload", async () => {
     const { row, session } = await fixture();
     const value: Record<string, unknown> = envelope({ status: "not-submitted", failureCode: "EXECUTION_FAILED_BEFORE_BROADCAST" });

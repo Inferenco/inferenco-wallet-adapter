@@ -228,6 +228,40 @@ describe('selected registered native recovery features',()=>{
     expect(f.ack).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {status:'pending'},
+    {status:'unknown',transactionHash:hash,submissionAcceptance:'unknown',chainStatus:'unknown'},
+    {status:'pending',transactionHash:hash,submissionAcceptance:'accepted',chainStatus:'pending'},
+    {status:'approved',transactionHash:hash,submissionAcceptance:'accepted',chainStatus:'confirmed',chainVersion:'42',payload:{hash}},
+    {status:'approved',transactionHash:hash,submissionAcceptance:'accepted',chainStatus:'aborted',chainVersion:'43',payload:{hash}}
+  ])('keeps wallet request status separate from exact chain evidence %j',async(evidence)=>{
+    const f=fixture(),features=f.create();let d:any;
+    f.submit.mockImplementation(async (_input:unknown,meta:unknown)=>{
+      f.result({...meta as object,method:'signAndSubmitTransaction',...evidence});throw new Error('lost');
+    });
+    await expect(features['inferenco:transactionSubmission'].signAndSubmitTransaction(wire(),{onInvocationPrepared:(v:any)=>{d=v;}})).rejects.toThrow();
+    const outcome=await features['inferenco:recoveredOutcomes'].read('invocation:'+d.invocationId);
+    expect(outcome.status).toBe(evidence.status);
+    if(evidence.transactionHash) expect(outcome.transactionHash ?? outcome.output?.hash).toBe(hash);
+    else expect(outcome).not.toHaveProperty('transactionHash');
+    if(evidence.chainStatus) expect(outcome.chainStatus).toBe(evidence.chainStatus);
+    else expect(outcome).not.toHaveProperty('chainStatus');
+    expect(f.submit).toHaveBeenCalledOnce(); expect(f.ack).not.toHaveBeenCalled();
+  });
+
+  it('does not interpret a wallet pending result without identity as node pending',async()=>{
+    const f=fixture(),features=f.create();let d:any;
+    f.submit.mockImplementation(async (_input:unknown,meta:unknown)=>{
+      f.result({...meta as object,method:'signAndSubmitTransaction',status:'pending',chainStatus:'pending'});
+      throw new Error('lost');
+    });
+    await expect(features['inferenco:transactionSubmission'].signAndSubmitTransaction(wire(),{onInvocationPrepared:(v:any)=>{d=v;}})).rejects.toThrow();
+    const outcome=await features['inferenco:recoveredOutcomes'].read('invocation:'+d.invocationId);
+    expect(outcome).toMatchObject({status:'unknown'});
+    expect(outcome).not.toHaveProperty('chainStatus');
+    expect(outcome).not.toHaveProperty('transactionHash');
+  });
+
   it('does not dispatch an old preparation after an account round trip',async()=>{
     const f=fixture(),features=f.create();let descriptor:any;let error:any;
     try{await features['inferenco:transactionSubmission'].signAndSubmitTransaction(wire(),{

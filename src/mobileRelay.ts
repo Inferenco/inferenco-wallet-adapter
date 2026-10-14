@@ -188,7 +188,8 @@ async function waitForPairingOutcome(
   pairingId: string,
   dappPairingToken: string,
   options: InferWalletOptions,
-  websocketUrl?: string
+  websocketUrl?: string,
+  assertCurrent: () => void = () => {}
 ): Promise<InferMobilePairingStatus> {
   const relayBaseUrl = getRelayBaseUrl(options);
   const deadline = Date.now() + mobileRequestTimeout(options);
@@ -226,6 +227,7 @@ async function waitForPairingOutcome(
   try {
     // Always poll the exact pairing. Websocket and callback signals only wake.
     do {
+      assertCurrent();
       wakeRequested = false;
       storeCallbackSession();
       try {
@@ -235,6 +237,7 @@ async function waitForPairingOutcome(
             encodeURIComponent(dappPairingToken),
           Math.min(10_000, Math.max(1, deadline - Date.now()))
         );
+        assertCurrent();
         if (status.pairingId !== pairingId) {
           throw new InferAdapterError(
             InferErrorCode.InternalError,
@@ -292,6 +295,7 @@ async function waitForPairingOutcome(
           encodeURIComponent(dappPairingToken),
         10_000
       );
+      assertCurrent();
       if (final.pairingId === pairingId && isFinalStatus(final.status))
         return final;
     } catch {
@@ -389,7 +393,8 @@ function sessionFromApprovedPairing(
 /** Resume an existing pairing after callback, task return, focus, or reload.
  * This never creates a second pairing or opens the wallet. */
 export async function resumeMobileRelaySession(
-  options: InferWalletOptions = {}
+  options: InferWalletOptions = {},
+  assertCurrent: () => void = () => {}
 ): Promise<InferExternalSession | null> {
   assertBrowser();
   const pendingPairing = readPendingMobilePairing();
@@ -400,8 +405,11 @@ export async function resumeMobileRelaySession(
     pendingPairing.pairingId,
     pendingPairing.dappPairingToken,
     { ...options, relayBaseUrl: pendingPairing.relayBaseUrl },
-    getWebsocketUrl({ ...options, relayBaseUrl: pendingPairing.relayBaseUrl })
+    getWebsocketUrl({ ...options, relayBaseUrl: pendingPairing.relayBaseUrl }),
+    assertCurrent
   );
+  assertCurrent();
+  assertPendingPairing(pendingPairing.pairingId, pendingPairing.dappPairingToken);
   if (pairing.status === "approved") {
     const session = sessionFromApprovedPairing(
       pairing,
@@ -826,8 +834,15 @@ export async function resumeMobileRelayRequest(
   );
 }
 
+function assertPendingPairing(pairingId: string, token: string): void {
+  const current = readPendingMobilePairing();
+  if (current?.pairingId !== pairingId || current.dappPairingToken !== token)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Mobile pairing was superseded");
+}
+
 export async function connectViaMobileRelay(
-  options: InferWalletOptions = {}
+  options: InferWalletOptions = {},
+  assertCurrent: () => void = () => {}
 ): Promise<InferExternalSession> {
   assertBrowser();
   const relayBaseUrl = getRelayBaseUrl(options);
@@ -849,6 +864,7 @@ export async function connectViaMobileRelay(
     }
   );
 
+  assertCurrent();
   storePendingMobilePairing({
     pairingId: response.pairingId,
     dappPairingToken: response.dappPairingToken,
@@ -863,8 +879,11 @@ export async function connectViaMobileRelay(
     response.pairingId,
     response.dappPairingToken,
     options,
-    getWebsocketUrl(options, response.websocketUrl)
+    getWebsocketUrl(options, response.websocketUrl),
+    assertCurrent
   );
+  assertCurrent();
+  assertPendingPairing(response.pairingId, response.dappPairingToken);
 
   try {
     const session = sessionFromApprovedPairing(
