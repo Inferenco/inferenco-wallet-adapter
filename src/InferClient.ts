@@ -11,6 +11,9 @@ import {
 import { notInvokedError } from "./nonDispatchEvidence";
 import {
   prepareDurableInvocation,
+  listDurableInvocations,
+  getDurableInvocation,
+  saveDurableTransactionHash,
   updateDurableInvocation,
   updateInjectedInvocationEvidence,
   serializeStoredFinal,
@@ -104,7 +107,7 @@ import type {
   RecoverableInvocation,
   RecoveredInvocationOutcome
 } from "./recovery";
-import { detectProvider } from "./provider";
+import { detectProvider, inheritNativeProvider, nativeProviderBinding } from "./provider";
 import type {
   InferExternalAccountInput,
   InferExternalSignTransactionInput,
@@ -526,10 +529,12 @@ export class InferClient extends EventEmitter<InferClientEvents> {
 
   constructor(private readonly options: InferWalletOptions = {}) {
     super();
-    installExternalSessionResumeListeners();
-    storeCallbackSession();
+    if (!nativeProviderBinding(options)) {
+      installExternalSessionResumeListeners();
+      storeCallbackSession();
+    }
     this.provider = detectProvider(options);
-    const cached = readExternalSession();
+    const cached = nativeProviderBinding(options) ? null : readExternalSession();
     if (cached) {
       this.healthState = {
         state: "checking",
@@ -537,14 +542,16 @@ export class InferClient extends EventEmitter<InferClientEvents> {
           address: cached.address, network: cached.network, chainId: cached.chainId }
       };
     }
-    this.installDisconnectBridgeListeners();
-    this.maybeStartSessionLiveness();
+    if (!nativeProviderBinding(options)) {
+      this.installDisconnectBridgeListeners();
+      this.maybeStartSessionLiveness();
+    }
     if (options.onRecoveredOutcome) {
       this.recoveredSubscribers.set(options.onRecoveredOutcome, new Set());
     }
     if (typeof window !== "undefined") {
-      this.disposeMobileOwnerResponder = installMobileReturnOwnerResponder();
-      const mobileCallbackId = isMobileBrowser() ? readCallbackMarker()?.requestId : undefined;
+      if (!nativeProviderBinding(options)) this.disposeMobileOwnerResponder = installMobileReturnOwnerResponder();
+      const mobileCallbackId = !nativeProviderBinding(options) && isMobileBrowser() ? readCallbackMarker()?.requestId : undefined;
       if (mobileCallbackId) void this.coordinateMobileCallbackTab(mobileCallbackId);
       window.addEventListener("focus", this.recoveryWake);
       window.addEventListener("pageshow", this.recoveryWake);
@@ -584,16 +591,56 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   }
 
   /** Application-facing exact-ID recovery; no request creation or wallet launch. */
-  listRecoverableRequests(): Promise<RecoverableRequest[]> {
-    return listRecoverableRequests(this.options);
+  async listRecoverableRequests(): Promise<RecoverableRequest[]> {
+    if (!nativeProviderBinding(this.options)) return listRecoverableRequests(this.options);
+    const rows = await this.boundNativeInvocations();
+    return rows.filter(row => row.state !== "not-invoked" &&
+      (!row.deliveryState || row.deliveryState === "active")).map(row => ({
+        ...invocationDescriptor(row), recoveryId: "invocation:" + row.id, requestId: row.id
+      }));
   }
 
-  listRecoverableInvocations(): Promise<RecoverableInvocation[]> {
-    return listRecoverableInvocations();
+  async listRecoverableInvocations(): Promise<RecoverableInvocation[]> {
+    if (!nativeProviderBinding(this.options)) return listRecoverableInvocations();
+    return (await this.boundNativeInvocations()).map(invocationDescriptor);
   }
 
-  reconcileRecoverableInvocation(invocationId: string): Promise<RecoveredInvocationOutcome> {
-    return reconcileRecoverableInvocation(invocationId, this.options);
+  private async boundNativeInvocations(): Promise<DurableInvocation[]> {
+    const binding = nativeProviderBinding(this.options)!;
+    binding.assertCurrent();
+    const rows = await listDurableInvocations();
+    binding.assertCurrent();
+    const matching: DurableInvocation[] = [];
+    for (const row of rows) {
+      if (row.transport !== "injected" || row.method !== "signAndSubmitTransaction") continue;
+      try {
+        await binding.assertScope({origin:row.origin,accountAddress:canonicalAddress(row.address),
+          network:row.network,chainId:row.chainId});
+        matching.push(row);
+      } catch { binding.assertCurrent(); }
+    }
+    return matching;
+  }
+
+  private async assertBoundNativeHandle(id: string, invocationId = false): Promise<void> {
+    const binding = nativeProviderBinding(this.options);
+    if (!binding) return;
+    binding.assertCurrent();
+    if (!invocationId && !id.startsWith("invocation:"))
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "native-recovery-handle-mismatch");
+    const row = await getDurableInvocation(invocationId ? id : id.slice(11));
+    binding.assertCurrent();
+    if (!row || row.transport !== "injected" || row.method !== "signAndSubmitTransaction")
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "native-recovery-handle-mismatch");
+    await binding.assertScope({origin:row.origin,accountAddress:canonicalAddress(row.address),
+      network:row.network,chainId:row.chainId});
+  }
+
+  async reconcileRecoverableInvocation(invocationId: string): Promise<RecoveredInvocationOutcome> {
+    await this.assertBoundNativeHandle(invocationId, true);
+    const result = await reconcileRecoverableInvocation(invocationId, this.options);
+    await this.assertBoundNativeHandle(invocationId, true);
+    return result;
   }
 
   relaunchRecoverableInvocation(invocationId: string): Promise<void> {
@@ -604,12 +651,17 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     return listArchivedRecoverableRequests(this.options);
   }
 
-  readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
-    return readRecoverableRequest(requestId, this.options);
+  async readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
+    await this.assertBoundNativeHandle(requestId);
+    const result = await readRecoverableRequest(requestId, this.options);
+    await this.assertBoundNativeHandle(requestId);
+    return result;
   }
 
-  acknowledgeRecoverableRequest(requestId: string): Promise<void> {
-    return acknowledgeRecoverableRequest(requestId, this.options);
+  async acknowledgeRecoverableRequest(requestId: string): Promise<void> {
+    await this.assertBoundNativeHandle(requestId);
+    await acknowledgeRecoverableRequest(requestId, this.options);
+    await this.assertBoundNativeHandle(requestId);
   }
 
   archiveRecoverableRequest(requestId: string, reconciliationReference: string): Promise<void> {
@@ -719,16 +771,21 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     for (const request of pending) {
       if (this.disposed || this.recoveredSubscribers.size === 0) return;
       try {
+        const nativeFence = nativeProviderBinding(this.options)?.capture();
         const outcome = await this.readRecoverableRequest(request.recoveryId);
+        nativeFence?.();
         if (outcome.status !== "approved" && outcome.status !== "rejected") continue;
         const stillActive = (await this.listRecoverableRequests()).some((item) =>
           item.recoveryId === request.recoveryId && item.method === request.method
         );
+        nativeFence?.();
         if (!stillActive) continue;
         for (const [callback, delivered] of this.recoveredSubscribers) {
           if (delivered.has(request.recoveryId) || this.disposed) continue;
           try {
+            nativeFence?.();
             await callback(Object.freeze(outcome));
+            nativeFence?.();
             delivered.add(request.recoveryId);
           } catch {
             // Failed consumer persistence leaves the final outcome replayable.
@@ -1006,7 +1063,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
   }
 
   async getAccount(): Promise<AccountInfo> {
-    if (this.accountInfo) return this.accountInfo;
+    if (this.accountInfo && !nativeProviderBinding(this.options)) return this.accountInfo;
 
     try {
       const provider = this.refreshProvider();
@@ -1060,7 +1117,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
   }
 
   async getNetwork(): Promise<NetworkInfo> {
-    if (this.networkInfo) return this.networkInfo;
+    if (this.networkInfo && !nativeProviderBinding(this.options)) return this.networkInfo;
 
     try {
       const provider = this.refreshProvider();
@@ -1528,11 +1585,11 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     callOptions: Pick<InferWalletOptions, "onInvocationPrepared"> = {}
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     const wire = normalizeSubmitInput(input);
-    return this.submitNormalized(wire, {
+    return this.submitNormalized(wire, inheritNativeProvider(this.options, {
       ...this.options,
       ...callOptions,
       requireContractVersion: 1
-    });
+    }));
   }
 
   private async submitNormalized(
@@ -1542,6 +1599,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     try {
       const provider = this.refreshProvider();
       if (provider?.signAndSubmitTransaction) {
+        const nativeFence = nativeProviderBinding(callOptions)?.capture();
         const account = await this.getAccount();
         const network = await this.getNetwork();
         const contractVersion = provider.integrationContractVersion;
@@ -1600,12 +1658,18 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
               "This injected wallet does not support required transaction restrictions"
             );
           }
+          if (nativeProviderBinding(callOptions) &&
+              (!provider.capabilities?.durableInvocationSubmission ||
+               !provider.capabilities?.durableInvocationLookup ||
+               !provider.readInvocation || !provider.acknowledgeInvocation))
+            throw new InferAdapterError(InferErrorCode.Unsupported, "native-durable-submission-unavailable");
           this.assertSubmissionScope(
             wire,
             scope.accountAddress,
             scope.chainId,
             scope.network
           );
+          nativeFence?.();
           providerInput = provider.integrationContractVersion === 1 ? wire : legacySubmitInput(wire);
         } catch (cause) {
           await updateDurableInvocation(invocation.id, "not-invoked").catch(
@@ -1614,7 +1678,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
           throw notInvokedError(
             "Wallet submission stopped before provider invocation",
             descriptor,
-            cause
+            nativeProviderBinding(callOptions) ? undefined : cause
           );
         }
         let providerResult: unknown;
@@ -1634,14 +1698,24 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
           await updateDurableInvocation(invocation.id, "unknown").catch(
             () => undefined
           );
+          // Hash-only execution evidence is useful even when the reply is uncertain.
+          // It never constitutes proof of submission acceptance or non-submission.
+          try {
+            if (cause && typeof cause === "object" &&
+                isValidTransactionHash((cause as {transactionHash?:unknown}).transactionHash)) {
+              const value = (cause as {transactionHash:string}).transactionHash;
+              await saveDurableTransactionHash(invocation.id, value, true);
+            }
+          } catch { /* The original invocation remains recoverable. */ }
           throw new InferAdapterError(
             InferErrorCode.RequestOutcomeUnknown,
-            "Injected wallet submission outcome is unknown",
-            cause
+            "native-submission-uncertain"
           );
         }
         let result: CedraSignAndSubmitTransactionOutput;
         try {
+          await this.assertLiveInjectedScope(provider, account, network, contractVersion);
+          nativeFence?.();
           result = normalizeSignAndSubmitProviderResult(providerResult);
         } catch (error) {
           if (
@@ -1665,11 +1739,13 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
               hash: result.hash
             }
           });
+          await this.assertLiveInjectedScope(provider, account, network, contractVersion);
+          nativeFence?.();
         } catch (cause) {
           throw new InferAdapterError(
             InferErrorCode.RequestOutcomeUnknown,
-            "Native submission returned a hash but local evidence could not be saved",
-            { cause, hash: result.hash }
+            "native-result-persistence-failed",
+            nativeProviderBinding(callOptions) ? { hash: result.hash } : { cause, hash: result.hash }
           );
         }
         return result;

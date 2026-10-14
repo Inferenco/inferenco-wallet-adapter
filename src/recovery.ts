@@ -1,4 +1,4 @@
-import { detectProvider } from "./provider";
+import { detectProvider, nativeProviderBinding, nativeRecoveryKey } from "./provider";
 import {
   canonicalAddress,
   encodeWireValue,
@@ -213,7 +213,12 @@ export type RecoveredInvocationOutcome =
   | RecoveredRequestOutcome
   | { invocationId: string; status: "unknown"; reason: string };
 
-export type RecoveredRequestOutcome =
+export type NativeExecutionEvidence = Readonly<{
+  submissionAcceptance?: "unknown" | "accepted";
+  chainStatus?: "unknown" | "pending" | "confirmed" | "aborted";
+  chainVersion?: string;
+}>;
+export type RecoveredRequestOutcome = (
   | (RecoverableRequest & { status: "pending"; transactionHash?: string })
   | (RecoverableRequest & { status: "approved"; output:
         | CedraSignMessageOutput
@@ -221,7 +226,8 @@ export type RecoveredRequestOutcome =
         | CedraSignAndSubmitTransactionOutput;
     })
   | (RecoverableRequest & { status: "rejected" })
-  | (RecoverableRequest & { status: "unknown"; reason: string; transactionHash?: string });
+  | (RecoverableRequest & { status: "unknown"; reason: string; transactionHash?: string })
+) & NativeExecutionEvidence;
 
 const inFlight = new Map<string, Promise<RecoveredRequestOutcome>>();
 
@@ -710,19 +716,57 @@ function replayInjected(
     return { ...base, status: "unknown", reason: "stored_result_incomplete" };
   }
 }
+function nativeExecutionEvidence(result: Record<string, unknown>, method: string): NativeExecutionEvidence {
+  const evidence: {submissionAcceptance?: "unknown" | "accepted"; chainStatus?: "unknown" | "pending" | "confirmed" | "aborted"; chainVersion?: string} = {};
+  if (result.submissionAcceptance !== undefined) {
+    if (method !== "signAndSubmitTransaction" || typeof result.submissionAcceptance !== "string" ||
+        !["unknown", "accepted"].includes(result.submissionAcceptance))
+      throw new Error("Invalid native acceptance evidence");
+    evidence.submissionAcceptance = result.submissionAcceptance as "unknown" | "accepted";
+  }
+  if (result.chainStatus !== undefined) {
+    if (method !== "signAndSubmitTransaction" || typeof result.chainStatus !== "string" ||
+        !["unknown", "pending", "confirmed", "aborted"].includes(result.chainStatus))
+      throw new Error("Invalid native chain evidence");
+    evidence.chainStatus = result.chainStatus as NativeExecutionEvidence["chainStatus"];
+  }
+  if (result.chainVersion !== undefined) {
+    if (typeof result.chainVersion !== "string" || !/^(0|[1-9]\d{0,19})$/.test(result.chainVersion) ||
+        BigInt(result.chainVersion) > (1n << 64n) - 1n ||
+        !["confirmed", "aborted"].includes(String(evidence.chainStatus)))
+      throw new Error("Invalid native chain version");
+    evidence.chainVersion = result.chainVersion;
+  }
+  if ((evidence.chainStatus === "confirmed" || evidence.chainStatus === "aborted") &&
+      evidence.chainVersion === undefined) throw new Error("Missing native chain version");
+  if (result.status === "approved" && evidence.submissionAcceptance === "unknown")
+    throw new Error("Contradictory native acceptance evidence");
+  if (result.status === "pending" && ["confirmed", "aborted"].includes(String(evidence.chainStatus)))
+    throw new Error("Conflicting native pending evidence");
+  return evidence;
+}
 async function readInjectedInvocation(
   row: DurableInvocation,
   options: InferWalletOptions
 ): Promise<RecoveredRequestOutcome> {
-  const id = "invocation:" + row.id;
+  const id = "invocation:" + row.id + ":" + nativeRecoveryKey(options);
+  const binding = nativeProviderBinding(options);
+  const scope = {origin:row.origin,accountAddress:canonicalAddress(row.address),network:row.network,chainId:row.chainId};
+  await binding?.assertScope(scope);
   const existing = inFlight.get(id);
-  if (existing) return existing;
+  if (existing) {
+    const result = await existing;
+    await binding?.assertScope(scope);
+    return result;
+  }
   const task = readInjectedInvocationOnce(row, options);
   inFlight.set(id, task);
   try {
-    return await task;
+    const result = await task;
+    await binding?.assertScope(scope);
+    return result;
   } finally {
-    inFlight.delete(id);
+    if (inFlight.get(id) === task) inFlight.delete(id);
   }
 }
 async function readInjectedInvocationOnce(
@@ -747,8 +791,13 @@ async function readInjectedInvocationOnce(
         status: "unknown", ...uncertainExecution(row),
         reason: "invocation_commitment_mismatch"
       };
+    // A selected native consumer must still hold the exact live scope before
+    // a cached final can be published.
+    await nativeProviderBinding(options)?.assertScope(scope);
     const final = replayInjected(row);
-    if (final) return final;
+    // The selected wallet's raw read authenticates the current native grant.
+    // JS account/network caches alone cannot authorize terminal publication.
+    if (final && !nativeProviderBinding(options)) return final;
     const provider = detectProvider(options);
     if (
       !provider?.readInvocation ||
@@ -805,6 +854,7 @@ async function readInjectedInvocationOnce(
     const result = encodeWireValue(
       await provider.readInvocation(row.id, row.requestCommitment)
     ) as Record<string, unknown>;
+    await nativeProviderBinding(options)?.assertScope(scope);
     const returned = result.scope as Record<string, unknown> | undefined;
     if (
       result.contractVersion !== 1 ||
@@ -822,30 +872,46 @@ async function readInjectedInvocationOnce(
         status: "unknown", ...uncertainExecution(row),
         reason: "native_invocation_scope_mismatch"
       };
+    const evidence = nativeExecutionEvidence(result, row.method);
+    const recoveredHash = result.transactionHash ?? result.hash;
+    if (result.transactionHash !== undefined && result.hash !== undefined &&
+        result.transactionHash !== result.hash) throw new Error("Conflicting native identity");
     if (result.status === "pending" || result.status === "unknown") {
-      if (result.hash !== undefined) {
-        if (row.method !== "signAndSubmitTransaction" || !isValidTransactionHash(result.hash))
+      if (result.payload !== undefined) throw new Error("Unexpected unresolved payload");
+      if (recoveredHash !== undefined) {
+        if (row.method !== "signAndSubmitTransaction" || !isValidTransactionHash(recoveredHash))
           throw new Error("Invalid recovered execution identity");
-        await saveDurableTransactionHash(row.id, result.hash, true);
-        row.transactionHash = result.hash.toLowerCase();
+        await saveDurableTransactionHash(row.id, recoveredHash, true);
+        await nativeProviderBinding(options)?.assertScope(scope);
+        row.transactionHash = recoveredHash.toLowerCase();
+      } else if (evidence.chainStatus === "confirmed" || evidence.chainStatus === "aborted" ||
+                 evidence.submissionAcceptance === "accepted") {
+        throw new Error("Native execution evidence lacks identity");
       }
       return result.status === "pending"
-        ? { ...base, status: "pending", ...uncertainExecution(row) }
-        : { ...base, status: "unknown", reason: "original_execution_unresolved", ...uncertainExecution(row) };
+        ? { ...base, status: "pending", ...uncertainExecution(row), ...evidence }
+        : { ...base, status: "unknown", reason: "original_execution_unresolved", ...uncertainExecution(row), ...evidence };
     }
-    if (result.status === "rejected" && explicitRejectedPayload(result.payload) && result.hash === undefined) {
-      await updateInjectedInvocationEvidence(row.id, {
-        final: { status: "rejected" }
-      });
+    if (result.status === "rejected" && explicitRejectedPayload(result.payload) &&
+        recoveredHash === undefined && Object.keys(evidence).length === 0) {
+      if (!row.final) await updateInjectedInvocationEvidence(row.id, { final: { status: "rejected" } });
+      else if (row.final.status !== "rejected") throw new Error("Conflicting native decline");
+      await nativeProviderBinding(options)?.assertScope(scope);
       return { ...base, status: "rejected" };
     }
     if (result.status !== "approved")
-      return { ...base, status: "unknown", ...uncertainExecution(row), reason: String(result.status) };
+      return { ...base, status: "unknown", ...uncertainExecution(row), reason: "native_outcome_unavailable" };
     const output = validateInjectedApproval(row, result.payload);
-    await updateInjectedInvocationEvidence(row.id, {
-      final: serializeStoredFinal(row.method, output)
-    });
-    return { ...base, status: "approved", output };
+    if (recoveredHash !== undefined &&
+        (row.method !== "signAndSubmitTransaction" || !isValidTransactionHash(recoveredHash) ||
+         !("hash" in output) || output.hash.toLowerCase() !== recoveredHash.toLowerCase()))
+      throw new Error("Conflicting native approval identity");
+    const retainedFinal = serializeStoredFinal(row.method, output);
+    if (!row.final) await updateInjectedInvocationEvidence(row.id, {final: retainedFinal});
+    else if (JSON.stringify(row.final) !== JSON.stringify(retainedFinal))
+      throw new Error("Conflicting native terminal outcome");
+    await nativeProviderBinding(options)?.assertScope(scope);
+    return { ...base, status: "approved", output, ...evidence };
   } catch {
     return {
       ...base,
@@ -993,9 +1059,23 @@ export async function readRecoverableRequest(
 
 /** Check optional native retention support without weakening original scope. */
 async function acknowledgeNativeResult(row: DurableInvocation, options: InferWalletOptions): Promise<void> {
+  const scope = { origin: row.origin, accountAddress: canonicalAddress(row.address), network: row.network, chainId: row.chainId };
+  await nativeProviderBinding(options)?.assertScope(scope);
   const final = replayInjected(row);
-  if (!final || (final.status !== "approved" && final.status !== "rejected"))
-    throw new InferAdapterError(InferErrorCode.InternalError, "Read a verified final outcome before acknowledging this request");
+  let reconciledHash: string | undefined;
+  if (!final || (final.status !== "approved" && final.status !== "rejected")) {
+    // Wallet C can prove an originally uncertain broadcast using exact committed
+    // chain evidence. Explicit acknowledgement may then retain acceptance,
+    // including a committed abort; neither is an application-success decision.
+    if (!isValidTransactionHash(row.transactionHash))
+      throw new InferAdapterError(InferErrorCode.InternalError, "native-outcome-not-terminal");
+    const observed = await readInjectedInvocation(row, options);
+    if (row.method !== "signAndSubmitTransaction" || observed.status !== "unknown" ||
+        !isValidTransactionHash(observed.transactionHash) ||
+        (observed.chainStatus !== "confirmed" && observed.chainStatus !== "aborted"))
+      throw new InferAdapterError(InferErrorCode.InternalError, "native-outcome-not-terminal");
+    reconciledHash = observed.transactionHash;
+  }
   if (row.deliveryState === "acknowledged") return;
   // Explicit false is admission-time evidence of an incapable peer, not a later downgrade.
   if (row.remoteAcknowledgementRequired === false) return;
@@ -1005,7 +1085,6 @@ async function acknowledgeNativeResult(row: DurableInvocation, options: InferWal
        (provider.integrationContractVersion !== 1 || !provider.acknowledgeInvocation)))
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Reconnect the original acknowledgement-capable wallet to retain a retryable acknowledgement");
-  const scope = { origin: row.origin, accountAddress: canonicalAddress(row.address), network: row.network, chainId: row.chainId };
   if (!row.requestCommitment ||
       requestCommitment(row.method, scope, row.requestPayload) !== row.requestCommitment ||
       !provider.account || !provider.network)
@@ -1041,6 +1120,13 @@ async function acknowledgeNativeResult(row: DurableInvocation, options: InferWal
       returned.origin !== scope.origin || returned.accountAddress !== scope.accountAddress ||
       returned.network !== scope.network || returned.chainId !== scope.chainId)
     throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement differs from the original request");
+  await nativeProviderBinding(options)?.assertScope(scope);
+  if (reconciledHash) {
+    await updateInjectedInvocationEvidence(row.id, {
+      final: {status:"approved",method:"signAndSubmitTransaction",hash:reconciledHash}
+    });
+    await nativeProviderBinding(options)?.assertScope(scope);
+  }
 }
 
 /** Remote retention acknowledgement precedes the local delivery CAS so failures remain retryable. */
@@ -1052,7 +1138,9 @@ export async function acknowledgeRecoverableRequest(
     const row = await getDurableInvocation(requestIdOrRecoveryId.slice(11));
     if (!row || row.transport !== "injected") throw new InferAdapterError(InferErrorCode.Unauthorized, "Unknown native invocation");
     await acknowledgeNativeResult(row, options);
+    await nativeProviderBinding(options)?.assertScope({origin:row.origin,accountAddress:canonicalAddress(row.address),network:row.network,chainId:row.chainId});
     await updateInjectedInvocationEvidence(row.id, { deliveryState: "acknowledged" });
+    await nativeProviderBinding(options)?.assertScope({origin:row.origin,accountAddress:canonicalAddress(row.address),network:row.network,chainId:row.chainId});
     return;
   }
   const row = await exactRecord(requestIdOrRecoveryId, options);

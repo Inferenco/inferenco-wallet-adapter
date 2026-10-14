@@ -1,0 +1,125 @@
+{
+  "schema": "infer-adapter-native-recovery-validation-v1",
+  "date": "2026-10-14",
+  "branch": "fix/infer-connect-0.2.2-rc.1",
+  "baseCommit": "3824bc3e10edaa776eb5d7088a412544e37b2a99",
+  "packageVersion": "0.2.2-rc.1",
+  "sourceStatus": "validated candidate at pre-commit checkpoint for PR #20",
+  "sourceSha256": {
+    "README.md": "b4e832a7da8ca5782d081b96e9d9b399df991a16974517155f266d11b5a2ac55",
+    "src/InferClient.ts": "7a4b6595d8a12faa09ec51b2da6b36077f9ec4cce531b2bb25a930e5a8ddcf78",
+    "src/aip62.ts": "f846b3a0093f1ed6af3bb51c603f0df19847d35c7a85aebccdab7957b85cf36e",
+    "src/index.ts": "1fc236ff9ba79c3d5fe211812a549bf60c62d4a178e268419911168e23fd998b",
+    "src/provider.ts": "f747a94a38cec137b477c1280a2941dd008d54797eb727ee5e6c773b432da180",
+    "src/recovery.ts": "10118c68f1a568f24a8471731e40f14e87793b5f153e2af0aa5a216a381654d9",
+    "src/types.ts": "183ba8bb594c308b4bad6c30998cf439a17487183e857d93305e2a2543247b77",
+    "src/nativeRecovery.ts": "8d93fd824e8bb99cb555e9a3cdb5ef9143c88273aaac28c2d0acdf830559e774",
+    "tests/nativeRecoveryFeatures.test.ts": "e9b7b3dc6329aa2522628f3be04406ea2d0fbd05988446e6bc73c0e6b7a0418b",
+    "tests/nativeRegisteredWallet.conformance.test.ts": "99adaf2e7e36592c2b4d4d527cca569f8b1eb0351fda440ea12864448c3b6563",
+    "docs/NATIVE_TRANSACTION_RECOVERY_HANDOFF.md": "2d371b6e2d666c2857dfee6a73620a06203b48d0034ae558ea796bd5fb568acb"
+  },
+  "walletReference": {
+    "mode": "read-only source",
+    "branch": "fix/native-transaction-recovery",
+    "filesSha256": {
+      "docs/NATIVE_TRANSACTION_RECOVERY_CONTRACT.md": "4f1ef49b9cd728f56f1b7f49cc41a092c8e520a85d9a39310d0c6695f8feb85c",
+      "src/services/dapp-connection/provider-template.ts": "fdf5e9cb1ac716a967c8c6304feaa6bac5e2a93823734177e8961dadbd31557b",
+      "src/services/dapp-connection/provider-codec.generated.ts": "e06deea70865cf13784a729bf80a549c0685ee470ae598bc6ecfcb437764bd2d"
+    },
+    "checkpoint": "Implementation-time read-only source snapshot; provider template and codec revalidated before this commit",
+    "fixtureRevalidation": {
+      "mode": "read-only provider-template and generated-codec source",
+      "matchesImplementationHashes": true,
+      "filesSha256": {
+        "src/services/dapp-connection/provider-template.ts": "fdf5e9cb1ac716a967c8c6304feaa6bac5e2a93823734177e8961dadbd31557b",
+        "src/services/dapp-connection/provider-codec.generated.ts": "e06deea70865cf13784a729bf80a549c0685ee470ae598bc6ecfcb437764bd2d"
+      }
+    }
+  },
+  "tests": {
+    "passed": 524,
+    "failed": 0,
+    "skipped": 6,
+    "files": 40,
+    "nativeFeatureCases": 31,
+    "actualRegisteredWalletCases": 17,
+    "report": "/tmp/infer-adapter-pr20-native-tests-20261014.json",
+    "liveBridgeCases": "6 intentionally skipped"
+  },
+  "gates": {
+    "typecheck": "passed (tsc --noEmit)",
+    "build": "passed (ESM, CommonJS, declarations)",
+    "builtExports": "passed packed root and /aip62 ESM/CommonJS native factory and declarations; internal binding helpers absent",
+    "packageInspection": "passed 22 packaged entries; no tests/source secrets bundled",
+    "lint": "not configured in repository",
+    "diffCheck": "passed",
+    "packedConsumer": "passed offline SDK 2.2.9 runtime, strict Bundler and NodeNext CommonJS, and native NodeNext ESM with skipLibCheck",
+    "strictNodeNextEsm": "two pre-existing SDK EventEmitter declaration errors reproduced by SDK-only import"
+  },
+  "candidateArtifact": {
+    "path": "/tmp/infer-adapter-pr20-native-20261014-9k8jktbn/inferenco-infer-wallet-adapter-0.2.2-rc.1.tgz",
+    "sha1": "66d26bcdbab26f78d2cb80e98e39328bd8bd20aa",
+    "sha256": "97608e53542e052d55fd58c5188f85544761eb015092b4224d983a9aceae834f",
+    "published": false
+  },
+  "boundaries": {
+    "committed": false,
+    "pushed": false,
+    "walletEdited": false,
+    "ecosystemEdited": false,
+    "deviceAcceptance": "not performed",
+    "liveChain": "not performed",
+    "ecosystemAdoption": "not performed",
+    "checkpoint": "Local validation before this native-recovery commit and push to PR #20"
+  },
+  "requirements": [
+    {
+      "requirement": "Exact selected registered native route with compatible capabilities",
+      "evidence": "nativeRecovery.ts factory and real provider-template conformance"
+    },
+    {
+      "requirement": "Await durable app preparation before raw native dispatch",
+      "evidence": "exact commitment/order, failed callback and failed invocation persistence regressions"
+    },
+    {
+      "requirement": "Fence selection/scope/event generation across async work",
+      "evidence": "selection/network/account, delayed network mixed snapshot, account roundtrip and late subscription regressions"
+    },
+    {
+      "requirement": "Read/ack exact invocation without renewed execution",
+      "evidence": "actual lost response/recreated registered consumer; explicit/lost-ack regressions; no relaunch exposed"
+    },
+    {
+      "requirement": "Preserve known transactionHash without inferring successful execution",
+      "evidence": "pending/unknown raw wallet fields; uncertain native error; confirmed and aborted evidence tests"
+    },
+    {
+      "requirement": "Strict malformed/conflicting evidence rejection",
+      "evidence": "scope/hash conflict, invalid enum arrays, invalid chainVersion and conflicting invocation ID regressions"
+    },
+    {
+      "requirement": "Coalesce exact reads and independently fence consumers",
+      "evidence": "concurrent exact native read and post-read scope guards"
+    },
+    {
+      "requirement": "Current native grant validation for cached results",
+      "evidence": "cached terminal read calls raw wallet lookup; revoked lookup remains unknown"
+    },
+    {
+      "requirement": "Retention and storage failure safety",
+      "evidence": "uncertain final writes, idempotent ack and original not-invoked proof tests"
+    },
+    {
+      "requirement": "Existing external compatibility",
+      "evidence": "full existing external/mobile/Desk/recovery suite passed"
+    },
+    {
+      "requirement": "Public build and handoff",
+      "evidence": "built root/subpath exports, tar inspection, README and NATIVE_TRANSACTION_RECOVERY_HANDOFF.md"
+    },
+    {
+      "requirement": "Fence wallet event generations immediately before subscriber delivery",
+      "evidence": "new final-scope-read microtask regression failed before the guard and passed after it"
+    }
+  ]
+}

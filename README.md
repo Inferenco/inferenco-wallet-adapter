@@ -474,3 +474,25 @@ npm run typecheck
 ## License
 
 [Apache-2.0](LICENSE)
+
+### Registered native wallet recovery
+
+For the selected native wallet, use
+`createInferNativeRecoveryFeatures(selectedWallet, { isCurrent })` from
+`@inferenco/infer-wallet-adapter/aip62`. It wraps the wallet's agreed raw
+invocation methods while preserving the existing submission/recovery feature
+shapes. Supply a live selection and wallet-session fence, check `canSubmit()`
+before starting a protected action, and dispose the wrapper when that context
+changes. Compatible lookup remains available when the native runtime cannot
+guarantee a new durable submission.
+
+The preparation hook must persist the application binding before dispatch.
+Read recovery evidence first, persist it in the application's protected journal,
+then acknowledge terminal evidence explicitly. A known hash or accepted receipt
+does not establish successful chain execution. Unknown, missing and pending
+outcomes never authorize a new submission.
+
+See [the native recovery handoff](docs/NATIVE_TRANSACTION_RECOVERY_HANDOFF.md)
+for the exact interface, source alignment, consumer ordering and local validation
+limits. This work remains a release candidate; native wallet and ecosystem
+adoption require separate acceptance.

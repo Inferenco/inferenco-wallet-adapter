@@ -342,3 +342,5 @@ export function registerInferWallet(options: InferWalletOptions = {}): void {
   registerWallet(createInferAIP62Wallet(options));
   registered = true;
 }
+
+export { createInferNativeRecoveryFeatures, type InferNativeRecoveryFeatures } from "./nativeRecovery";

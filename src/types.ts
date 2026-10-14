@@ -173,6 +173,8 @@ export interface InferIntegrationCapabilities {
   messageProfile?: "cedra:message:v1";
   completeResults?: boolean;
   durableInvocationLookup?: boolean;
+  /** True only with wallet persistence acknowledged before native broadcast. */
+  durableInvocationSubmission?: boolean;
 }
 export interface InferExternalSession {
   integrationContractVersion?: 1;

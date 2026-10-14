@@ -1,5 +1,38 @@
 import { DEFAULT_DETECT_ALIASES } from "./constants";
 import type { InferProvider, InferWalletOptions, InferWindow } from "./types";
+import type { IntegrationScope } from "./integrationContract";
+
+/** Internal binding: a selected native wallet never enters ambient discovery. */
+export interface NativeProviderBinding {
+  provider: InferProvider;
+  identity: object;
+  assertCurrent(): void;
+  capture(): () => void;
+  assertScope(scope: IntegrationScope): Promise<void>;
+}
+const nativeBindings = new WeakMap<InferWalletOptions, NativeProviderBinding>();
+const nativeIds = new WeakMap<object, number>();
+let nextNativeId = 0;
+export function bindNativeProvider(options: InferWalletOptions, binding: NativeProviderBinding): InferWalletOptions {
+  const bound = { ...options };
+  nativeBindings.set(bound, binding);
+  return bound;
+}
+export function inheritNativeProvider(from: InferWalletOptions, to: InferWalletOptions): InferWalletOptions {
+  const binding = nativeBindings.get(from);
+  if (binding) nativeBindings.set(to, binding);
+  return to;
+}
+export function nativeProviderBinding(options: InferWalletOptions): NativeProviderBinding | undefined {
+  return nativeBindings.get(options);
+}
+export function nativeRecoveryKey(options: InferWalletOptions): string {
+  const binding = nativeBindings.get(options);
+  if (!binding) return 'ambient';
+  let id = nativeIds.get(binding.identity);
+  if (!id) { id = ++nextNativeId; nativeIds.set(binding.identity, id); }
+  return 'selected:' + id;
+}
 
 export function isBrowser(): boolean {
   return typeof window !== "undefined";
@@ -19,6 +52,8 @@ function isBrandedInferProvider(provider: InferProvider | undefined): provider i
 }
 
 export function detectProvider(options: InferWalletOptions = {}): InferProvider | undefined {
+  const native = nativeBindings.get(options);
+  if (native) { native.assertCurrent(); return native.provider; }
   if (!isBrowser()) return undefined;
 
   const win = window as InferWindow;
