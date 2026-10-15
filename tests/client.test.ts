@@ -133,8 +133,13 @@ describe("InferClient", () => {
     const signer = Account.generate();
     const nonce = "nonce";
     const message = "hello";
-    const fullMessage = ["CEDRA", "", signer.accountAddress.toString(), nonce, "", message].join("\n");
-    const signature = "0xdeadbeef";
+    const fullMessage = ["CEDRA",
+      `message: ${message}`,
+      `nonce: ${nonce}`
+    ].join("\n");
+    const signature = signer
+      .sign("0x" + Buffer.from(fullMessage, "utf8").toString("hex"))
+      .toString();
     (window as any).inferenco = {
       isNovaWallet: true,
       connect: async () => ({
@@ -147,7 +152,9 @@ describe("InferClient", () => {
       }),
       network: async () => "devnet",
       signMessage: async () => ({
-        address: signer.accountAddress.toString(),
+        signerAddress: signer.accountAddress.toString(),
+        profile: "cedra:message:v1",
+        publicKey: signer.publicKey.toString(),
         fullMessage,
         message,
         nonce,
@@ -158,20 +165,12 @@ describe("InferClient", () => {
 
     const client = new InferClient();
     await client.connect();
-    const verifySignature = vi
-      .spyOn(client.account!.publicKey as any, "verifySignature")
-      .mockReturnValue(true);
-    const verifySignatureAsync = vi
-      .spyOn(client.account!.publicKey as any, "verifySignatureAsync")
-      .mockResolvedValue(true);
     await expect(
       client.signMessageAndVerify({
         message,
         nonce
       })
     ).resolves.toBe(true);
-    verifySignature.mockRestore();
-    verifySignatureAsync.mockRestore();
   });
 
   it("serializes prebuilt multi-agent transactions for external signing", async () => {
@@ -203,10 +202,12 @@ describe("InferClient", () => {
       bridgeUrl: "https://bridge.example"
     };
     vi.spyOn(bridge, "readValidatedExternalSession").mockResolvedValue(session);
-    const signSpy = vi.spyOn(bridge, "tryLocalBridgeSignTransaction").mockResolvedValue({
-      authenticator,
-      rawTransaction: transaction
-    });
+    const signSpy = vi
+      .spyOn(bridge, "tryLocalBridgeSignTransaction")
+      .mockResolvedValue({
+        authenticator,
+        rawTransaction: transaction
+      });
 
     const client = new InferClient();
     await expect(client.signTransaction(transaction)).resolves.toMatchObject({
@@ -283,9 +284,11 @@ describe("InferClient", () => {
       new ChainId(3),
       parseTypeTag("0x1::cedra_coin::CedraCoin")
     );
-    const transaction = new MultiAgentTransaction(rawTransaction, [
-      secondarySigner.accountAddress
-    ], feePayer.accountAddress);
+    const transaction = new MultiAgentTransaction(
+      rawTransaction,
+      [secondarySigner.accountAddress],
+      feePayer.accountAddress
+    );
     const authenticator = sender.signTransactionWithAuthenticator(transaction);
     const input: CedraSignTransactionInputV1_1 = {
       sender: { address: sender.accountAddress },
@@ -312,10 +315,12 @@ describe("InferClient", () => {
       bridgeUrl: "https://bridge.example"
     };
     vi.spyOn(bridge, "readValidatedExternalSession").mockResolvedValue(session);
-    const signSpy = vi.spyOn(bridge, "tryLocalBridgeSignTransaction").mockResolvedValue({
-      authenticator,
-      rawTransaction: transaction
-    });
+    const signSpy = vi
+      .spyOn(bridge, "tryLocalBridgeSignTransaction")
+      .mockResolvedValue({
+        authenticator,
+        rawTransaction: transaction
+      });
 
     const client = new InferClient();
     await expect(client.signTransaction(input)).resolves.toMatchObject({
@@ -375,7 +380,9 @@ describe("InferClient", () => {
     expect(launchSpy).toHaveBeenCalledTimes(1);
     expect(bridgeConnectSpy).toHaveBeenCalledTimes(3);
     expect(readValidatedSessionSpy).toHaveBeenCalled();
-    expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
+    expect(result.account.address.toString()).toBe(
+      signer.accountAddress.toString()
+    );
     expect(client.cachedNetwork?.name).toBe("testnet");
   });
 
@@ -385,21 +392,25 @@ describe("InferClient", () => {
     // TypeError — this test is about the retry window timing, so
     // we bypass preauth to focus on tryLocalBridgeConnect + deeplink.
     vi.spyOn(bridge, "startPreauthConnect").mockResolvedValue(null);
-    const bridgeConnectSpy = vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
-    const launchSpy = vi.spyOn(bridge, "launchDesktopOrMobileConnect").mockReturnValue(
-      "inferenco://login?redirect=https%3A%2F%2Fexample.com"
-    );
+    const bridgeConnectSpy = vi
+      .spyOn(bridge, "tryLocalBridgeConnect")
+      .mockResolvedValue(null);
+    const launchSpy = vi
+      .spyOn(bridge, "launchDesktopOrMobileConnect")
+      .mockReturnValue("inferenco://login?redirect=https%3A%2F%2Fexample.com");
     const signer = Account.generate();
-    const waitForExternalSessionSpy = vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue({
-      transport: "desktop-bridge",
-      address: signer.accountAddress.toString(),
-      publicKey: signer.publicKey.toString(),
-      network: "testnet",
-      chainId: 2,
-      sessionId: "session-456",
-      bridgeUrl: "http://127.0.0.1:21984/session/session-456",
-      walletName: "Nova Desk"
-    });
+    const waitForExternalSessionSpy = vi
+      .spyOn(bridge, "waitForExternalSession")
+      .mockResolvedValue({
+        transport: "desktop-bridge",
+        address: signer.accountAddress.toString(),
+        publicKey: signer.publicKey.toString(),
+        network: "testnet",
+        chainId: 2,
+        sessionId: "session-456",
+        bridgeUrl: "http://127.0.0.1:21984/session/session-456",
+        walletName: "Nova Desk"
+      });
 
     const client = new InferClient();
     const connectPromise = client.connect();
@@ -409,7 +420,9 @@ describe("InferClient", () => {
     expect(launchSpy).toHaveBeenCalledTimes(1);
     expect(bridgeConnectSpy.mock.calls.length).toBeGreaterThan(2);
     expect(waitForExternalSessionSpy).toHaveBeenCalledTimes(1);
-    expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
+    expect(result.account.address.toString()).toBe(
+      signer.accountAddress.toString()
+    );
     expect(client.cachedNetwork?.name).toBe("testnet");
   });
 
@@ -419,11 +432,15 @@ describe("InferClient", () => {
     // TypeError — bypass preauth to focus on the retry-exhaustion
     // / deeplink-handoff timeout path.
     vi.spyOn(bridge, "startPreauthConnect").mockResolvedValue(null);
-    const bridgeConnectSpy = vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
+    const bridgeConnectSpy = vi
+      .spyOn(bridge, "tryLocalBridgeConnect")
+      .mockResolvedValue(null);
     vi.spyOn(bridge, "launchDesktopOrMobileConnect").mockReturnValue(
       "inferenco://login?redirect=https%3A%2F%2Fexample.com"
     );
-    const waitForExternalSessionSpy = vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue(null);
+    const waitForExternalSessionSpy = vi
+      .spyOn(bridge, "waitForExternalSession")
+      .mockResolvedValue(null);
 
     const client = new InferClient();
     const connectPromise = client.connect();
@@ -444,15 +461,21 @@ describe("InferClient", () => {
     vi.spyOn(bridge, "startPreauthConnect").mockResolvedValue(null);
     vi.spyOn(bridge, "tryLocalBridgeConnect")
       .mockResolvedValueOnce(null)
-      .mockRejectedValueOnce(new Error("Nova Desk rejected the browser bridge request"));
-    const launchSpy = vi.spyOn(bridge, "launchDesktopOrMobileConnect").mockReturnValue(
-      "inferenco://login?redirect=https%3A%2F%2Fexample.com"
-    );
-    const waitForExternalSessionSpy = vi.spyOn(bridge, "waitForExternalSession").mockResolvedValue(null);
+      .mockRejectedValueOnce(
+        new Error("Nova Desk rejected the browser bridge request")
+      );
+    const launchSpy = vi
+      .spyOn(bridge, "launchDesktopOrMobileConnect")
+      .mockReturnValue("inferenco://login?redirect=https%3A%2F%2Fexample.com");
+    const waitForExternalSessionSpy = vi
+      .spyOn(bridge, "waitForExternalSession")
+      .mockResolvedValue(null);
 
     const client = new InferClient();
 
-    await expect(client.connect()).rejects.toThrow("Nova Desk rejected the browser bridge request");
+    await expect(client.connect()).rejects.toThrow(
+      "Nova Desk rejected the browser bridge request"
+    );
     expect(launchSpy).toHaveBeenCalledTimes(1);
     expect(waitForExternalSessionSpy).not.toHaveBeenCalled();
   });
@@ -461,32 +484,39 @@ describe("InferClient", () => {
     vi.spyOn(bridge, "isMobileBrowser").mockReturnValue(true);
     vi.spyOn(bridge, "tryLocalBridgeConnect").mockResolvedValue(null);
     const signer = Account.generate();
-    const relaySpy = vi.spyOn(mobileRelay, "connectViaMobileRelay").mockResolvedValue({
-      transport: "mobile-relay",
-      address: signer.accountAddress.toString(),
-      publicKey: signer.publicKey.toString(),
-      network: "testnet",
-      chainId: 2,
-      sessionId: "relay-session",
-      relayBaseUrl: "https://relay.example",
-      dappSessionToken: "dapp-token",
-      sharedSecret: "shared-secret",
-      walletPublicKey: "wallet-public-key",
-      walletName: "Infer Wallet"
-    });
+    const relaySpy = vi
+      .spyOn(mobileRelay, "connectViaMobileRelay")
+      .mockResolvedValue({
+        transport: "mobile-relay",
+        address: signer.accountAddress.toString(),
+        publicKey: signer.publicKey.toString(),
+        network: "testnet",
+        chainId: 2,
+        sessionId: "relay-session",
+        relayBaseUrl: "https://relay.example",
+        dappSessionToken: "dapp-token",
+        sharedSecret: "shared-secret",
+        walletPublicKey: "wallet-public-key",
+        walletName: "Infer Wallet"
+      });
 
     const client = new InferClient({ relayBaseUrl: "https://relay.example" });
     const result = await client.connect();
 
     expect(relaySpy).toHaveBeenCalledTimes(1);
-    expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
+    expect(result.account.address.toString()).toBe(
+      signer.accountAddress.toString()
+    );
     expect(client.cachedNetwork?.name).toBe("testnet");
   });
 
   it("resumes a pending mobile relay pairing after callback", async () => {
     const dappKeyPair = createKeyPair();
     const walletKeyPair = createKeyPair();
-    const sharedSecret = deriveSharedSecret(dappKeyPair.privateKey, walletKeyPair.publicKey);
+    const sharedSecret = deriveSharedSecret(
+      dappKeyPair.privateKey,
+      walletKeyPair.publicKey
+    );
     const signer = Account.generate();
     bridge.storePendingMobilePairing({
       pairingId: "pairing-123",
@@ -540,10 +570,18 @@ describe("InferClient", () => {
     const result = await client.connect();
 
     expect(connectSpy).not.toHaveBeenCalled();
-    expect(result.account.address.toString()).toBe(signer.accountAddress.toString());
-    expect(window.localStorage.getItem(INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY)).toBeNull();
-    expect(window.sessionStorage.getItem(INFER_CALLBACK_MARKER_STORAGE_KEY)).toBeNull();
-    expect(window.localStorage.getItem(INFER_EXTERNAL_SESSION_STORAGE_KEY)).toContain("\"transport\":\"mobile-relay\"");
+    expect(result.account.address.toString()).toBe(
+      signer.accountAddress.toString()
+    );
+    expect(
+      window.localStorage.getItem(INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY)
+    ).toBeNull();
+    expect(
+      window.sessionStorage.getItem(INFER_CALLBACK_MARKER_STORAGE_KEY)
+    ).toBeNull();
+    expect(
+      window.localStorage.getItem(INFER_EXTERNAL_SESSION_STORAGE_KEY)
+    ).toContain('"transport":"mobile-relay"');
   });
 
   it("revokes the Nova Desk bridge session before clearing the external session", async () => {
@@ -584,7 +622,9 @@ describe("InferClient", () => {
       })
     );
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(window.localStorage.getItem(INFER_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
+    expect(
+      window.localStorage.getItem(INFER_EXTERNAL_SESSION_STORAGE_KEY)
+    ).toBeNull();
   });
 
   it("falls back to session revoke when the connection endpoint is unavailable", async () => {
@@ -613,19 +653,23 @@ describe("InferClient", () => {
             status: "revoked",
             sessionId: "session-fallback"
           }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" }
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
           }
-        )
-      );
+        }
+      )
+    );
 
     const client = new InferClient();
 
     await client.disconnect();
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(window.localStorage.getItem(INFER_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
+    expect(
+      window.localStorage.getItem(INFER_EXTERNAL_SESSION_STORAGE_KEY)
+    ).toBeNull();
   });
 
   it("clears the cached external session when Nova Desk disconnect revocation fails", async () => {
@@ -654,7 +698,9 @@ describe("InferClient", () => {
     await expect(client.disconnect()).rejects.toMatchObject({
       code: InferErrorCode.InternalError
     });
-    expect(window.localStorage.getItem(INFER_EXTERNAL_SESSION_STORAGE_KEY)).toBeNull();
+    expect(
+      window.localStorage.getItem(INFER_EXTERNAL_SESSION_STORAGE_KEY)
+    ).toBeNull();
   });
 
   it("0.2.0-rc.7: connect resolves from callback URL without re-firing the deeplink", async () => {
@@ -667,10 +713,8 @@ describe("InferClient", () => {
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const callbackBridgeUrl = `http://127.0.0.1:21984/${tokenHex}`;
     // Use a valid 64-hex-char address (matches AccountAddress requirements).
-    const validAddress =
-      "0x" + "a".repeat(64);
-    const validPublicKey =
-      "0x" + "d".repeat(64);
+    const validAddress = "0x" + "a".repeat(64);
+    const validPublicKey = "0x" + "d".repeat(64);
     Object.defineProperty(window, "location", {
       configurable: true,
       writable: true,
@@ -777,22 +821,28 @@ describe("InferClient", () => {
     // Ensure /<token>/connection responds OK so disconnect() doesn't throw.
     // Each fetch must return a fresh Response object so its body can be
     // read exactly once.
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) =>
-      new Response(JSON.stringify(init?.method === "DELETE"
-        ? { status: "revoked" }
-        : {
-            transport: "desktop-bridge",
-            address: signer.accountAddress.toString(),
-            publicKey: signer.publicKey.toString(),
-            network: "testnet",
-            chainId: 2,
-            sessionId: "session-self-disconnect",
-            bridgeUrl: "http://127.0.0.1:21984",
-            walletName: "Nova Desk"
-          }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      })
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_input, init) =>
+        new Response(
+          JSON.stringify(
+            init?.method === "DELETE"
+              ? { status: "revoked" }
+              : {
+                  transport: "desktop-bridge",
+                  address: signer.accountAddress.toString(),
+                  publicKey: signer.publicKey.toString(),
+                  network: "testnet",
+                  chainId: 2,
+                  sessionId: "session-self-disconnect",
+                  bridgeUrl: "http://127.0.0.1:21984",
+                  walletName: "Nova Desk"
+                }
+          ),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          }
+        )
     );
 
     const client = new InferClient();
@@ -872,19 +922,20 @@ describe("InferClient", () => {
 
     // Mock fetch: connect-path uses it once for session validation; a
     // heartbeat would call it again within the wait window.
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      new Response(
-        JSON.stringify({
-          address: signer.accountAddress.toString(),
-          publicKey: signer.publicKey.toString(),
-          network: "testnet",
-          chainId: 2,
-          sessionId: "session-no-heartbeat",
-          bridgeUrl: "http://127.0.0.1:21984",
-          walletName: "Nova Desk"
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            address: signer.accountAddress.toString(),
+            publicKey: signer.publicKey.toString(),
+            network: "testnet",
+            chainId: 2,
+            sessionId: "session-no-heartbeat",
+            bridgeUrl: "http://127.0.0.1:21984",
+            walletName: "Nova Desk"
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
     );
 
     const client = new InferClient(); // no opt-in

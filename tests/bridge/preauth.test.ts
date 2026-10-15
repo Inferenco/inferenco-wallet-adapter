@@ -135,6 +135,52 @@ describe("bridge pre-auth flow (no-new-tab)", () => {
     expect(result?.status).toBe("approved");
     expect(result?.session?.address).toBe("0xabc");
     expect(result?.session?.sessionId).toBe("s1");
+    expect(result?.session?.integrationContractVersion).toBeUndefined();
+    expect(result?.session?.capabilities).toBeUndefined();
+  });
+
+  it.each([true, false])("preserves advertised v1 capability values from preauth (durable=%s)", async (durableInvocationLookup) => {
+    const capabilities = { transactionRestrictions: true, messageProfile: "cedra:message:v1",
+      completeResults: true, durableInvocationLookup };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200, text: async () => "",
+      json: async () => ({ status: "approved", requestId: "preauth-v1",
+        address: "0xabc", publicKey: "0xdef", network: "testnet", chainId: 2,
+        sessionId: "preauth-v1-session", bridgeUrl: "http://127.0.0.1:21984/" + "ab".repeat(32),
+        walletName: "Infer Desk", integrationContractVersion: 1, capabilities })
+    }));
+    const result = await pollPreauthConnect({ requestId: "preauth-v1" });
+    expect(result?.status).toBe("approved");
+    expect(result?.session?.integrationContractVersion).toBe(1);
+    expect(result?.session?.capabilities).toEqual(capabilities);
+    bridge.storeExternalSession(result!.session!);
+    expect(bridge.readExternalSession()?.capabilities).toEqual(capabilities);
+    bridge.clearExternalSession();
+  });
+
+  it("does not promote unversioned preauth capabilities to v1", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200, text: async () => "",
+      json: async () => ({ status: "approved", requestId: "preauth-legacy",
+        address: "0xabc", publicKey: "0xdef", network: "testnet", chainId: 2,
+        sessionId: "preauth-legacy-session", bridgeUrl: "http://127.0.0.1:21984",
+        walletName: "Infer Desk", capabilities: { durableInvocationLookup: true } })
+    }));
+    const result = await pollPreauthConnect({ requestId: "preauth-legacy" });
+    expect(result?.status).toBe("approved");
+    expect(result?.session?.integrationContractVersion).toBeUndefined();
+    expect(result?.session?.capabilities).toBeUndefined();
+  });
+
+  it("rejects an unknown preauth contract version instead of downgrading it", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200, text: async () => "",
+      json: async () => ({ status: "approved", requestId: "preauth-unknown",
+        address: "0xabc", publicKey: "0xdef", network: "testnet", chainId: 2,
+        sessionId: "preauth-unknown-session", bridgeUrl: "http://127.0.0.1:21984",
+        walletName: "Infer Desk", integrationContractVersion: 2 })
+    }));
+    expect(await pollPreauthConnect({ requestId: "preauth-unknown" })).toBeNull();
   });
 
   it("pollPreauthConnect returns rejected status on user reject", async () => {

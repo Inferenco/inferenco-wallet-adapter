@@ -5,6 +5,24 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2-rc.1] - Unreleased
+
+### Changed
+
+- Prepare the integration repair candidate as `0.2.2-rc.1`, retaining the released `0.2.1` first-time preauth retry behavior. See [verification and release handoff](docs/verification/adapter-0.2.2-rc.1.md) for completed checks and remaining qualification scope.
+
+### Fixed
+
+- Preserve original invocation scope and uncertain transaction identities during recovery; validate complete results before replay and retain remote acknowledgement obligations across peer loss.
+- Recheck live injected account/network scope before dispatch and prune only eligible linked terminal evidence.
+
+### Packaging and compatibility
+
+- Raise the Cedra TypeScript SDK dependency baseline to ^2.2.9.
+- Preserve versioned integration capabilities through desktop preauth session normalization.
+- Route ESM and CommonJS consumers to their matching declarations and use named EventEmitter imports in adapter declarations.
+- Document the pre-existing strict NodeNext ESM declaration errors in Cedra SDK 2.2.8/2.2.9, also reproduced with published adapter 0.2.1; ordinary runtime and Bundler checks pass.
+
 ## [0.2.1] - 2026-10-10
 
 ### Changed

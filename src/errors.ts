@@ -100,7 +100,7 @@ export function remapInferError(error: unknown): never {
   const status = extractStatus(error);
   const message = errorMessage(error);
 
-  if (status === "Rejected" || status === 401 || /reject/i.test(message)) {
+  if (status === "Rejected") {
     throw new InferAdapterError(InferErrorCode.UserRejected, message, error);
   }
   if (status === "Unsupported" || status === 4200 || /unsupported/i.test(message)) {

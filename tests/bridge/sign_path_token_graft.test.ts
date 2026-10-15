@@ -32,30 +32,32 @@ function fixtureSession(bridgeUrl: string | undefined): InferExternalSession {
  */
 function captureMock() {
   const urls: string[] = [];
-  const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    urls.push(url);
-    const method = (init?.method ?? "GET").toUpperCase();
-    if (method === "POST") {
-      return new Response(JSON.stringify({ requestId: "req-rc23-capture" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
+  const fetchSpy = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      urls.push(url);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "POST") {
+        return new Response(JSON.stringify({ requestId: "req-rc23-capture" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      if (method === "GET") {
+        // Reject the poll — clean signal that we don't care about the
+        // sign payload; we only want the POST URL.
+        return new Response(
+          JSON.stringify({
+            status: "rejected",
+            requestId: "req-rc23-capture",
+            error: "user_cancelled"
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      throw new Error(`unexpected fetch method: ${method} ${url}`);
     }
-    if (method === "GET") {
-      // Reject the poll — clean signal that we don't care about the
-      // sign payload; we only want the POST URL.
-      return new Response(
-        JSON.stringify({
-          status: "rejected",
-          requestId: "req-rc23-capture",
-          error: "user_cancelled"
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
-    }
-    throw new Error(`unexpected fetch method: ${method} ${url}`);
-  });
+  );
   return { fetchSpy, urls };
 }
 
@@ -99,7 +101,9 @@ describe("sign-path token graft — 0.2.0-rc.23 (rc.22 regression closed)", () =
     ).rejects.toBeDefined(); // poll rejected; URL is what we care about
 
     const startUrl = urls.find((u) => u.endsWith("/sign-message"));
-    expect(startUrl).toBe(`${SAMPLE_BRIDGE_URL_HOST}/${SAMPLE_TOKEN}/sign-message`);
+    expect(startUrl).toBe(
+      `${SAMPLE_BRIDGE_URL_HOST}/${SAMPLE_TOKEN}/sign-message`
+    );
     // Token is grafted onto the dApp's trusted host, not the
     // attacker's host (ND-WEB-001 preserved).
     expect(startUrl).not.toContain("attacker.example");
@@ -118,7 +122,9 @@ describe("sign-path token graft — 0.2.0-rc.23 (rc.22 regression closed)", () =
     ).rejects.toBeDefined();
 
     const startUrl = urls.find((u) => u.endsWith("/sign-transaction"));
-    expect(startUrl).toBe(`${SAMPLE_BRIDGE_URL_HOST}/${SAMPLE_TOKEN}/sign-transaction`);
+    expect(startUrl).toBe(
+      `${SAMPLE_BRIDGE_URL_HOST}/${SAMPLE_TOKEN}/sign-transaction`
+    );
     expect(startUrl).not.toContain("attacker.example");
   });
 
@@ -128,14 +134,22 @@ describe("sign-path token graft — 0.2.0-rc.23 (rc.22 regression closed)", () =
 
     await expect(
       tryLocalBridgeSignAndSubmit(
-        {} as never,
+        {
+          payload: {
+            function: "0x1::fixture::run",
+            typeArguments: [],
+            functionArguments: []
+          }
+        } as never,
         fixtureSession(SAMPLE_BRIDGE_URL_WITH_TOKEN),
         { bridgeBaseUrl: SAMPLE_BRIDGE_URL_HOST }
       )
     ).rejects.toBeDefined();
 
     const startUrl = urls.find((u) => u.endsWith("/transaction"));
-    expect(startUrl).toBe(`${SAMPLE_BRIDGE_URL_HOST}/${SAMPLE_TOKEN}/transaction`);
+    expect(startUrl).toBe(
+      `${SAMPLE_BRIDGE_URL_HOST}/${SAMPLE_TOKEN}/transaction`
+    );
     expect(startUrl).not.toContain("attacker.example");
   });
 
@@ -185,7 +199,9 @@ describe("sign-path token graft — 0.2.0-rc.23 (rc.22 regression closed)", () =
     expect(startUrl.startsWith(`${SAMPLE_BRIDGE_URL_HOST}/`)).toBe(true);
     // The forged token segment is grafted onto the dApp host —
     // the wallet's F-03 token gate will 404 it, no data leaks.
-    expect(startUrl).toBe(`${SAMPLE_BRIDGE_URL_HOST}/${SAMPLE_TOKEN}/sign-message`);
+    expect(startUrl).toBe(
+      `${SAMPLE_BRIDGE_URL_HOST}/${SAMPLE_TOKEN}/sign-message`
+    );
   });
 
   it("falls_through_to_bare_host_when_session_has_no_token", async () => {

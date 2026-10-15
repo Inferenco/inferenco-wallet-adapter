@@ -1,6 +1,6 @@
 {
   "name": "@inferenco/infer-wallet-adapter",
-  "version": "0.2.1",
+  "version": "0.2.2-rc.2",
   "description": "Standalone Infer wallet adapter for Cedra dapps",
   "license": "Apache-2.0",
   "author": "TOO Spielcrypto and Singularity Shift Ltd",
@@ -33,19 +33,34 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./aip62": {
-      "types": "./dist/aip62.d.ts",
-      "import": "./dist/aip62.js",
-      "require": "./dist/aip62.cjs"
+      "import": {
+        "types": "./dist/aip62.d.ts",
+        "default": "./dist/aip62.js"
+      },
+      "require": {
+        "types": "./dist/aip62.d.cts",
+        "default": "./dist/aip62.cjs"
+      }
     },
     "./auto-register": {
-      "types": "./dist/auto-register.d.ts",
-      "import": "./dist/auto-register.js",
-      "require": "./dist/auto-register.cjs"
+      "import": {
+        "types": "./dist/auto-register.d.ts",
+        "default": "./dist/auto-register.js"
+      },
+      "require": {
+        "types": "./dist/auto-register.d.cts",
+        "default": "./dist/auto-register.cjs"
+      }
     }
   },
   "files": [
@@ -59,7 +74,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cedra-labs/ts-sdk": "^2.2.8",
+    "@cedra-labs/ts-sdk": "^2.2.9",
     "@cedra-labs/wallet-standard": "^0.5.1",
     "@noble/ciphers": "^2.1.1",
     "@noble/curves": "^2.0.1",

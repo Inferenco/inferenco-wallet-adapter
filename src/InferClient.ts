@@ -1,8 +1,27 @@
-import EventEmitter from "eventemitter3";
-import type {
-  AnyRawTransaction,
-  Network,
-} from "@cedra-labs/ts-sdk";
+import {
+  canonicalAddress,
+  encodeWireValue,
+  legacySubmitInput,
+  normalizeSubmitInput,
+  requestCommitment,
+  validateMessageInput,
+  MESSAGE_PROFILE,
+  type CanonicalTransactionInput
+} from "./integrationContract";
+import { notInvokedError } from "./nonDispatchEvidence";
+import {
+  prepareDurableInvocation,
+  listDurableInvocations,
+  getDurableInvocation,
+  saveDurableTransactionHash,
+  updateDurableInvocation,
+  updateInjectedInvocationEvidence,
+  serializeStoredFinal,
+  type DurableInvocation
+} from "./durableRecovery";
+import { invocationDescriptor } from "./recovery";
+import { EventEmitter } from "eventemitter3";
+import type { AnyRawTransaction, Network } from "@cedra-labs/ts-sdk";
 import type {
   AccountInfo,
   CedraSignAndSubmitTransactionInput,
@@ -10,6 +29,7 @@ import type {
   CedraSignMessageInput,
   CedraSignMessageOutput,
   CedraSignTransactionInputV1_1,
+  CedraSignTransactionOutputV1_1,
   NetworkInfo
 } from "@cedra-labs/wallet-standard";
 import {
@@ -44,10 +64,12 @@ import {
 } from "./bridge";
 import {
   createFullMessage,
+  assertSignedMessageBinding,
   deserializeSignTransactionResult,
   normalizeNetwork,
   normalizeProviderAccount,
   normalizeSignMessageOutput,
+  verifySignedMessageOutput,
   normalizeSignTransactionResult
 } from "./conversion";
 import { DEFAULT_SESSION_LIVENESS_INTERVAL_MS, INFER_SESSION_CLEARED_MESSAGE_TYPE } from "./constants";
@@ -80,12 +102,13 @@ import {
 } from "./recovery";
 import type {
   ArchivedRecoverableRequest,
+  RecoveryReadOptions,
   RecoveredRequestOutcome,
   RecoverableRequest,
   RecoverableInvocation,
   RecoveredInvocationOutcome
 } from "./recovery";
-import { detectProvider } from "./provider";
+import { detectProvider, inheritNativeProvider, nativeProviderBinding } from "./provider";
 import type {
   InferExternalAccountInput,
   InferExternalSignTransactionInput,
@@ -182,18 +205,7 @@ function normalizeExternalAccountInput(input: unknown): InferExternalAccountInpu
 }
 
 function toJsonCompatibleValue(value: unknown): unknown {
-  if (typeof value === "bigint") return value.toString();
-  if (value instanceof Uint8Array) return Array.from(value);
-  if (Array.isArray(value)) return value.map(toJsonCompatibleValue);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-        key,
-        toJsonCompatibleValue(item)
-      ])
-    );
-  }
-  return value;
+  return encodeWireValue(value);
 }
 
 function normalizeWalletStandardSignTransactionInput(
@@ -251,7 +263,8 @@ function normalizeSdkRawTransactionInput(
 }
 
 function toExternalSignTransactionInput(
-  transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
+  transaction:
+    | AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
   options?: unknown
 ): InferExternalSignTransactionInput {
   if (isWalletStandardSignTransactionInput(transaction)) {
@@ -307,7 +320,8 @@ function snapshotProviderRecord(
 
 function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {
   const keys = Reflect.ownKeys(value);
-  return keys.length === expected.length && expected.every((key) => keys.includes(key));
+  return (
+    keys.length === expected.length && expected.every((key) => keys.includes(key)));
 }
 
 function normalizeSignAndSubmitProviderResult(
@@ -484,6 +498,11 @@ async function pollPreauthUntilResolved(
 
 export class InferClient extends EventEmitter<InferClientEvents> {
   private provider?: InferProvider;
+  private injectedScopeRevision = 0;
+  private connectionRevision = 0;
+  private subscriptionRevision = 0;
+  private disconnectOperation: Promise<void> | null = null;
+  private connectionOperation: { promise: Promise<{ account: AccountInfo; network: NetworkInfo | null }>; cancel: () => void } | null = null;
   private accountInfo: AccountInfo | null = null;
   private networkInfo: NetworkInfo | null = null;
   /** v0.2.0-rc.8 (Phase 5 UX): opt-in session liveness handle. */
@@ -515,10 +534,12 @@ export class InferClient extends EventEmitter<InferClientEvents> {
 
   constructor(private readonly options: InferWalletOptions = {}) {
     super();
-    installExternalSessionResumeListeners();
-    storeCallbackSession();
+    if (!nativeProviderBinding(options)) {
+      installExternalSessionResumeListeners();
+      storeCallbackSession();
+    }
     this.provider = detectProvider(options);
-    const cached = readExternalSession();
+    const cached = nativeProviderBinding(options) ? null : readExternalSession();
     if (cached) {
       this.healthState = {
         state: "checking",
@@ -526,14 +547,16 @@ export class InferClient extends EventEmitter<InferClientEvents> {
           address: cached.address, network: cached.network, chainId: cached.chainId }
       };
     }
-    this.installDisconnectBridgeListeners();
-    this.maybeStartSessionLiveness();
+    if (!nativeProviderBinding(options)) {
+      this.installDisconnectBridgeListeners();
+      this.maybeStartSessionLiveness();
+    }
     if (options.onRecoveredOutcome) {
       this.recoveredSubscribers.set(options.onRecoveredOutcome, new Set());
     }
     if (typeof window !== "undefined") {
-      this.disposeMobileOwnerResponder = installMobileReturnOwnerResponder();
-      const mobileCallbackId = isMobileBrowser() ? readCallbackMarker()?.requestId : undefined;
+      if (!nativeProviderBinding(options)) this.disposeMobileOwnerResponder = installMobileReturnOwnerResponder();
+      const mobileCallbackId = !nativeProviderBinding(options) && isMobileBrowser() ? readCallbackMarker()?.requestId : undefined;
       if (mobileCallbackId) void this.coordinateMobileCallbackTab(mobileCallbackId);
       window.addEventListener("focus", this.recoveryWake);
       window.addEventListener("pageshow", this.recoveryWake);
@@ -573,16 +596,56 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   }
 
   /** Application-facing exact-ID recovery; no request creation or wallet launch. */
-  listRecoverableRequests(): Promise<RecoverableRequest[]> {
-    return listRecoverableRequests(this.options);
+  async listRecoverableRequests(): Promise<RecoverableRequest[]> {
+    if (!nativeProviderBinding(this.options)) return listRecoverableRequests(this.options);
+    const rows = await this.boundNativeInvocations();
+    return rows.filter(row => row.state !== "not-invoked" &&
+      (!row.deliveryState || row.deliveryState === "active")).map(row => ({
+        ...invocationDescriptor(row), recoveryId: "invocation:" + row.id, requestId: row.id
+      }));
   }
 
-  listRecoverableInvocations(): Promise<RecoverableInvocation[]> {
-    return listRecoverableInvocations();
+  async listRecoverableInvocations(): Promise<RecoverableInvocation[]> {
+    if (!nativeProviderBinding(this.options)) return listRecoverableInvocations();
+    return (await this.boundNativeInvocations()).map(invocationDescriptor);
   }
 
-  reconcileRecoverableInvocation(invocationId: string): Promise<RecoveredInvocationOutcome> {
-    return reconcileRecoverableInvocation(invocationId, this.options);
+  private async boundNativeInvocations(): Promise<DurableInvocation[]> {
+    const binding = nativeProviderBinding(this.options)!;
+    binding.assertCurrent();
+    const rows = await listDurableInvocations();
+    binding.assertCurrent();
+    const matching: DurableInvocation[] = [];
+    for (const row of rows) {
+      if (row.transport !== "injected" || row.method !== "signAndSubmitTransaction") continue;
+      try {
+        await binding.assertScope({origin:row.origin,accountAddress:canonicalAddress(row.address),
+          network:row.network,chainId:row.chainId});
+        matching.push(row);
+      } catch { binding.assertCurrent(); }
+    }
+    return matching;
+  }
+
+  private async assertBoundNativeHandle(id: string, invocationId = false): Promise<void> {
+    const binding = nativeProviderBinding(this.options);
+    if (!binding) return;
+    binding.assertCurrent();
+    if (!invocationId && !id.startsWith("invocation:"))
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "native-recovery-handle-mismatch");
+    const row = await getDurableInvocation(invocationId ? id : id.slice(11));
+    binding.assertCurrent();
+    if (!row || row.transport !== "injected" || row.method !== "signAndSubmitTransaction")
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "native-recovery-handle-mismatch");
+    await binding.assertScope({origin:row.origin,accountAddress:canonicalAddress(row.address),
+      network:row.network,chainId:row.chainId});
+  }
+
+  async reconcileRecoverableInvocation(invocationId: string): Promise<RecoveredInvocationOutcome> {
+    await this.assertBoundNativeHandle(invocationId, true);
+    const result = await reconcileRecoverableInvocation(invocationId, this.options);
+    await this.assertBoundNativeHandle(invocationId, true);
+    return result;
   }
 
   relaunchRecoverableInvocation(invocationId: string): Promise<void> {
@@ -593,12 +656,17 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     return listArchivedRecoverableRequests(this.options);
   }
 
-  readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
-    return readRecoverableRequest(requestId, this.options);
+  async readRecoverableRequest(requestId: string, readOptions: RecoveryReadOptions = {}): Promise<RecoveredRequestOutcome> {
+    await this.assertBoundNativeHandle(requestId);
+    const result = await readRecoverableRequest(requestId, this.options, readOptions);
+    await this.assertBoundNativeHandle(requestId);
+    return result;
   }
 
-  acknowledgeRecoverableRequest(requestId: string): Promise<void> {
-    return acknowledgeRecoverableRequest(requestId, this.options);
+  async acknowledgeRecoverableRequest(requestId: string): Promise<void> {
+    await this.assertBoundNativeHandle(requestId);
+    await acknowledgeRecoverableRequest(requestId, this.options);
+    await this.assertBoundNativeHandle(requestId);
   }
 
   archiveRecoverableRequest(requestId: string, reconciliationReference: string): Promise<void> {
@@ -618,6 +686,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.invalidateConnection();
+    this.accountInfo = null;
+    this.networkInfo = null;
     if (this.livenessHandle !== null) clearInterval(this.livenessHandle);
     this.livenessHandle = null;
     if (typeof window !== "undefined") {
@@ -656,7 +727,8 @@ export class InferClient extends EventEmitter<InferClientEvents> {
         const outcome = await this.readRecoverableRequest(requestId);
         final = outcome.status === "approved" || outcome.status === "rejected";
       }
-      if (final && !this.disposed && await hasLiveOriginalMobileTab(requestId)) {
+      if (final && !this.disposed &&
+        (await hasLiveOriginalMobileTab(requestId))) {
         // The original tab still owns the request. It wakes from the durable
         // record change; this callback tab never takes over gameplay.
         renderCallbackCompletionFallback();
@@ -687,7 +759,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
       const invocations = await this.listRecoverableInvocations();
       for (const invocation of invocations) {
         if (this.disposed) return;
-        if (invocation.transport === "mobile-relay" &&
+        if (
+          (invocation.transport === "mobile-relay" ||
+            invocation.transport === "desktop-bridge") &&
             (invocation.state === "prepared" || invocation.state === "unknown") &&
             !invocation.requestId) {
           await this.reconcileRecoverableInvocation(invocation.invocationId);
@@ -705,16 +779,21 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     for (const request of pending) {
       if (this.disposed || this.recoveredSubscribers.size === 0) return;
       try {
+        const nativeFence = nativeProviderBinding(this.options)?.capture();
         const outcome = await this.readRecoverableRequest(request.recoveryId);
+        nativeFence?.();
         if (outcome.status !== "approved" && outcome.status !== "rejected") continue;
         const stillActive = (await this.listRecoverableRequests()).some((item) =>
           item.recoveryId === request.recoveryId && item.method === request.method
         );
+        nativeFence?.();
         if (!stillActive) continue;
         for (const [callback, delivered] of this.recoveredSubscribers) {
           if (delivered.has(request.recoveryId) || this.disposed) continue;
           try {
+            nativeFence?.();
             await callback(Object.freeze(outcome));
+            nativeFence?.();
             delivered.add(request.recoveryId);
           } catch {
             // Failed consumer persistence leaves the final outcome replayable.
@@ -840,21 +919,53 @@ export class InferClient extends EventEmitter<InferClientEvents> {
     return { account, network };
   }
 
-  async connect(): Promise<{ account: AccountInfo; network: NetworkInfo | null }> {
+  private invalidateConnection(): void {
+    this.connectionRevision++;
+    this.subscriptionRevision++;
+    this.connectionOperation?.cancel();
+    this.connectionOperation = null;
+  }
+
+  connect(): Promise<{ account: AccountInfo; network: NetworkInfo | null }> {
+    if (this.disposed) return Promise.reject(new InferAdapterError(InferErrorCode.Unauthorized, "Connection client was disposed"));
+    if (this.disconnectOperation) return Promise.reject(new InferAdapterError(InferErrorCode.Unauthorized, "Disconnect is still in progress"));
+    if (this.connectionOperation) return this.connectionOperation.promise;
+    const revision = ++this.connectionRevision;
+    this.disconnectEmitted = false;
+    let cancel!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      cancel = () => reject(new InferAdapterError(InferErrorCode.Unauthorized, "Connection operation was cancelled"));
+    });
+    const operation = { promise: Promise.race([this.connectOnce(revision), cancelled]).finally(() => {
+      if (this.connectionOperation === operation) this.connectionOperation = null;
+    }), cancel };
+    this.connectionOperation = operation;
+    return operation.promise;
+  }
+
+  private async connectOnce(revision: number): Promise<{ account: AccountInfo; network: NetworkInfo | null }> {
+    const assertCurrent = () => {
+      if (this.disposed || revision !== this.connectionRevision)
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Connection operation was superseded");
+    };
     try {
       const provider = this.refreshProvider();
       if (provider?.connect) {
         const account = normalizeProviderAccount(unwrap(await provider.connect()));
+        assertCurrent();
+        if (this.refreshProvider() !== provider)
+          throw new InferAdapterError(InferErrorCode.Unauthorized, "Connection provider changed");
+        const network = provider.network ? normalizeNetwork(unwrap(await provider.network())) : null;
+        assertCurrent();
+        if (this.refreshProvider() !== provider)
+          throw new InferAdapterError(InferErrorCode.Unauthorized, "Connection provider changed");
         this.accountInfo = account;
-
-        if (provider.network) {
-          this.networkInfo = normalizeNetwork(unwrap(await provider.network()));
-        }
-
-        return { account, network: this.networkInfo };
+        this.networkInfo = network;
+        return { account, network };
       }
 
-      const resumedMobileSession = await resumeMobileRelaySession(this.options);
+      const resumedMobileSession = await resumeMobileRelaySession(this.options, assertCurrent);
+      assertCurrent();
       if (resumedMobileSession) {
         return this.connectResultFromExternalSession(resumedMobileSession);
       }
@@ -869,7 +980,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
       // waitForExternalSession times out because nothing consumed
       // the params.
       const consumedCallback = await consumeExternalCallbackIfPresent(this.options);
+      assertCurrent();
       const externalSession = await readValidatedExternalSession(this.options);
+      assertCurrent();
       if (externalSession) {
         // v0.2.0-rc.8: a successful connect resets the disconnect
         // gate so future disconnect events can fire again.
@@ -886,15 +999,18 @@ export class InferClient extends EventEmitter<InferClientEvents> {
         // within a few ticks.
         for (let i = 0; i < 20; i += 1) {
           const pending = await readValidatedExternalSession(this.options);
+          assertCurrent();
           if (pending) {
             return this.connectResultFromExternalSession(pending);
           }
           await new Promise((r) => setTimeout(r, 50));
+          assertCurrent();
         }
       }
 
 if (typeof window !== "undefined" && isMobileBrowser()) {
-        const mobileSession = await connectViaMobileRelay(this.options);
+        const mobileSession = await connectViaMobileRelay(this.options, assertCurrent);
+        assertCurrent();
         return this.connectResultFromExternalSession(mobileSession);
       }
 
@@ -917,19 +1033,21 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         const preauth = await startPreauthConnect({
           origin: window.location.origin,
           app,
-          options: this.options,
+          options: this.options
         });
+        assertCurrent();
         if (preauth) {
           const session = await pollPreauthUntilResolved(
             preauth.requestId,
-            this.options,
+            this.options
           );
+          assertCurrent();
           if (session) {
             return this.connectResultFromExternalSession(session);
           }
           throw new InferAdapterError(
             InferErrorCode.ConnectionTimeout,
-            "Timed out waiting for Infer Desk to approve the pre-auth connect request.",
+            "Timed out waiting for Infer Desk to approve the pre-auth connect request."
           );
         }
 
@@ -942,9 +1060,11 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
       }
 
       const bridgedAccount = await tryLocalBridgeConnect(this.options);
+      assertCurrent();
       if (bridgedAccount) {
-        this.accountInfo = bridgedAccount;
         const bridgedSession = await readValidatedExternalSession(this.options);
+        assertCurrent();
+        this.accountInfo = bridgedAccount;
         this.networkInfo = bridgedSession
           ? normalizeNetwork({
               name: bridgedSession.network as Network,
@@ -958,9 +1078,11 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         launchDesktopOrMobileConnect(this.options);
 
         const retriedAccount = await retryLocalBridgeConnectAfterDeeplink(this.options);
+        assertCurrent();
         if (retriedAccount) {
-          this.accountInfo = retriedAccount;
           const retriedSession = await readValidatedExternalSession(this.options);
+          assertCurrent();
+          this.accountInfo = retriedAccount;
           this.networkInfo = retriedSession
             ? normalizeNetwork({
                 name: retriedSession.network as Network,
@@ -971,6 +1093,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         }
 
         const handoffSession = await waitForExternalSession(this.options);
+        assertCurrent();
         if (handoffSession) {
           return this.connectResultFromExternalSession(handoffSession);
         }
@@ -991,12 +1114,14 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
   }
 
   async getAccount(): Promise<AccountInfo> {
-    if (this.accountInfo) return this.accountInfo;
+    if (this.accountInfo && !nativeProviderBinding(this.options)) return this.accountInfo;
 
     try {
       const provider = this.refreshProvider();
       if (provider?.account) {
-        const account = normalizeProviderAccount(unwrap(await provider.account()));
+        const account = normalizeProviderAccount(
+          unwrap(await provider.account())
+        );
         this.accountInfo = account;
         return account;
       }
@@ -1008,13 +1133,27 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         return account;
       }
 
-      throw new InferAdapterError(InferErrorCode.NotInstalled, "Infer provider account() unavailable");
+      throw new InferAdapterError(
+        InferErrorCode.NotInstalled,
+        "Infer provider account() unavailable"
+      );
     } catch (error) {
       remapInferError(error);
     }
   }
 
-  async disconnect(): Promise<void> {
+  disconnect(): Promise<void> {
+    if (this.disconnectOperation) return this.disconnectOperation;
+    const operation = this.disconnectOnce().finally(() => {
+      if (this.disconnectOperation === operation) this.disconnectOperation = null;
+    });
+    this.disconnectOperation = operation;
+    return operation;
+  }
+
+  private async disconnectOnce(): Promise<void> {
+    this.invalidateConnection();
+    this.injectedScopeRevision++;
     const provider = this.refreshProvider();
     const externalSession = readExternalSession();
     this.disconnectEmitted = false;
@@ -1039,7 +1178,7 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
   }
 
   async getNetwork(): Promise<NetworkInfo> {
-    if (this.networkInfo) return this.networkInfo;
+    if (this.networkInfo && !nativeProviderBinding(this.options)) return this.networkInfo;
 
     try {
       const provider = this.refreshProvider();
@@ -1059,150 +1198,700 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         return network;
       }
 
-      throw new InferAdapterError(InferErrorCode.NotInstalled, "Infer provider network() unavailable");
+      throw new InferAdapterError(
+        InferErrorCode.NotInstalled,
+        "Infer provider network() unavailable"
+      );
     } catch (error) {
       remapInferError(error);
     }
   }
 
-  async signMessage(input: CedraSignMessageInput): Promise<CedraSignMessageOutput> {
+  private assertInjectedProvider(
+    provider: InferProvider,
+    contractVersion: InferProvider["integrationContractVersion"],
+    scopeRevision: number
+  ): void {
+    if (this.refreshProvider() !== provider ||
+        this.injectedScopeRevision !== scopeRevision ||
+        provider.integrationContractVersion !== contractVersion)
+      throw new InferAdapterError(InferErrorCode.Unauthorized,
+        "Injected provider changed during request preparation");
+  }
+
+  /** Recheck the live provider after application persistence; caches are not a dispatch fence. */
+  private async assertLiveInjectedScope(
+    provider: InferProvider,
+    account: AccountInfo,
+    network: NetworkInfo,
+    contractVersion: InferProvider["integrationContractVersion"]
+  ): Promise<void> {
+    const scopeRevision = this.injectedScopeRevision;
+    this.assertInjectedProvider(provider, contractVersion, scopeRevision);
+    if (!provider.account || !provider.network)
+      throw new InferAdapterError(InferErrorCode.Unauthorized,
+        "Injected provider cannot confirm the original account and network");
+    const liveAccount = normalizeProviderAccount(unwrap(await provider.account()));
+    const liveNetwork = normalizeNetwork(unwrap(await provider.network()));
+    this.assertInjectedProvider(provider, contractVersion, scopeRevision);
+    if (canonicalAddress(liveAccount.address.toString()) !== canonicalAddress(account.address.toString()) ||
+        liveAccount.publicKey.toString().toLowerCase() !== account.publicKey.toString().toLowerCase() ||
+        liveNetwork.name !== network.name || liveNetwork.chainId !== network.chainId)
+      throw new InferAdapterError(InferErrorCode.Unauthorized,
+        "Injected account or network changed during request preparation");
+  }
+
+  private async prepareInjectedSigning(
+    provider: InferProvider,
+    method: DurableInvocation["method"],
+    payload: unknown,
+    account: AccountInfo,
+    network: NetworkInfo
+  ) {
+    const contractVersion = provider.integrationContractVersion;
+    const scope = {
+      origin: typeof window === "undefined" ? "" : window.location.origin,
+      accountAddress: canonicalAddress(account.address.toString()),
+      network: network.name,
+      chainId: network.chainId
+    };
+    if (!scope.origin)
+      throw new InferAdapterError(
+        InferErrorCode.Unsupported,
+        "Persistent signing requires a browser origin"
+      );
+    const invocation = await prepareDurableInvocation(
+      {
+        transport: "injected",
+        sessionId: "injected:" + scope.accountAddress + ":" + scope.chainId,
+        address: scope.accountAddress,
+        network: scope.network,
+        chainId: scope.chainId
+      },
+      method,
+      {
+        requestCommitment: requestCommitment(method, scope, payload),
+        requestPayload: payload,
+        endpoint: scope.origin,
+        signerPublicKey: account.publicKey.toString(),
+        remoteAcknowledgementRequired: contractVersion === 1 &&
+          typeof provider.acknowledgeInvocation === "function"
+      }
+    );
+    const descriptor = Object.freeze(invocationDescriptor(invocation));
     try {
+      await this.options.onInvocationPrepared?.(descriptor);
+      await this.assertLiveInjectedScope(provider, account, network, contractVersion);
+      if (
+        provider.integrationContractVersion !== undefined &&
+        provider.integrationContractVersion !== 1
+      ) {
+        throw new InferAdapterError(
+          InferErrorCode.Unsupported,
+          "Unsupported provider integration contract version"
+        );
+      }
+      if (
+        this.options.networkOverride !== undefined &&
+        this.options.networkOverride !== scope.network
+      ) {
+        throw new InferAdapterError(
+          InferErrorCode.InvalidNetwork,
+          "Approved network differs from networkOverride"
+        );
+      }
+    } catch (cause) {
+      await updateDurableInvocation(invocation.id, "not-invoked").catch(
+        () => undefined
+      );
+      throw notInvokedError(
+        "Signing stopped before provider invocation",
+        descriptor,
+        cause
+      );
+    }
+    return {
+      invocation,
+      scope,
+      metadata: {
+        contractVersion: 1,
+        invocationId: invocation.id,
+        requestCommitment: invocation.requestCommitment,
+        scope
+      }
+    };
+  }
+
+  async signMessage(
+    input: CedraSignMessageInput
+  ): Promise<CedraSignMessageOutput> {
+    let invocation: DurableInvocation | undefined;
+    try {
+      const request = validateMessageInput(input);
       const provider = this.refreshProvider();
+      const account = await this.getAccount();
+      const network = await this.getNetwork();
+      const scope = {
+        origin: typeof window === "undefined" ? "" : window.location.origin,
+        accountAddress: canonicalAddress(account.address.toString()),
+        network: network.name,
+        chainId: network.chainId
+      };
+      let response: unknown;
+      let expectedInput: CedraSignMessageInput = request;
+      let allowLegacy = false;
       if (provider?.signMessage) {
-        const result = unwrap(await provider.signMessage(input)) as CedraSignMessageOutput | InferSignMessageResponse;
-        return normalizeSignMessageOutput(result);
+        const payload =
+          provider.integrationContractVersion === 1
+            ? { ...request, profile: MESSAGE_PROFILE }
+            : request;
+        expectedInput = payload;
+        allowLegacy = provider.integrationContractVersion !== 1;
+        const prepared = await this.prepareInjectedSigning(
+          provider,
+          "signMessage",
+          payload,
+          account,
+          network
+        );
+        invocation = prepared.invocation;
+        try {
+          response = await provider.signMessage(
+            payload,
+            provider.integrationContractVersion === 1
+              ? prepared.metadata
+              : undefined
+          );
+        } catch (cause) {
+          throw new InferAdapterError(
+            InferErrorCode.InternalError,
+            "Native message signing failed; no explicit decline was returned",
+            cause
+          );
+        }
+        const record = snapshotProviderRecord(
+          response,
+          "Unreadable message response"
+        );
+        if (!record)
+          throw new InferAdapterError(
+            InferErrorCode.InternalError,
+            "Malformed message response"
+          );
+        if (record.status === "Rejected" && hasExactKeys(record, ["status"]))
+          throw new InferAdapterError(
+            InferErrorCode.UserRejected,
+            "User rejected the message request"
+          );
+        if (Object.prototype.hasOwnProperty.call(record, "status")) {
+          if (
+            record.status !== "Approved" ||
+            !hasExactKeys(record, ["status", "args"])
+          )
+            throw new InferAdapterError(
+              InferErrorCode.InternalError,
+              "Ambiguous message response"
+            );
+          response = record.args;
+        }
+      } else {
+        const session = await readValidatedExternalSession(this.options);
+        if (!session)
+          throw new InferAdapterError(
+            InferErrorCode.Unsupported,
+            "Infer message signing is unavailable"
+          );
+        const payload =
+          session.integrationContractVersion === 1
+            ? { ...request, profile: MESSAGE_PROFILE }
+            : request;
+        expectedInput = payload;
+        allowLegacy = session.integrationContractVersion !== 1;
+        response = await (session.transport === "mobile-relay"
+          ? signMessageViaMobileRelay(payload, session, this.options)
+          : tryLocalBridgeSignMessage(payload, session, this.options));
       }
-
-      const externalSession = await readValidatedExternalSession(this.options);
-      if (externalSession) {
-        return externalSession.transport === "mobile-relay"
-          ? signMessageViaMobileRelay(input, externalSession, this.options)
-          : tryLocalBridgeSignMessage(input, externalSession, this.options);
-      }
-
-      throw new InferAdapterError(InferErrorCode.Unsupported, "Infer provider signMessage() unavailable");
+      const output = verifySignedMessageOutput(
+        response,
+        expectedInput,
+        scope,
+        account.publicKey.toString(),
+        allowLegacy
+      );
+      if (invocation)
+        await updateInjectedInvocationEvidence(invocation.id, {
+          final: serializeStoredFinal("signMessage", output)
+        });
+      return output;
     } catch (error) {
-      remapInferError(error);
+      if (
+        invocation &&
+        error instanceof InferAdapterError &&
+        error.code === InferErrorCode.UserRejected
+      ) {
+        await updateInjectedInvocationEvidence(invocation.id, {
+          final: { status: "rejected" }
+        });
+      } else if (invocation)
+        await updateDurableInvocation(invocation.id, "unknown").catch(
+          () => undefined
+        );
+      remapSignAndSubmitError(error);
     }
   }
 
   async signMessageAndVerify(input: CedraSignMessageInput): Promise<boolean> {
-    const account = await this.getAccount();
-    const output = await this.signMessage(input);
-    const publicKey = account.publicKey as unknown as {
-      verifySignature?: (args: { message: Uint8Array; signature: unknown }) => boolean;
-      verifySignatureAsync?: (args: { message: Uint8Array; signature: unknown }) => Promise<boolean>;
-    };
-    const message = new TextEncoder().encode(output.fullMessage || createFullMessage(input, account.address.toString()));
-
-    if (publicKey.verifySignature) {
-      return publicKey.verifySignature({ message, signature: output.signature });
+    validateMessageInput(input);
+    try {
+      await this.signMessage(input);
+      return true;
+    } catch (error) {
+      if (
+        error instanceof InferAdapterError &&
+        (error.code === InferErrorCode.InternalError ||
+          error.code === InferErrorCode.InvalidParams)
+      )
+        return false;
+      throw error;
     }
-
-    if (publicKey.verifySignatureAsync) {
-      return publicKey.verifySignatureAsync({ message, signature: output.signature });
-    }
-
-    return false;
   }
 
   async signTransaction(
-    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
+    transaction:
+      | AnyRawTransaction
+      | InferTransactionPayload
+      | CedraSignTransactionInputV1_1,
     options?: unknown
   ): Promise<InferSignTransactionResult> {
+    let invocation: DurableInvocation | undefined;
     try {
       const provider = this.refreshProvider();
       if (provider?.signTransaction) {
         const rawInput = isSdkRawTransaction(transaction)
           ? normalizeSdkRawTransactionInput(transaction, options)
           : undefined;
-        const response = await provider.signTransaction(rawInput ?? transaction, options);
+        const wire = encodeWireValue(
+          rawInput ?? toExternalSignTransactionInput(transaction, options)
+        ) as unknown as InferExternalSignTransactionInput;
+        let metadata: unknown = options;
+        if (
+          provider.integrationContractVersion !== undefined &&
+          provider.integrationContractVersion !== 1
+        ) {
+          throw new InferAdapterError(
+            InferErrorCode.Unsupported,
+            "Unsupported provider integration contract version"
+          );
+        }
+        if (provider.integrationContractVersion === 1) {
+          const prepared = await this.prepareInjectedSigning(
+            provider,
+            "signTransaction",
+            wire,
+            await this.getAccount(),
+            await this.getNetwork()
+          );
+          invocation = prepared.invocation;
+          metadata = prepared.metadata;
+        }
+        if (
+          provider.integrationContractVersion !== 1 &&
+          this.options.networkOverride !== undefined
+        ) {
+          const contractVersion = provider.integrationContractVersion;
+          const scopeRevision = this.injectedScopeRevision;
+          this.assertInjectedProvider(provider, contractVersion, scopeRevision);
+          if (!provider.network)
+            throw new InferAdapterError(InferErrorCode.InvalidNetwork,
+              "Legacy provider cannot confirm the required signing network");
+          const liveNetwork = normalizeNetwork(unwrap(await provider.network()));
+          this.assertInjectedProvider(provider, contractVersion, scopeRevision);
+          if (liveNetwork.name !== this.options.networkOverride)
+            throw new InferAdapterError(
+              InferErrorCode.InvalidNetwork,
+              "Approved network differs from networkOverride"
+            );
+        }
+        let response: unknown;
+        try {
+          response = await provider.signTransaction(wire, metadata);
+        } catch (cause) {
+          throw new InferAdapterError(
+            InferErrorCode.InternalError,
+            "Native transaction signing failed; no explicit decline was returned",
+            cause
+          );
+        }
         let result: unknown = response;
-        if (rawInput || (response && typeof response === "object" && "status" in response)) {
-          const record = snapshotProviderRecord(response, "Unreadable signing response");
-          if (!record) throw new InferAdapterError(InferErrorCode.InternalError, "Malformed signing response");
+        if (
+          rawInput ||
+          (response && typeof response === "object" && "status" in response)
+        ) {
+          const record = snapshotProviderRecord(
+            response,
+            "Unreadable signing response"
+          );
+          if (!record)
+            throw new InferAdapterError(
+              InferErrorCode.InternalError,
+              "Malformed signing response"
+            );
           if (Object.prototype.hasOwnProperty.call(record, "status")) {
-            if (record.status === "Rejected" && hasExactKeys(record, ["status"])) {
-              throw new InferAdapterError(InferErrorCode.UserRejected, "User rejected the transaction request");
+            if (
+              record.status === "Rejected" &&
+              hasExactKeys(record, ["status"])
+            ) {
+              throw new InferAdapterError(
+                InferErrorCode.UserRejected,
+                "User rejected the transaction request"
+              );
             }
-            if (record.status !== "Approved" || !hasExactKeys(record, ["status", "args"])) {
-              throw new InferAdapterError(InferErrorCode.InternalError, "Ambiguous signing response");
+            if (
+              record.status !== "Approved" ||
+              !hasExactKeys(record, ["status", "args"])
+            ) {
+              throw new InferAdapterError(
+                InferErrorCode.InternalError,
+                "Ambiguous signing response"
+              );
             }
             result = record.args;
-          } else {
-            result = unwrap(record);
-          }
-        } else {
-          result = unwrap(response);
-        }
-        return rawInput
-          ? deserializeSignTransactionResult(result, rawInput.rawTransactionBcsHex)
-          : normalizeSignTransactionResult(result);
+          } else result = unwrap(record);
+        } else result = unwrap(response);
+        const output =
+          rawInput || invocation
+            ? deserializeSignTransactionResult(
+                result,
+                rawInput?.rawTransactionBcsHex
+              )
+            : normalizeSignTransactionResult(result);
+        if (invocation)
+          await updateInjectedInvocationEvidence(invocation.id, {
+            final: serializeStoredFinal(
+              "signTransaction",
+              output as CedraSignTransactionOutputV1_1
+            )
+          });
+        return output;
       }
-
       const externalSession = await readValidatedExternalSession(this.options);
       if (externalSession) {
-        const externalInput = toExternalSignTransactionInput(transaction, options);
+        const externalInput = toExternalSignTransactionInput(
+          transaction,
+          options
+        );
         const result = await (externalSession.transport === "mobile-relay"
-          ? signTransactionViaMobileRelay(externalInput, externalSession, this.options)
-          : tryLocalBridgeSignTransaction(externalInput, externalSession, this.options));
-        if ("rawTransactionBcsHex" in externalInput) {
-          return deserializeSignTransactionResult(result, externalInput.rawTransactionBcsHex);
+          ? signTransactionViaMobileRelay(
+              externalInput,
+              externalSession,
+              this.options
+            )
+          : tryLocalBridgeSignTransaction(
+              externalInput,
+              externalSession,
+              this.options
+            ));
+        if ("rawTransactionBcsHex" in externalInput)
+          return deserializeSignTransactionResult(
+            result,
+            externalInput.rawTransactionBcsHex
+          );
+        return result;
+      }
+      throw new InferAdapterError(
+        InferErrorCode.Unsupported,
+        "Infer provider signTransaction() unavailable"
+      );
+    } catch (error) {
+      if (
+        invocation &&
+        error instanceof InferAdapterError &&
+        error.code === InferErrorCode.UserRejected
+      ) {
+        await updateInjectedInvocationEvidence(invocation.id, {
+          final: { status: "rejected" }
+        });
+      } else if (invocation)
+        await updateDurableInvocation(invocation.id, "unknown").catch(
+          () => undefined
+        );
+      remapSignAndSubmitError(error);
+    }
+  }
+
+  /** Documented SDK convenience; the standard feature validates its own input first. */
+  async signAndSubmitTransaction(
+    transaction:
+      | AnyRawTransaction
+      | InferTransactionPayload
+      | CedraSignAndSubmitTransactionInput,
+    options?: unknown
+  ): Promise<CedraSignAndSubmitTransactionOutput> {
+    const wire = normalizeSubmitInput(
+      options === undefined ? transaction : { data: transaction, options }
+    );
+    const required =
+      wire.options.expireTimestamp !== undefined ||
+      wire.options.sequenceNumber !== undefined ||
+      wire.sender !== undefined ||
+      wire.chainId !== undefined;
+    return this.submitNormalized(wire, {
+      ...this.options,
+      ...(required ? { requireContractVersion: 1 as const } : {})
+    });
+  }
+
+  async signAndSubmitTransactionWithRestrictions(
+    input: CanonicalTransactionInput,
+    callOptions: Pick<InferWalletOptions, "onInvocationPrepared"> = {}
+  ): Promise<CedraSignAndSubmitTransactionOutput> {
+    const wire = normalizeSubmitInput(input);
+    return this.submitNormalized(wire, inheritNativeProvider(this.options, {
+      ...this.options,
+      ...callOptions,
+      requireContractVersion: 1
+    }));
+  }
+
+  private async submitNormalized(
+    wire: CanonicalTransactionInput,
+    callOptions: InferWalletOptions
+  ): Promise<CedraSignAndSubmitTransactionOutput> {
+    try {
+      const provider = this.refreshProvider();
+      if (provider?.signAndSubmitTransaction) {
+        const nativeFence = nativeProviderBinding(callOptions)?.capture();
+        const account = await this.getAccount();
+        const network = await this.getNetwork();
+        const contractVersion = provider.integrationContractVersion;
+        const scope = {
+          origin: typeof window === "undefined" ? "" : window.location.origin,
+          accountAddress: canonicalAddress(account.address.toString()),
+          network: network.name,
+          chainId: network.chainId
+        };
+        if (!scope.origin || typeof scope.network !== "string")
+          throw new InferAdapterError(
+            InferErrorCode.Unsupported,
+            "A browser and approved network are required"
+          );
+        const invocation = await prepareDurableInvocation(
+          {
+            transport: "injected",
+            sessionId: "injected:" + scope.accountAddress + ":" + scope.chainId,
+            address: scope.accountAddress,
+            network: scope.network,
+            chainId: scope.chainId
+          },
+          "signAndSubmitTransaction",
+          {
+            requestCommitment: requestCommitment(
+              "signAndSubmitTransaction",
+              scope,
+              wire
+            ),
+            requestPayload: wire,
+            endpoint: scope.origin,
+            remoteAcknowledgementRequired: contractVersion === 1 &&
+              typeof provider.acknowledgeInvocation === "function"
+          }
+        );
+        const descriptor = Object.freeze(invocationDescriptor(invocation));
+        let providerInput: CanonicalTransactionInput | ReturnType<typeof legacySubmitInput>;
+        try {
+          await callOptions.onInvocationPrepared?.(descriptor);
+          await this.assertLiveInjectedScope(provider, account, network, contractVersion);
+          if (
+            provider.integrationContractVersion !== undefined &&
+            provider.integrationContractVersion !== 1
+          )
+            throw new InferAdapterError(
+              InferErrorCode.Unsupported,
+              "Unsupported provider integration contract version"
+            );
+          if (
+            callOptions.requireContractVersion === 1 &&
+            (provider.integrationContractVersion !== 1 ||
+              !provider.capabilities?.transactionRestrictions)
+          ) {
+            throw new InferAdapterError(
+              InferErrorCode.Unsupported,
+              "This injected wallet does not support required transaction restrictions"
+            );
+          }
+          if (nativeProviderBinding(callOptions) &&
+              (!provider.capabilities?.durableInvocationSubmission ||
+               !provider.capabilities?.durableInvocationLookup ||
+               !provider.readInvocation || !provider.acknowledgeInvocation))
+            throw new InferAdapterError(InferErrorCode.Unsupported, "native-durable-submission-unavailable");
+          this.assertSubmissionScope(
+            wire,
+            scope.accountAddress,
+            scope.chainId,
+            scope.network
+          );
+          nativeFence?.();
+          providerInput = provider.integrationContractVersion === 1 ? wire : legacySubmitInput(wire);
+        } catch (cause) {
+          await updateDurableInvocation(invocation.id, "not-invoked").catch(
+            () => undefined
+          );
+          throw notInvokedError(
+            "Wallet submission stopped before provider invocation",
+            descriptor,
+            nativeProviderBinding(callOptions) ? undefined : cause
+          );
+        }
+        let providerResult: unknown;
+        try {
+          providerResult = await provider.signAndSubmitTransaction(
+            providerInput as unknown as InferTransactionPayload,
+            provider.integrationContractVersion === 1
+              ? {
+                  contractVersion: 1,
+                  invocationId: invocation.id,
+                  requestCommitment: invocation.requestCommitment,
+                  scope
+                }
+              : undefined
+          );
+        } catch (cause) {
+          await updateDurableInvocation(invocation.id, "unknown").catch(
+            () => undefined
+          );
+          // Hash-only execution evidence is useful even when the reply is uncertain.
+          // It never constitutes proof of submission acceptance or non-submission.
+          try {
+            if (cause && typeof cause === "object" &&
+                isValidTransactionHash((cause as {transactionHash?:unknown}).transactionHash)) {
+              const value = (cause as {transactionHash:string}).transactionHash;
+              await saveDurableTransactionHash(invocation.id, value, true);
+            }
+          } catch { /* The original invocation remains recoverable. */ }
+          throw new InferAdapterError(
+            InferErrorCode.RequestOutcomeUnknown,
+            "native-submission-uncertain"
+          );
+        }
+        let result: CedraSignAndSubmitTransactionOutput;
+        try {
+          await this.assertLiveInjectedScope(provider, account, network, contractVersion);
+          nativeFence?.();
+          result = normalizeSignAndSubmitProviderResult(providerResult);
+        } catch (error) {
+          if (
+            error instanceof InferAdapterError &&
+            error.code === InferErrorCode.UserRejected
+          ) {
+            await updateInjectedInvocationEvidence(invocation.id, {
+              final: { status: "rejected" }
+            });
+          } else
+            await updateDurableInvocation(invocation.id, "unknown").catch(
+              () => undefined
+            );
+          throw error;
+        }
+        try {
+          await updateInjectedInvocationEvidence(invocation.id, {
+            final: {
+              status: "approved",
+              method: "signAndSubmitTransaction",
+              hash: result.hash
+            }
+          });
+          await this.assertLiveInjectedScope(provider, account, network, contractVersion);
+          nativeFence?.();
+        } catch (cause) {
+          throw new InferAdapterError(
+            InferErrorCode.RequestOutcomeUnknown,
+            "native-result-persistence-failed",
+            nativeProviderBinding(callOptions) ? { hash: result.hash } : { cause, hash: result.hash }
+          );
         }
         return result;
       }
-
-      throw new InferAdapterError(InferErrorCode.Unsupported, "Infer provider signTransaction() unavailable");
+      const session = await readValidatedExternalSession(callOptions);
+      if (session) {
+        const scopeFailure = (() => {
+          try {
+            this.assertSubmissionScope(
+              wire,
+              session.address,
+              session.chainId,
+              session.network
+            );
+            return undefined;
+          } catch (cause) {
+            return cause;
+          }
+        })();
+        // Scope errors are fenced after the awaited invocation hook, before dispatch.
+        const options = scopeFailure
+          ? {
+              ...callOptions,
+              onInvocationPrepared: async (
+                invocation: Readonly<RecoverableInvocation>
+              ) => {
+                await callOptions.onInvocationPrepared?.(invocation);
+                throw scopeFailure;
+              }
+            }
+          : callOptions;
+        return session.transport === "mobile-relay"
+          ? signAndSubmitViaMobileRelay(
+              wire as unknown as CedraSignAndSubmitTransactionInput,
+              session,
+              options
+            )
+          : tryLocalBridgeSignAndSubmit(
+              wire as unknown as CedraSignAndSubmitTransactionInput,
+              session,
+              options
+            );
+      }
+      throw new InferAdapterError(
+        InferErrorCode.Unsupported,
+        "Infer wallet submission is unavailable"
+      );
     } catch (error) {
       remapSignAndSubmitError(error);
     }
   }
 
-  async signAndSubmitTransaction(
-    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignAndSubmitTransactionInput,
-    options?: unknown
-  ): Promise<CedraSignAndSubmitTransactionOutput> {
-    try {
-      const provider = this.refreshProvider();
-      if (provider?.signAndSubmitTransaction) {
-        let providerResult: unknown;
-        try {
-          providerResult = await provider.signAndSubmitTransaction(
-            transaction as AnyRawTransaction | InferTransactionPayload,
-            options
-          );
-        } catch (error) {
-          throw new InferAdapterError(
-            InferErrorCode.InternalError,
-            "Infer provider signAndSubmitTransaction() failed",
-            error
-          );
-        }
-        return normalizeSignAndSubmitProviderResult(providerResult);
-      }
-
-      const externalSession = await readValidatedExternalSession(this.options);
-      if (externalSession) {
-        return externalSession.transport === "mobile-relay"
-          ? signAndSubmitViaMobileRelay(
-              transaction as CedraSignAndSubmitTransactionInput,
-              externalSession,
-              this.options
-            )
-          : tryLocalBridgeSignAndSubmit(
-              transaction as CedraSignAndSubmitTransactionInput,
-              externalSession,
-              this.options
-            );
-      }
-
+  private assertSubmissionScope(
+    wire: CanonicalTransactionInput,
+    address: string,
+    chainId: number,
+    network: string
+  ): void {
+    if (wire.sender !== undefined && wire.sender !== canonicalAddress(address))
       throw new InferAdapterError(
-        InferErrorCode.Unsupported,
-        "Infer provider signAndSubmitTransaction() unavailable"
+        InferErrorCode.Unauthorized,
+        "Requested sender differs from the approved account"
       );
-    } catch (error) {
-      remapSignAndSubmitError(error);
-    }
+    if (wire.chainId !== undefined && wire.chainId !== chainId)
+      throw new InferAdapterError(
+        InferErrorCode.InvalidNetwork,
+        "Requested chain differs from the approved chain"
+      );
+    if (
+      this.options.networkOverride !== undefined &&
+      this.options.networkOverride !== network
+    )
+      throw new InferAdapterError(
+        InferErrorCode.InvalidNetwork,
+        "Approved wallet network differs from networkOverride"
+      );
+    if (
+      wire.options.expireTimestamp !== undefined &&
+      BigInt(wire.options.expireTimestamp) <=
+        BigInt(Math.floor(Date.now() / 1000))
+    )
+      throw new InferAdapterError(
+        InferErrorCode.InvalidParams,
+        "Approved transaction expiry has elapsed"
+      );
   }
 
   async signAndSubmitBCSTransaction(
@@ -1214,16 +1903,25 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
 
   async subscribe(): Promise<void> {
     const provider = this.refreshProvider();
+    const revision = this.subscriptionRevision;
+    const current = () => {
+      if (this.disposed || revision !== this.subscriptionRevision) return false;
+      try { return this.refreshProvider() === provider; } catch { return false; }
+    };
 
     if (provider?.onAccountChange) {
       await provider.onAccountChange((account) => {
+        if (!current()) return;
+        this.injectedScopeRevision++;
         this.accountInfo = normalizeProviderAccount(account);
         this.emit("accountChange", this.accountInfo);
       });
     }
 
-    if (provider?.onNetworkChange) {
+    if (current() && provider?.onNetworkChange) {
       await provider.onNetworkChange((network) => {
+        if (!current()) return;
+        this.injectedScopeRevision++;
         this.networkInfo = normalizeNetwork(network);
         this.emit("networkChange", this.networkInfo);
       });

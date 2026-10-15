@@ -1,0 +1,31 @@
+diff --git a/package-lock.json b/package-lock.json
+index d972a1b..2c085ec 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "@inferenco/infer-wallet-adapter",
+-  "version": "0.2.2-rc.1",
++  "version": "0.2.2-rc.2",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "@inferenco/infer-wallet-adapter",
+-      "version": "0.2.2-rc.1",
++      "version": "0.2.2-rc.2",
+       "license": "Apache-2.0",
+       "dependencies": {
+         "@cedra-labs/ts-sdk": "^2.2.9",
+diff --git a/package.json b/package.json
+index 29cf2cf..d1489e9 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@inferenco/infer-wallet-adapter",
+-  "version": "0.2.2-rc.1",
++  "version": "0.2.2-rc.2",
+   "description": "Standalone Infer wallet adapter for Cedra dapps",
+   "license": "Apache-2.0",
+   "author": "TOO Spielcrypto and Singularity Shift Ltd",

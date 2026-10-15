@@ -9,6 +9,10 @@ export interface PendingMobileRelayRequest {
   requestId: string;
   /** Generated before request creation; safe for application journals. */
   invocationId?: string;
+  requestCommitment?: string;
+  requestPayload?: unknown;
+  expectedMessageInput?: import("@cedra-labs/wallet-standard").CedraSignMessageInput;
+  signerPublicKey?: string;
   sessionId: string;
   address: string;
   network: string;
