@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
-import {resolve,join} from 'node:path';
+import {resolve,join,dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
 const consumer=resolve(process.argv[2]||'.');
 const expectSdkError=process.argv.includes('--expect-sdk-eventemitter-error');
@@ -12,8 +12,8 @@ const ts=require('typescript');
 const dir=join(consumer,'packed-export-regression');
 mkdirSync(dir,{recursive:true});
 const names=['@inferenco/infer-wallet-adapter','@inferenco/infer-wallet-adapter/aip62','@inferenco/infer-wallet-adapter/auto-register'];
-const esm="import { createInferAIP62Wallet } from '@inferenco/infer-wallet-adapter';\nimport { createInferAIP62Wallet as aip } from '@inferenco/infer-wallet-adapter/aip62';\nimport '@inferenco/infer-wallet-adapter/auto-register';\nconst a=createInferAIP62Wallet(); const b=aip(); void a; void b;\n";
-const cjs="import adapter = require('@inferenco/infer-wallet-adapter');\nimport aip = require('@inferenco/infer-wallet-adapter/aip62');\nimport register = require('@inferenco/infer-wallet-adapter/auto-register');\nconst a=adapter.createInferAIP62Wallet(); const b=aip.createInferAIP62Wallet(); void a; void b; void register;\n";
+const esm="import { createInferAIP62Wallet, createInferNativeRecoveryFeatures, type InferNativeRecoveryFeatures } from '@inferenco/infer-wallet-adapter';\nimport { createInferAIP62Wallet as aip, createInferNativeRecoveryFeatures as nativeAip } from '@inferenco/infer-wallet-adapter/aip62';\nimport '@inferenco/infer-wallet-adapter/auto-register';\nconst a=createInferAIP62Wallet(); const b=aip();\nconst n:InferNativeRecoveryFeatures|null=createInferNativeRecoveryFeatures({}, {isCurrent:()=>true});\nif(n){void n['inferenco:recoveredOutcomes'].read; void n['inferenco:transactionSubmission'].signAndSubmitTransaction;}\nvoid a; void b; void nativeAip;\n";
+const cjs="import adapter = require('@inferenco/infer-wallet-adapter');\nimport aip = require('@inferenco/infer-wallet-adapter/aip62');\nimport register = require('@inferenco/infer-wallet-adapter/auto-register');\nconst a=adapter.createInferAIP62Wallet(); const b=aip.createInferAIP62Wallet(); const n:adapter.InferNativeRecoveryFeatures|null=adapter.createInferNativeRecoveryFeatures({}, {isCurrent:()=>true}); if(n){void n['inferenco:recoveredOutcomes'].read; void n['inferenco:transactionSubmission'].signAndSubmitTransaction;} void a; void b; void register;\n";
 writeFileSync(join(dir,'consumer.mts'),esm);
 writeFileSync(join(dir,'consumer.cts'),cjs);
 writeFileSync(join(dir,'sdk-only.mts'),"import { Account } from '@cedra-labs/ts-sdk';\nvoid Account;\n");
@@ -56,6 +56,7 @@ if(expectSdkError){
  assert.equal(results.esmStrict.exitCode,0,results.esmStrict.output);
  assert.equal(results.sdkOnlyStrict.exitCode,0,results.sdkOnlyStrict.output);
 }
-const output={adapterVersion:'0.2.2-rc.1',sdkVersion:JSON.parse(readFileSync(require.resolve('@cedra-labs/ts-sdk/package.json'),'utf8')).version,typescript:ts.version,resolutions,results,cjsPackagingRegression:'passed',strictEsmQualification:expectSdkError?'FAILED: explicitly reproduced upstream SDK EventEmitter declarations':'passed'};
+const adapterPackage=JSON.parse(readFileSync(join(dirname(require.resolve(names[0])),'..','package.json'),'utf8'));
+const output={adapterVersion:adapterPackage.version,sdkVersion:JSON.parse(readFileSync(require.resolve('@cedra-labs/ts-sdk/package.json'),'utf8')).version,typescript:ts.version,resolutions,results,cjsPackagingRegression:'passed',strictEsmQualification:expectSdkError?'FAILED: explicitly reproduced upstream SDK EventEmitter declarations':'passed'};
 writeFileSync(join(dir,'result.json'),JSON.stringify(output,null,2)+'\n');
 console.log(JSON.stringify({sdk:output.sdkVersion,cjsPackagingRegression:output.cjsPackagingRegression,strictEsmQualification:output.strictEsmQualification,result:join(dir,'result.json')},null,2));

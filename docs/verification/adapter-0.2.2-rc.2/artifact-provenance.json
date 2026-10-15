@@ -1,0 +1,174 @@
+{
+  "schema": "infer-adapter-local-artifact-v1",
+  "package": {
+    "name": "@inferenco/infer-wallet-adapter",
+    "version": "0.2.2-rc.2"
+  },
+  "source": {
+    "commit": "b72306fea767ebf34689ab14dea981544d5bd38e",
+    "branch": "fix/infer-connect-0.2.2-rc.1",
+    "versionPatchSha256": "560ea0fb8db8317e428584a93a9b964e75b882560485f83e6ad53f0dccdaa605",
+    "versionPatchPaths": [
+      "package.json",
+      "package-lock.json"
+    ],
+    "sourceFilesSha256": {
+      "src/InferClient.ts": "c4ecaa0c0b22822098de602f386f0cd4e71a2283fd46527d7b599d035f39cf6b",
+      "src/InferWallet.ts": "d41bba0972fff14afe8c3c17a270d566ad7e5b8ef0990263065411b6a602470a",
+      "src/aip62.ts": "bf1ca717e82874883f479e6f193fc1664de94d40d62278fbee6bb74df70daae4",
+      "src/auto-register.ts": "e3f6168d57e2d5ee772bec7e642a8e810b8e47d9f912f9af9338efc6dc9ba7bf",
+      "src/bridge/index-public.ts": "ada8622e11973c62b6c95aed64d39e8c827f5bc6bf1bf782432dc46711ddcca7",
+      "src/bridge/pkce.ts": "52a2fb275d3448b8176ddbbc87709003b5d1156ff5f7cfef97310f402b220407",
+      "src/bridge/token.ts": "ed148f6813201755bd06c126677782f94f1e1518eb34b03f7ce797caebd04b71",
+      "src/bridge/url.ts": "69587e22b620f2170a85570fef8383b33df6d674778769ab3f36008508dd4bd8",
+      "src/bridge.ts": "42691791cd28c56b77dbb30857967e7e1bafccdcad07b8ccc67821c6e4edf4ed",
+      "src/constants.ts": "987feb7c982131cfca8f5177c93a6d496bbdd92d7b0e2bc336cedea87fe89945",
+      "src/conversion.ts": "1af2930d73747c5ed5649f4621b0861ae39cc9c41714f35abfc50f207bf3c40a",
+      "src/deeplink.ts": "43875eac53499bab52b144d4e45ead684123ae14b4f92ede6ad1b6eaa40a113f",
+      "src/desktopRequests.ts": "0b35c329578fd673acb33e18025d53a43783671034790482a4a62fbc4846f766",
+      "src/durableRecovery.ts": "e35b755efe925f4e54b5914940d3d55db0c31734e198a2877a85282d7081e37c",
+      "src/errors.ts": "b18c0b6899943fcc2ba5b1d7ec6443b4a08cfd1a4e79b22479e85747b8aa55ea",
+      "src/externalTransactionRecovery.ts": "a2983210f6c9d1baa4756f2c1eb3ceebc46ac2af3979f1fa7826f0bd5c735966",
+      "src/hosted.ts": "ffc0de268b2fdde445cc93d72c7bc04981cd1a463976c9fce057478dd8470d73",
+      "src/index.ts": "1fc236ff9ba79c3d5fe211812a549bf60c62d4a178e268419911168e23fd998b",
+      "src/integrationContract.ts": "299e291c90798fe6c5bbccb1cdee7731e3f3beeb382b0dd653d6d5d735a2e43f",
+      "src/mobileCrypto.ts": "452b3910b28d5dee022bbbad297a08314c21511cc21bee088dfdd8e1de40f42d",
+      "src/mobileRelay.ts": "08adae287999770f22c6fb0fcdb7b18389d3fb8c22b6cf01be9afe27558531fc",
+      "src/mobileRequests.ts": "eccbc0805feb1f43a4e369dc7395a6b87cea4fafa7ff1bdd5d902032a4885d5e",
+      "src/mobileReturnCoordinator.ts": "4271abb262d4c80e067f95b7a93fa1b3c9923d571cdaec64318a0c9ca3467325",
+      "src/mobileSocket.ts": "5da03815c0ec28fc8e8b340b516c403a30c15019cf55326fff1fba64c38a6240",
+      "src/nativeRecovery.ts": "8d93fd824e8bb99cb555e9a3cdb5ef9143c88273aaac28c2d0acdf830559e774",
+      "src/nonDispatchEvidence.ts": "4b694688d865c6fef30938103af7a50c5acd68836549cdcdffbb88583fba6efb",
+      "src/provider.ts": "f747a94a38cec137b477c1280a2941dd008d54797eb727ee5e6c773b432da180",
+      "src/recovery.ts": "11e4845d55be4c5a5f7da0be16142d25ae10de2d14f00d16d6c7a1118fe4eae8",
+      "src/requestArchive.ts": "899829db0b228a89ba3e6e149aa8259d24e3020379f64b09632892ec33c4f2a9",
+      "src/types.ts": "9ff556c767cf59667ecdd8f0ba2a601afed43c4e34ccf372a7cf90c716e5befe"
+    }
+  },
+  "artifact": {
+    "filename": "inferenco-infer-wallet-adapter-0.2.2-rc.2.tgz",
+    "path": "/tmp/point8-adapter-20261014/inferenco-infer-wallet-adapter-0.2.2-rc.2.tgz",
+    "size": 308558,
+    "sha1": "daf8c8a77d7e658bbfe45f22b162c646799e105d",
+    "sha256": "4aa4403abb61836c6bce8bd71e86d63f1f52f133476135620dd29dafa563cf77",
+    "integrity": "sha512-2mdtU0aSgayuxcxXDIspxvJSTzHCcnJdxR0Q735PzyV3pP6tlziKkjvdQ27zZZtIBjTBStIGuIdRIEGFXRXpJg=="
+  },
+  "dependencyClosure": {
+    "sdkVersion": "2.2.9",
+    "lockPackagesSha256": "962564ecd040cebd0c44dc380ff15bcfcb2cbbea0bdfd92781450b54069fe4ff",
+    "unchangedFromSourceHead": true
+  },
+  "packagedFiles": [
+    {
+      "path": "dist/aip62.cjs",
+      "size": 314386,
+      "sha256": "cd3576d7e84d74c8aaa99d0494825803ace8374b923d0784206a340e82423a1f"
+    },
+    {
+      "path": "dist/auto-register.cjs",
+      "size": 305699,
+      "sha256": "98b4745195026e712134310f9a15c64de9dbe83f79f41b247c0af66ebc8b2977"
+    },
+    {
+      "path": "dist/index.cjs",
+      "size": 345915,
+      "sha256": "4de117766b29944b417c753bae1b7dbd8dda9d9159497d48347aa8e2946c476a"
+    },
+    {
+      "path": "dist/aip62-z4dAy8rm.d.cts",
+      "size": 41631,
+      "sha256": "7552f9477661486ff3521a1bb7dbcc54e2cfed12288d0d8416561d720a35873a"
+    },
+    {
+      "path": "dist/aip62.d.cts",
+      "size": 399,
+      "sha256": "43b118af2ff475849f1c86b127498eeba093ecaf88fd26a8f95a100581845d5a"
+    },
+    {
+      "path": "dist/auto-register.d.cts",
+      "size": 13,
+      "sha256": "6caa0b04bdc10582a3729dae9244f21c5bec0b9ffe7e2a84999c2f868f5dd9be"
+    },
+    {
+      "path": "dist/index.d.cts",
+      "size": 60590,
+      "sha256": "5098d37bf25ed2e0144ab23e8e916b9ad55135b48ca8a0c081b7dcee0a002587"
+    },
+    {
+      "path": "dist/aip62.js",
+      "size": 281,
+      "sha256": "32d44ff5b371e708fa9ff0807513037ad46866e81d9d9623cf7bb927ddd0e729"
+    },
+    {
+      "path": "dist/auto-register.js",
+      "size": 169,
+      "sha256": "6017c8d31a6876c17b85c1541ce5ffaecfca5bd463d2ddd91c0d6d269f4057aa"
+    },
+    {
+      "path": "dist/chunk-5G46GIML.js",
+      "size": 308852,
+      "sha256": "11b0c65b74a8e29bd3db3c0616fd628f9453ce17b0dddecf407ce0f12f3c5473"
+    },
+    {
+      "path": "dist/chunk-CE7PN3PC.js",
+      "size": 1384,
+      "sha256": "375e48d75311d26e98c39f3d513fb504c51a69f1338f0e8b21bd3a064a22be45"
+    },
+    {
+      "path": "dist/chunk-KCKU4DEO.js",
+      "size": 4441,
+      "sha256": "99d99c42ee8887a8fd307af026a66f45fab7d4aff065716cdb3131fe1a561374"
+    },
+    {
+      "path": "dist/chunk-P7VPXC62.js",
+      "size": 8554,
+      "sha256": "2bfd0fcc7bdc50c11de24239d80f00a52d9332e4355f367df3c6f3310838512a"
+    },
+    {
+      "path": "dist/index.js",
+      "size": 17962,
+      "sha256": "234ac77c151b6e62cfe5e1687b8ed87952a7380021446e229fe7ef63d8412170"
+    },
+    {
+      "path": "dist/pkce-2TU4RVWW.js",
+      "size": 319,
+      "sha256": "18a82e972e2d7672d4ac125424b390519fcf674bfd6a4dbc1316803fe7366c27"
+    },
+    {
+      "path": "dist/token-T4LHI36N.js",
+      "size": 475,
+      "sha256": "800c7313d8c2567a6dff4ffc77f7d950d6acc3619ee41d50e0a87e64105117f9"
+    },
+    {
+      "path": "package.json",
+      "size": 2288,
+      "sha256": "c77bdd2364eecccda772ad4ac5964bc9dbb23e5526b917aa04a42f044b773b15"
+    },
+    {
+      "path": "README.md",
+      "size": 26582,
+      "sha256": "b4e832a7da8ca5782d081b96e9d9b399df991a16974517155f266d11b5a2ac55"
+    },
+    {
+      "path": "dist/aip62-z4dAy8rm.d.ts",
+      "size": 41631,
+      "sha256": "7552f9477661486ff3521a1bb7dbcc54e2cfed12288d0d8416561d720a35873a"
+    },
+    {
+      "path": "dist/aip62.d.ts",
+      "size": 398,
+      "sha256": "fea94b743152854712268913834a41944f05e60d280718487d4762c3efb4e9ea"
+    },
+    {
+      "path": "dist/auto-register.d.ts",
+      "size": 13,
+      "sha256": "6caa0b04bdc10582a3729dae9244f21c5bec0b9ffe7e2a84999c2f868f5dd9be"
+    },
+    {
+      "path": "dist/index.d.ts",
+      "size": 60588,
+      "sha256": "8903b23e7f2ce80b9249994895f2bb7357a5ad9858708e3fa5b7712cf3aff9cd"
+    }
+  ],
+  "published": false
+}
