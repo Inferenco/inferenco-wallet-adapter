@@ -535,6 +535,10 @@ export interface InferWalletAdapterLike {
     transaction: InferTransactionPayload,
     options?: InputGenerateTransactionOptions
   ): Promise<CedraSignAndSubmitTransactionOutput>;
+  /**
+   * @deprecated Payload-only compatibility alias; does not accept raw transactions or BCS bytes.
+   * Use signAndSubmitTransaction for payload submission, or signTransaction for prebuilt signing.
+   */
   signAndSubmitBCSTransaction(
     transaction: InferTransactionPayload,
     options?: InputGenerateTransactionOptions

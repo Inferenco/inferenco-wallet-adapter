@@ -1619,12 +1619,12 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
     }
   }
 
-  /** Documented SDK convenience; the standard feature validates its own input first. */
+  /**
+   * Submit an entry-function request; the standard feature validates its own input first.
+   * Prebuilt SDK transactions are supported by signTransaction (sign-only), not submission.
+   */
   async signAndSubmitTransaction(
-    transaction:
-      | AnyRawTransaction
-      | InferTransactionPayload
-      | CedraSignAndSubmitTransactionInput,
+    transaction: InferTransactionPayload | CedraSignAndSubmitTransactionInput,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     const wire = normalizeSubmitInput(
@@ -1894,8 +1894,13 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
       );
   }
 
+  /**
+   * @deprecated Payload-only compatibility alias. Use signAndSubmitTransaction for
+   * entry-function requests, or signTransaction to sign exact prebuilt transactions.
+   * This alias does not submit raw transactions or BCS bytes.
+   */
   async signAndSubmitBCSTransaction(
-    transaction: AnyRawTransaction | InferTransactionPayload,
+    transaction: InferTransactionPayload,
     options?: unknown
   ): Promise<CedraSignAndSubmitTransactionOutput> {
     return this.signAndSubmitTransaction(transaction, options);

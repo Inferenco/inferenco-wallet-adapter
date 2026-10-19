@@ -168,6 +168,26 @@ const signed = await client.signTransaction(rawTransaction);
 const result = await client.signAndSubmitTransaction(transactionPayload);
 ```
 
+### Submission compatibility
+
+`signAndSubmitTransaction` accepts entry-function requests, including the SDK
+`{ data, options }` convenience form. The registered wallet-standard feature uses
+`{ payload, maxGasAmount?, gasUnitPrice? }` instead.
+
+Prebuilt SDK `AnyRawTransaction` objects (including simple, multi-agent and fee-payer
+transactions) and raw BCS bytes are not supported by sign-and-submit. The client
+previously advertised raw transactions in its TypeScript signature even though the
+submission validator rejected them; the signature now reflects that runtime boundary.
+
+For exact prebuilt transactions, use `signTransaction(rawTransaction)` to obtain the
+signature/authenticator, then submit explicitly using your application's supported
+SDK submission flow. This does not automatically broadcast or rebuild the transaction.
+
+`signAndSubmitBCSTransaction` is deprecated: despite its historical name it is only
+a payload-submission alias. Existing supported payload calls continue to work; use
+`signAndSubmitTransaction` for new calls. Do not extract a raw transaction's payload
+as a workaround: that can lose its exact sequence, expiry, fee-payer or signer binding.
+
 ### WalletCore Resume Helper
 
 If your dApp uses Cedra `WalletCore`, call the resume helper during provider bootstrap:
@@ -242,7 +262,7 @@ The plugin adapter class, compatible with plugin-style wallet consumers.
 | `signMessage(input)`                     | `Promise<CedraSignMessageOutput>`                                              | Sign an arbitrary message             |
 | `signTransaction(tx, opts?)`             | `Promise<Uint8Array \| { authenticator, rawTransaction?: AnyRawTransaction }>` | Sign a transaction without submitting |
 | `signAndSubmitTransaction(tx, opts?)`    | `Promise<CedraSignAndSubmitTransactionOutput>`                                 | Sign and submit a transaction         |
-| `signAndSubmitBCSTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>`                                 | Sign and submit (BCS variant)         |
+| `signAndSubmitBCSTransaction(tx, opts?)` | `Promise<CedraSignAndSubmitTransactionOutput>`                                 | Deprecated payload-only alias         |
 | `onAccountChange(cb)`                    | `Promise<void>`                                                                | Subscribe to account changes          |
 | `onNetworkChange(cb)`                    | `Promise<void>`                                                                | Subscribe to network changes          |
 | `deeplinkProvider(url?)`                 | `string`                                                                       | Generate a deeplink URL               |

@@ -228,6 +228,10 @@ export class InferWallet
     return this.client.signAndSubmitTransaction(transaction, options);
   }
 
+  /**
+   * @deprecated Payload-only compatibility alias; does not accept raw transactions or BCS bytes.
+   * Use signAndSubmitTransaction for payload submission, or signTransaction for prebuilt signing.
+   */
   async signAndSubmitBCSTransaction(
     transaction: InferTransactionPayload,
     options?: unknown

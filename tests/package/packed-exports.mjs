@@ -14,8 +14,31 @@ mkdirSync(dir,{recursive:true});
 const names=['@inferenco/infer-wallet-adapter','@inferenco/infer-wallet-adapter/aip62','@inferenco/infer-wallet-adapter/auto-register'];
 const esm="import { createInferAIP62Wallet, createInferNativeRecoveryFeatures, type InferNativeRecoveryFeatures } from '@inferenco/infer-wallet-adapter';\nimport { createInferAIP62Wallet as aip, createInferNativeRecoveryFeatures as nativeAip } from '@inferenco/infer-wallet-adapter/aip62';\nimport '@inferenco/infer-wallet-adapter/auto-register';\nconst a=createInferAIP62Wallet(); const b=aip();\nconst n:InferNativeRecoveryFeatures|null=createInferNativeRecoveryFeatures({}, {isCurrent:()=>true});\nif(n){void n['inferenco:recoveredOutcomes'].read; void n['inferenco:transactionSubmission'].signAndSubmitTransaction;}\nvoid a; void b; void nativeAip;\n";
 const cjs="import adapter = require('@inferenco/infer-wallet-adapter');\nimport aip = require('@inferenco/infer-wallet-adapter/aip62');\nimport register = require('@inferenco/infer-wallet-adapter/auto-register');\nconst a=adapter.createInferAIP62Wallet(); const b=aip.createInferAIP62Wallet(); const n:adapter.InferNativeRecoveryFeatures|null=adapter.createInferNativeRecoveryFeatures({}, {isCurrent:()=>true}); if(n){void n['inferenco:recoveredOutcomes'].read; void n['inferenco:transactionSubmission'].signAndSubmitTransaction;} void a; void b; void register;\n";
-writeFileSync(join(dir,'consumer.mts'),esm);
-writeFileSync(join(dir,'consumer.cts'),cjs);
+const submissionTypes = `
+function checkSubmissionTypes(
+  client: import('@inferenco/infer-wallet-adapter').InferClient,
+  wallet: import('@inferenco/infer-wallet-adapter').InferWallet,
+  raw: import('@cedra-labs/ts-sdk').AnyRawTransaction
+) {
+  const payload = { function: '0x1::chips::claim_free_chips' as const, functionArguments: [], typeArguments: [] };
+  void client.signAndSubmitTransaction(payload);
+  void client.signAndSubmitTransaction({ payload });
+  void wallet.signAndSubmitTransaction({ data: payload });
+  void client.signTransaction(raw);
+  void wallet.signTransaction(raw);
+  // @ts-expect-error Raw SDK objects are sign-only, not payload submission inputs.
+  void client.signAndSubmitTransaction(raw);
+  // @ts-expect-error The historical BCS alias does not submit raw SDK objects.
+  void client.signAndSubmitBCSTransaction(raw);
+  // @ts-expect-error Plugin submission also rejects raw SDK objects.
+  void wallet.signAndSubmitTransaction(raw);
+  // @ts-expect-error Plugin BCS alias also remains payload-only.
+  void wallet.signAndSubmitBCSTransaction(raw);
+}
+void checkSubmissionTypes;
+`;
+writeFileSync(join(dir,'consumer.mts'),esm+submissionTypes);
+writeFileSync(join(dir,'consumer.cts'),cjs+submissionTypes);
 writeFileSync(join(dir,'sdk-only.mts'),"import { Account } from '@cedra-labs/ts-sdk';\nvoid Account;\n");
 const resolutions=[];
 for(const name of names){

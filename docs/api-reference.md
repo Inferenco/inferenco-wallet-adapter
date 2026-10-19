@@ -154,7 +154,7 @@ console.log(result.hash);
 
 ##### `signAndSubmitBCSTransaction(transaction, options?): Promise<CedraSignAndSubmitTransactionOutput>`
 
-Compatibility alias for `signAndSubmitTransaction`. It does not strip options, retry signing or accept arbitrary raw-transaction submission. Use sign-only `signTransaction` for exact prebuilt BCS.
+**Deprecated:** payload-only compatibility alias for `signAndSubmitTransaction`. It does not strip options, retry signing or accept arbitrary raw-transaction submission. Use sign-only `signTransaction` for exact prebuilt BCS.
 
 ##### `onAccountChange(callback: (account: AccountInfo) => void): Promise<void>`
 
@@ -233,11 +233,15 @@ Sign a transaction.
 
 ##### `signAndSubmitTransaction(transaction, options?): Promise<CedraSignAndSubmitTransactionOutput>`
 
-Sign and submit a transaction.
+Sign and submit an entry-function request (`InferTransactionPayload` or the standard
+`CedraSignAndSubmitTransactionInput` shape). Prebuilt SDK `AnyRawTransaction` and BCS
+bytes are unsupported; use sign-only `signTransaction` and a separate explicit SDK
+submission flow when exact prebuilt transaction signing is required.
 
 ##### `signAndSubmitBCSTransaction(transaction, options?): Promise<CedraSignAndSubmitTransactionOutput>`
 
-Compatibility alias for signAndSubmitTransaction; no automatic retry or removal of restrictions.
+**Deprecated:** payload-only compatibility alias for `signAndSubmitTransaction`.
+It does not accept `AnyRawTransaction` or BCS bytes, retry automatically or remove restrictions.
 
 ##### `refreshProvider(): InferProvider | undefined`
 
