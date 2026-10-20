@@ -221,7 +221,12 @@ export interface InferBridgeConnectPoll {
   error?: string;
 }
 
-export interface InferBridgeMessagePoll {
+export interface InferBridgeResultMetadata {
+  integrationContractVersion?: 1;
+  capabilities?: InferIntegrationCapabilities;
+}
+
+export interface InferBridgeMessagePoll extends InferBridgeResultMetadata {
   signerAddress?: string;
   profile?: string;
   prefix?: string;
@@ -240,7 +245,7 @@ export interface InferBridgeMessagePoll {
   error?: string;
 }
 
-export interface InferBridgeSignTransactionPoll {
+export interface InferBridgeSignTransactionPoll extends InferBridgeResultMetadata {
   status?: string;
   requestId?: string;
   address?: string;
@@ -261,7 +266,7 @@ export interface InferBridgeSignTransactionPoll {
 export type InferTerminalStatus =
   | "pending" | "approved" | "rejected" | "failed";
 
-interface InferBridgeTransactionPollBase {
+interface InferBridgeTransactionPollBase extends InferBridgeResultMetadata {
   requestId: string;
   signature?: unknown;
   result?: unknown;

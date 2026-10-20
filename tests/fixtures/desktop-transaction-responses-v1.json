@@ -1,0 +1,85 @@
+{
+  "schema": "infer-desk-desktop-transaction-responses-v1",
+  "cases": [
+    {
+      "name": "approved-memory",
+      "method": "signAndSubmitTransaction",
+      "requestId": "desk-fixture-approved-memory",
+      "httpStatus": 200,
+      "response": {
+        "requestId": "desk-fixture-approved-memory",
+        "status": "approved",
+        "hash": "0xabababababababababababababababababababababababababababababababab",
+        "integrationContractVersion": 1,
+        "capabilities": {
+          "transactionRestrictions": true,
+          "messageProfile": "cedra:message:v1",
+          "completeResults": true,
+          "durableInvocationLookup": false
+        }
+      }
+    },
+    {
+      "name": "rejected-memory",
+      "method": "signAndSubmitTransaction",
+      "requestId": "desk-fixture-rejected-memory",
+      "httpStatus": 200,
+      "response": {
+        "status": "rejected",
+        "requestId": "desk-fixture-rejected-memory",
+        "error": "fixture_error"
+      }
+    },
+    {
+      "name": "failed-memory",
+      "method": "signAndSubmitTransaction",
+      "requestId": "desk-fixture-failed-memory",
+      "httpStatus": 200,
+      "response": {
+        "status": "failed",
+        "requestId": "desk-fixture-failed-memory",
+        "error": "fixture_error"
+      }
+    },
+    {
+      "name": "approved-durable",
+      "method": "signAndSubmitTransaction",
+      "requestId": "desk-fixture-approved-durable",
+      "httpStatus": 200,
+      "response": {
+        "requestId": "desk-fixture-approved-durable",
+        "status": "approved",
+        "hash": "0xabababababababababababababababababababababababababababababababab",
+        "integrationContractVersion": 1,
+        "capabilities": {
+          "transactionRestrictions": true,
+          "messageProfile": "cedra:message:v1",
+          "completeResults": true,
+          "durableInvocationLookup": true
+        }
+      }
+    },
+    {
+      "name": "rejected-durable",
+      "method": "signAndSubmitTransaction",
+      "requestId": "desk-fixture-rejected-durable",
+      "httpStatus": 200,
+      "response": {
+        "status": "rejected",
+        "requestId": "desk-fixture-rejected-durable",
+        "error": "fixture_error"
+      }
+    },
+    {
+      "name": "failed-durable",
+      "method": "signAndSubmitTransaction",
+      "requestId": "desk-fixture-failed-durable",
+      "httpStatus": 200,
+      "response": {
+        "status": "failed",
+        "requestId": "desk-fixture-failed-durable",
+        "error": "fixture_error"
+      }
+    }
+  ]
+}

@@ -112,8 +112,9 @@ describe("exact prebuilt signing", () => {
       await expect(new InferClient().signTransaction(transaction)).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
     });
 
-  it.each(["approved", "trailing authenticator", "changed raw", "rejected", "ambiguous rejection"])(
-    "validates original desktop signing bytes: %s", async (kind) => {
+  it.each(["approved", "trailing authenticator", "changed raw", "rejected", "ambiguous rejection"]
+    .flatMap(kind => [false, true].map(versioned => [kind, versioned] as const)))(
+    "validates original desktop signing bytes: %s versioned=%s", async (kind, versioned) => {
       const { transaction, wire } = fixture();
       _setBridgeTokenForTesting("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
       const payload = kind === "rejected" ? { status: "rejected", error: "Declined" } :
@@ -122,7 +123,8 @@ describe("exact prebuilt signing", () => {
           ...(kind === "changed raw" ? { rawTransactionBcsHex: fixture().transaction.toString() } : {}) };
       const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
         if (init?.method === "DELETE") return new Response(null, { status: 204 });
-        const body = String(url).endsWith("/sign-transaction") ? { requestId: "request-1" } : payload;
+        const body = String(url).endsWith("/sign-transaction") ? { requestId: "request-1" } : { ...payload,
+          ...(versioned ? { integrationContractVersion: 1, capabilities: { completeResults: true } } : {}) };
         return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
       });
       const promise = tryLocalBridgeSignTransaction({ rawTransactionBcsHex: transaction.toString() }, {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as durableRecovery from "../src/durableRecovery";
 import { InferClient } from "../src/InferClient";
 import { InferAdapterError, InferErrorCode, unresolvedRequestError } from "../src/errors";
 import { storeExternalSession, tryLocalBridgeSignAndSubmit } from "../src/bridge";
@@ -84,13 +85,19 @@ describe("durable recovery across page and session boundaries", () => {
     expect(await listRecoverableRequests()).toEqual([]);
   });
 
-  it("saves a direct desktop approval before returning its hash", async () => {
+  it.each([
+    {},
+    { integrationContractVersion: 1, capabilities: {
+      transactionRestrictions: true, completeResults: true,
+      durableInvocationLookup: true, messageProfile: "cedra:message:v1"
+    } }
+  ])("saves a direct desktop approval before returning its hash %j", async (metadata) => {
     _setBridgeTokenForTesting(token);
     storeExternalSession(session);
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       if (init?.method === "POST") return json({ requestId: "direct-desktop" });
       expect(String(input)).toContain("/transaction-request/direct-desktop");
-      return json({ status: "approved", requestId: "direct-desktop", hash });
+      return json({ status: "approved", requestId: "direct-desktop", hash, ...metadata });
     });
     await expect(tryLocalBridgeSignAndSubmit({
           payload: {
@@ -107,6 +114,47 @@ describe("durable recovery across page and session boundaries", () => {
     });
     expect(fetch).toHaveBeenCalledTimes(calls);
   });
+
+  it.each(["lost-response", "persistence-failure"])(
+    "recovers the exact versioned result after %s without a second submission", async (failure) => {
+      _setBridgeTokenForTesting(token);
+      storeExternalSession(session);
+      const requestId = "versioned-interrupted";
+      let reads = 0;
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        if (init?.method === "POST") return json({ requestId });
+        expect(String(input)).toContain(`/transaction-request/${requestId}`);
+        if (++reads === 1 && failure === "lost-response") throw new Error("connection lost");
+        return json({ status: "approved", requestId, hash, integrationContractVersion: 1,
+          capabilities: { completeResults: true, durableInvocationLookup: true } });
+      });
+      if (failure === "persistence-failure")
+        vi.spyOn(durableRecovery, "saveDurableFinal").mockRejectedValueOnce(new Error("write failed"));
+      await expect(tryLocalBridgeSignAndSubmit({ payload: {
+        function: "0x1::fixture::run", typeArguments: [], functionArguments: []
+      } } as never, session)).rejects.toMatchObject({
+        code: InferErrorCode.RequestOutcomeUnknown, requestId
+      });
+      const [row] = await listDurableRequests();
+      expect(row.requestId).toBe(requestId);
+      expect(row.final).toBeUndefined();
+      // Simulate a replacement tab: durable identity, not sessionStorage, owns recovery.
+      window.sessionStorage.clear();
+      await expect(readRecoverableRequest(row.id)).resolves.toMatchObject({
+        requestId, status: "approved", output: { hash }
+      });
+      const calls = fetch.mock.calls.length;
+      window.localStorage.clear();
+      await expect(readRecoverableRequest(row.id)).resolves.toMatchObject({
+        requestId, status: "approved", output: { hash }
+      });
+      expect(fetch).toHaveBeenCalledTimes(calls);
+      expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+      expect((await listDurableRequests())[0].final).toMatchObject({
+        status: "approved", method: "signAndSubmitTransaction", hash
+      });
+    }
+  );
 
   it("saves a direct mobile approval before returning its hash", async () => {
     const dapp = createKeyPair(), wallet = createKeyPair();
