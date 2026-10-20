@@ -1,5 +1,5 @@
 {
-  "version": "0.3.1-rc.1",
+  "version": "0.3.0-rc.2",
   "baseBranch": "fix/infer-connect-0.2.2-rc.1",
   "baseCommit": "641782a18a25e076ebc9ffed8e2b2f662b791d12",
   "testsPassed": 652,
@@ -7,9 +7,10 @@
   "typecheck": "passed",
   "build": "passed",
   "packedCasesPassed": 20,
-  "archiveSha256": "debb727611328a3d8334b8eb4b444db740d21d38d828fd149aefb9c87afe74b6",
+  "archiveSha256": "8c42f2ce8d87e43cfaa1d1c165f715583934ebdd8a2410856acf2eaec32e7fa0",
   "fixtureSha256": "942fb1bdd5c315c8ace7cbc4b8620e87540b70afc7c72310bca981cfad917610",
   "packedDependencySetup": "Extracted archive used existing lockfile-installed workspace node_modules through a temporary symlink",
   "liveWalletOrNetworkRequests": false,
-  "published": false
+  "published": false,
+  "versionCorrection": "Version-only correction from 0.3.1-rc.1; all dist files byte-identical. Earlier 652-test/typecheck/build results remain applicable; 20 archive checks rerun for 0.3.0-rc.2."
 }

@@ -44,7 +44,7 @@ node scripts/qualify-desktop-package.mjs /absolute/extracted/package \
 
 The application has a private local artifact `0.3.0-rc.2-local.20261020`, pinned by
 archive integrity and a recorded source patch over `641782a18a25e076ebc9ffed8e2b2f662b791d12`.
-That archive preserves the earlier source-package baseline; the current branch now prepares `0.3.1-rc.1`. Its local archive
+That archive preserves the earlier source-package baseline; the current branch now prepares `0.3.0-rc.2`. Its local archive
 manifest overrides the version, marks it private, and removes lifecycle scripts.
 No published 0.3.0-rc.1 artifact has been replaced.
 
@@ -59,9 +59,9 @@ and metadata-bearing Desk replies: 98 tests pass across the two suites, includin
 13 additional versioned cases. This supplements the earlier 639-test full suite;
 the full suite was not rerun for test-only changes.
 
-## 0.3.1-rc.1 branch handoff
+## 0.3.0-rc.2 branch handoff
 
-The candidate updates the root manifest and lockfile to `0.3.1-rc.1`. The earlier
+The candidate updates the root manifest and lockfile to `0.3.0-rc.2`. The earlier
 private application archive remains historical evidence and is not repacked or
 repinned by this adapter release preparation. The standalone fixture copied into
 `tests/fixtures/desktop-transaction-responses-v1.json` is byte-identical to the Desk
@@ -72,6 +72,6 @@ skip**; typecheck and build pass. All **20 extracted-package qualification cases
 pass against the versioned archive. The extracted archive used the existing
 lockfile-installed runtime dependencies via a temporary `node_modules` symlink;
 install the declared dependencies before reproducing the standalone archive check.
-See [verification identities](verification/adapter-0.3.1-rc.1/verification.json) and
-[package case results](verification/adapter-0.3.1-rc.1/desktop-package-qualification.json).
+See [verification identities](verification/adapter-0.3.0-rc.2/verification.json) and
+[package case results](verification/adapter-0.3.0-rc.2/desktop-package-qualification.json).
 No package publication or live-wallet acceptance is implied.
