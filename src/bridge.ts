@@ -7,6 +7,7 @@ import {
   type CanonicalTransactionInput
 } from "./integrationContract";
 import { notInvokedError } from "./nonDispatchEvidence";
+import { DESKTOP_RESULT_METADATA_KEYS, hasValidDesktopResultMetadata } from "./desktopResultMetadata";
 import {
   Network
 } from "@cedra-labs/ts-sdk";
@@ -2537,6 +2538,12 @@ function decodeDesktopResult(
   | CedraSignMessageOutput
   | CedraSignTransactionOutputV1_1
   | CedraSignAndSubmitTransactionOutput {
+  if (!hasValidDesktopResultMetadata(payload)) {
+    throw new InferAdapterError(
+      InferErrorCode.InternalError,
+      "Infer Desk returned unsupported result metadata"
+    );
+  }
   // Infer Desk sign-only poll payloads can omit requestId. Their GET route
   // already names the original request; reject any conflicting ID if present.
   // Recovery separately requires an echoed exact ID before trusting a final read.
@@ -2583,7 +2590,7 @@ function decodeDesktopResult(
     const submitted = payload as InferBridgeTransactionPoll;
     if (
       submitted.requestId === pending.requestId &&
-      hasOnlyKeys(submitted, ["status", "requestId", "hash"]) &&
+      hasOnlyKeys(submitted, ["status", "requestId", "hash", ...DESKTOP_RESULT_METADATA_KEYS]) &&
       isValidTransactionHash(submitted.hash)
     ) {
       return { hash: submitted.hash };
@@ -2591,7 +2598,8 @@ function decodeDesktopResult(
   }
   if (
     payload.status === "rejected" &&
-    hasOnlyKeys(payload, ["status", "requestId", "error"]) &&
+    (pending.method !== "signAndSubmitTransaction" || payload.requestId === pending.requestId) &&
+    hasOnlyKeys(payload, ["status", "requestId", "error", ...DESKTOP_RESULT_METADATA_KEYS]) &&
     (payload.error === undefined || typeof payload.error === "string")
   ) {
     throw new InferAdapterError(

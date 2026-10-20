@@ -130,7 +130,8 @@ describe("real Ed25519 message bindings and truthful outcomes", () => {
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
   for (let flags = 0; flags < 8; flags++)
-    it("external Desktop complete context combination " + flags, async () => {
+    for (const versioned of [false, true])
+    it("external Desktop complete context combination " + flags + " versioned=" + versioned, async () => {
       const input = {
         message: "challenge π",
         nonce: "nonce",
@@ -150,6 +151,7 @@ describe("real Ed25519 message bindings and truthful outcomes", () => {
                 : {
                     status: "approved",
                     requestId: "message-1",
+                    ...(versioned ? { integrationContractVersion: 1, capabilities: { messageProfile: "cedra:message:v1", completeResults: true } } : {}),
                     ...output(input)
                   }
             ),

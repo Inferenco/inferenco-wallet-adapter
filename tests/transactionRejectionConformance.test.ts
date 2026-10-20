@@ -410,6 +410,67 @@ describe("sign-and-submit rejection conformance", () => {
     );
   });
 
+  it.each([
+    { integrationContractVersion: 1 },
+    { integrationContractVersion: 1, capabilities: {} },
+    { integrationContractVersion: 1, capabilities: {
+      transactionRestrictions: true, completeResults: true,
+      durableInvocationLookup: true, messageProfile: "cedra:message:v1",
+      durableExternalSubmissionRecovery: false, durableInvocationSubmission: false
+    } }
+  ])("accepts versioned Desk approval metadata %j", async (metadata) => {
+    await expect(invokeBridge({ status: "approved", hash: HASH, ...metadata }))
+      .resolves.toEqual({ hash: HASH });
+  });
+
+  it("accepts a clean versioned Desk rejection", async () => {
+    await expectCode(invokeBridge({ status: "rejected", error: "user_cancelled",
+      integrationContractVersion: 1, capabilities: { completeResults: true }
+    }), InferErrorCode.UserRejected);
+  });
+
+  it.each([
+    { capabilities: {} },
+    { integrationContractVersion: 2 },
+    { integrationContractVersion: "1" },
+    { integrationContractVersion: null },
+    { integrationContractVersion: 1, capabilities: null },
+    { integrationContractVersion: 1, capabilities: [] },
+    { integrationContractVersion: 1, capabilities: true },
+    { integrationContractVersion: 1, capabilities: { completeResults: "true" } },
+    { integrationContractVersion: 1, capabilities: { durableInvocationLookup: null } },
+    { integrationContractVersion: 1, capabilities: { messageProfile: "unknown" } },
+    { integrationContractVersion: 1, capabilities: { futureAuthorization: true } },
+    { integrationContractVersion: 1, unexpected: true }
+  ])("keeps malformed/unsupported Desk metadata unresolved %j", async (metadata) => {
+    await expectCode(invokeBridge({ status: "approved", hash: HASH, ...metadata }),
+      InferErrorCode.RequestOutcomeUnknown);
+    vi.restoreAllMocks();
+    await expectCode(invokeBridge({ status: "rejected", ...metadata }),
+      InferErrorCode.RequestOutcomeUnknown);
+  });
+
+  it.each(["hash", "signature", "authenticator", "signedTransaction", "result"])(
+    "keeps versioned rejection with null %s unresolved", async (key) => {
+      await expectCode(invokeBridge({ status: "rejected", integrationContractVersion: 1,
+        capabilities: {}, [key]: null }), InferErrorCode.RequestOutcomeUnknown);
+    }
+  );
+
+  it.each([
+    { requestId: "other-request" }, { requestId: null }, { requestId: undefined },
+    { hash: "0x1234" }, { error: null }, { error: "failed" }, { result: null }
+  ])("does not let versioned metadata bypass result binding %j", async (fields) => {
+    await expectCode(invokeBridge({ status: "approved", hash: HASH,
+      integrationContractVersion: 1, capabilities: {}, ...fields }),
+      InferErrorCode.RequestOutcomeUnknown);
+  });
+
+  it("requires an exact request ID for a combined-submission rejection", async () => {
+    await expectCode(invokeBridge({ status: "rejected", requestId: undefined,
+      integrationContractVersion: 1 }), InferErrorCode.RequestOutcomeUnknown);
+  });
+
   it("supports canonical approved and legacy bare provider hashes", async () => {
     await expect(
       invokeProvider({ status: "Approved", args: { hash: HASH } })

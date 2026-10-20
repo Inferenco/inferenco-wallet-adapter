@@ -5,6 +5,20 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0-rc.2] - Unreleased
+
+### Fixed
+
+- Accept valid Infer Desk version-1 result metadata on transaction approvals and clean rejections while preserving legacy response compatibility.
+- Keep malformed metadata, mixed outcomes and mismatched request identities unresolved; metadata never authorizes resubmission.
+- Preserve durable recovery and replay of validated desktop results after lost delivery or a failed local persistence write, without issuing another transaction POST.
+
+### Validation
+
+- Cover legacy and versioned sign-only transaction and Ed25519 message results.
+- Add an extracted-package qualification harness and the Desk Rust-produced response fixture for direct delivery, recovery, malformed-envelope and persistence-failure cases.
+- See [desktop result contract and qualification](docs/DESKTOP_RESULT_METADATA_CONTRACT_2026-10-20.md). This candidate is not yet published; live-wallet and cross-device acceptance remain separate.
+
 ## [0.2.2-rc.1] - Unreleased
 
 ### Changed
