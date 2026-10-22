@@ -1,3 +1,4 @@
+import { validateNativeNotSubmitted, type NativeNotSubmittedProof } from "./nativeNotSubmitted";
 import { normalizeSignMessageOutput } from "./conversion";
 import { canonicalAddress, canonicalJson, requestCommitment } from "./integrationContract";
 import type {
@@ -44,6 +45,7 @@ export interface DurableMobileRequestEnvelope {
 }
 
 export interface DurableInvocation {
+  nativeNotSubmitted?: NativeNotSubmittedProof;
   /** Absent on historical rows; false records an originally incapable peer. */
   remoteAcknowledgementRequired?: boolean;
   transactionHash?: string;
@@ -473,6 +475,7 @@ export async function saveDurableTransactionHash(id: string, hash: string, injec
       if (!row || row.origin !== window.location.origin || !row.requestCommitment ||
           row.method !== "signAndSubmitTransaction" ||
           ("externalTransactionRecovery" in row && row.externalTransactionRecovery?.status === "not-submitted") ||
+          ("nativeNotSubmitted" in row && !!row.nativeNotSubmitted) ||
           (row.transactionHash && row.transactionHash.toLowerCase() !== hash) ||
           (row.final && (row.final.status !== "approved" ||
             row.final.method !== "signAndSubmitTransaction" || row.final.hash.toLowerCase() !== hash))) {
@@ -751,6 +754,7 @@ export async function listDurableInvocations(): Promise<DurableInvocation[]> {
 export async function updateInjectedInvocationEvidence(
   id: string,
   change: {
+    nativeNotSubmitted?: NativeNotSubmittedProof;
     final?: StoredFinal;
     deliveryState?: "acknowledged" | "archived";
     archive?: RecoveryArchive;
@@ -761,8 +765,14 @@ export async function updateInjectedInvocationEvidence(
     const tx = db.transaction(INVOCATIONS, "readwrite"),
       store = tx.objectStore(INVOCATIONS),
       lookup = store.get(id);
+    let changed = false;
     lookup.onsuccess = () => {
       const row = lookup.result as DurableInvocation | undefined;
+      let proof: NativeNotSubmittedProof | undefined;
+      try {
+        if (row && (change.nativeNotSubmitted || row.nativeNotSubmitted))
+          proof = validateNativeNotSubmitted(change.nativeNotSubmitted ?? row.nativeNotSubmitted, row);
+      } catch { tx.abort(); return; }
       if (
         !row ||
         row.origin !== window.location.origin ||
@@ -778,8 +788,10 @@ export async function updateInjectedInvocationEvidence(
           !row.final &&
           row.deliveryState &&
           row.deliveryState !== "active") ||
-        (change.deliveryState === "acknowledged" && !row.final) ||
-        (change.deliveryState === "archived" && row.final) ||
+        (proof && (row.final || row.transactionHash || change.final)) ||
+        (change.nativeNotSubmitted && row.deliveryState && row.deliveryState !== "active") ||
+        (change.deliveryState === "acknowledged" && !row.final && !proof) ||
+        (change.deliveryState === "archived" && (row.final || proof)) ||
         (row.deliveryState &&
           row.deliveryState !== "active" &&
           row.deliveryState !== change.deliveryState)
@@ -787,11 +799,13 @@ export async function updateInjectedInvocationEvidence(
         tx.abort();
         return;
       }
+      if (canonicalJson({ ...row, ...change }) === canonicalJson(row)) return;
       store.put({ ...row, ...change, updatedAt: new Date().toISOString() });
+      changed = true;
     };
     tx.oncomplete = () => {
       db.close();
-      announceRecordChange();
+      if (changed) announceRecordChange();
       resolve();
     };
     tx.onabort = () => {

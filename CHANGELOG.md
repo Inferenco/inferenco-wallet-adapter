@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Validate and persist native built-in-browser `not-submitted` proofs against the original invocation, deliver them through recovery callbacks, and require matching wallet revalidation and remote acknowledgement before local acceptance. Unknown or conflicting native execution remains unresolved.
 - Allow consumer acknowledgement of validated, durably stored mobile `not-submitted` recovery evidence. Mobile acknowledgement remains local and works offline without launching the Wallet or repeating execution.
 - Deliver these mobile terminal failures through existing recovery callbacks, retaining failed consumer writes for retry.
 - Reject archiving verified mobile terminal failures as uncertainty; prune only acknowledged evidence after the existing 30-day retention period, preserving unresolved requests and exact invocation links.

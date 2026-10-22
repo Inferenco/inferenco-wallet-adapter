@@ -1,3 +1,4 @@
+import { validateNativeNotSubmitted } from "./nativeNotSubmitted";
 import { detectProvider, nativeProviderBinding, nativeRecoveryKey } from "./provider";
 import {
   canonicalAddress,
@@ -971,6 +972,26 @@ async function readInjectedInvocationOnce(
         status: "unknown", ...uncertainExecution(row),
         reason: "native_invocation_scope_mismatch"
       };
+    if (result.submissionDisposition !== undefined || result.failureCode !== undefined) {
+      const proof = validateNativeNotSubmitted(result, row);
+      const assertNativeAuthority = async () => {
+        if (detectProvider(options) !== provider) throw new Error("Native provider changed");
+        const currentAccount = unwrap(await provider.account!()) as { address?: unknown } | null;
+        const currentNetwork = normalizeNetwork(unwrap(await provider.network!()) as Parameters<typeof normalizeNetwork>[0]);
+        if (!currentAccount || canonicalAddress(String(currentAccount.address)) !== scope.accountAddress ||
+            currentNetwork.name !== scope.network || currentNetwork.chainId !== scope.chainId || detectProvider(options) !== provider)
+          throw new Error("Native recovery authority changed");
+        await nativeProviderBinding(options)?.assertScope(scope);
+      };
+      await assertNativeAuthority();
+      if (row.deliveryState === "acknowledged") {
+        validateNativeNotSubmitted(row.nativeNotSubmitted, row);
+      } else await updateInjectedInvocationEvidence(row.id, { nativeNotSubmitted: proof });
+      await assertNativeAuthority();
+      return { ...base, status: "unknown", reason: "transaction_not_submitted",
+        submissionDisposition: proof.submissionDisposition, failureCode: proof.failureCode };
+    }
+    if (row.nativeNotSubmitted) throw new Error("Native terminal proof contradicted");
     const evidence = nativeExecutionEvidence(result, row.method);
     const recoveredHash = result.transactionHash ?? result.hash;
     if (result.transactionHash !== undefined && result.hash !== undefined &&
@@ -1180,7 +1201,15 @@ async function acknowledgeNativeResult(row: DurableInvocation, options: InferWal
   await nativeProviderBinding(options)?.assertScope(scope);
   const final = replayInjected(row);
   let reconciledHash: string | undefined;
-  if (!final || (final.status !== "approved" && final.status !== "rejected")) {
+  const notSubmitted = !!row.nativeNotSubmitted;
+  if (row.deliveryState === "acknowledged") return;
+  if (notSubmitted) {
+    validateNativeNotSubmitted(row.nativeNotSubmitted, row);
+    const observed = await readInjectedInvocation(row, options);
+    if (observed.submissionDisposition !== "not-submitted")
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "Native terminal proof cannot be revalidated");
+  }
+  if (!notSubmitted && (!final || (final.status !== "approved" && final.status !== "rejected"))) {
     // Wallet C can prove an originally uncertain broadcast using exact committed
     // chain evidence. Explicit acknowledgement may then retain acceptance,
     // including a committed abort; neither is an application-success decision.
@@ -1193,12 +1222,11 @@ async function acknowledgeNativeResult(row: DurableInvocation, options: InferWal
       throw new InferAdapterError(InferErrorCode.InternalError, "native-outcome-not-terminal");
     reconciledHash = observed.transactionHash;
   }
-  if (row.deliveryState === "acknowledged") return;
   // Explicit false is admission-time evidence of an incapable peer, not a later downgrade.
-  if (row.remoteAcknowledgementRequired === false) return;
+  if (!notSubmitted && row.remoteAcknowledgementRequired === false) return;
   const provider = detectProvider(options);
   if (!provider ||
-      (row.remoteAcknowledgementRequired === true &&
+      ((notSubmitted || row.remoteAcknowledgementRequired === true) &&
        (provider.integrationContractVersion !== 1 || !provider.acknowledgeInvocation)))
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Reconnect the original acknowledgement-capable wallet to retain a retryable acknowledgement");
@@ -1238,6 +1266,14 @@ async function acknowledgeNativeResult(row: DurableInvocation, options: InferWal
       returned.network !== scope.network || returned.chainId !== scope.chainId)
     throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement differs from the original request");
   await nativeProviderBinding(options)?.assertScope(scope);
+  if (notSubmitted) {
+    const currentAccount = unwrap(await provider.account()) as { address?: unknown } | null;
+    const currentNetwork = normalizeNetwork(unwrap(await provider.network()) as Parameters<typeof normalizeNetwork>[0]);
+    if (detectProvider(options) !== provider || !currentAccount ||
+        canonicalAddress(String(currentAccount.address)) !== scope.accountAddress ||
+        currentNetwork.name !== scope.network || currentNetwork.chainId !== scope.chainId)
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement authority changed");
+  }
   if (reconciledHash) {
     await updateInjectedInvocationEvidence(row.id, {
       final: {status:"approved",method:"signAndSubmitTransaction",hash:reconciledHash}

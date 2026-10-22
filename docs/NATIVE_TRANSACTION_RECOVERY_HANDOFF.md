@@ -206,3 +206,14 @@ package publication or ecosystem dependency adoption is established here.
 Those remain separate acceptance/release work. One user approval -> interrupted
 response -> reopened Casino -> same outcome and no duplicate submission must
 still be verified with the compatible wallet/adapter/ecosystem builds.
+
+
+## Native non-submission evidence — 22 October 2026
+
+Wallet's built-in browser can retain a proved failure before its durable signed-identity checkpoint. The native read envelope uses the existing version, invocation, commitment, method and scope, with `status: "unknown"`, `submissionDisposition: "not-submitted"`, and `failureCode: "EXECUTION_FAILED_BEFORE_BROADCAST"`. It contains no hash, payload, acceptance or chain fields. It is not a user rejection or independent chain non-inclusion proof.
+
+The adapter strictly validates this envelope, recomputes the original payload commitment, checks the current selected wallet/account/network, and atomically retains the proof before returning it or notifying subscribers. Unknown or contradictory native results cannot clear it, fabricate an approval, or overwrite a signed identity. Cached proof alone cannot establish current native authorization; lookup and acknowledgement require the original live scope and a matching fresh read.
+
+Consumers persist the distinct terminal outcome before explicitly acknowledging its opaque recovery handle. The adapter revalidates the proof, calls the same wallet's scoped `acknowledgeInvocation`, validates the returned envelope, and only then records local acknowledgement. Failed remote acknowledgement or local writes retain retryable debt. No optional-capability downgrade waives this requirement for a proof. A verified native failure cannot be archived as uncertainty; acknowledged delivery tombstones follow the existing retention policy. Reading and acknowledging never sign, submit, reopen a connection or launch a replacement request.
+
+This is generic adapter behavior, separate from external mobile-relay local acknowledgement and Desktop remote-result acknowledgement. Local tests use native provider fixtures and IndexedDB; real-device acceptance remains separate. Existing Infer NFT consumers must adopt the resulting adapter build before receiving this behavior.
