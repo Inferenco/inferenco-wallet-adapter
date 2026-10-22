@@ -497,10 +497,11 @@ export async function saveDurableTransactionHash(id: string, hash: string, injec
   });
 }
 
-/** Only the exact, revalidated desktop terminal assertion has this retention status. */
-function verifiedDesktopNotSubmitted(row: DurableRequest): boolean {
+/** Only an exact, revalidated external terminal assertion has this retention status. */
+function verifiedExternalNotSubmitted(row: DurableRequest): boolean {
   try {
-    return row.transport === "desktop-bridge" && !row.final && !row.transactionHash &&
+    return (row.transport === "desktop-bridge" || row.transport === "mobile-relay") &&
+      !row.final && !row.transactionHash &&
       validateExternalTransactionRecovery(row.externalTransactionRecovery, row).status === "not-submitted";
   } catch { return false; }
 }
@@ -518,8 +519,8 @@ export async function transitionDurableRequest(
     lookup.onsuccess = () => {
       const row = lookup.result as DurableRequest | undefined;
       if (!row || row.origin !== window.location.origin ||
-          (operation === "acknowledge" && ((!row.final && !verifiedDesktopNotSubmitted(row)) || row.state === "archived")) ||
-          (operation === "archive" && (row.state === "acknowledged" || !!row.final || verifiedDesktopNotSubmitted(row)))) {
+          (operation === "acknowledge" && ((!row.final && !verifiedExternalNotSubmitted(row)) || row.state === "archived")) ||
+          (operation === "archive" && (row.state === "acknowledged" || !!row.final || verifiedExternalNotSubmitted(row)))) {
         tx.abort();
         return;
       }
@@ -550,7 +551,7 @@ export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
       const row = entry.value as DurableRequest;
       const age = now - Date.parse(row.updatedAt);
       if (validStoredRecord(row) &&
-          ((row.state === "acknowledged" && (!!row.final || verifiedDesktopNotSubmitted(row)) && age > ACK_TOMBSTONE_MS) ||
+          ((row.state === "acknowledged" && (!!row.final || verifiedExternalNotSubmitted(row)) && age > ACK_TOMBSTONE_MS) ||
            (row.state === "archived" && !!row.archive && age > ARCHIVE_MS))) {
         entry.delete();
         if (row.invocationId) {

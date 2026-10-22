@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-22",
+  "branch": "fix/infer-connect-stale-session-reconnect",
+  "baseCommit": "c7cb053ef99bc71e7dfffcb736c9f0b58f509619",
+  "status": "local implementation; uncommitted",
+  "baselineRegression": {
+    "tests": 22,
+    "passed": 15,
+    "failed": 7,
+    "note": "Observed against unchanged source before implementation; subscriber cases added afterwards."
+  },
+  "validation": {
+    "testsPassed": 728,
+    "testsSkipped": 6,
+    "testFilesPassed": 46,
+    "testFilesSkipped": 1,
+    "newMobileTestsPassed": 24,
+    "typecheck": "passed",
+    "build": "ESM, CommonJS and declarations passed",
+    "package": "extracted archive ESM/CommonJS public recovery exports passed using existing local dependencies",
+    "independentReview": "no actionable findings"
+  },
+  "files": {
+    "src/InferClient.ts": "61c7e5bff34aa771591aa1c50d8ff878e39e868ff0f9ea19e78f4eabc88b1027",
+    "src/durableRecovery.ts": "ccdb50bb6bca78418072501657cda5314bfca33c4313d0bc09d4098309272632",
+    "src/recovery.ts": "6a69d57fc9cb6a434c6df67bb7688039646051458e7f5724e6248d7216a0b4e2",
+    "tests/mobileTerminalAcknowledgement.test.ts": "601fe5a36e6ba39dff6e96c3437c4571d92f4f5fed576ba603388128a2c3f250",
+    "docs/EXTERNAL_TRANSACTION_RECOVERY.md": "256bfe146a8c237d31a7f740b1e0bc92ed3c4af0027a934e8f849f4f1435e6e6",
+    "CHANGELOG.md": "9a6f64e93ea904c68a5d9f76db328eba0b50dd980a11a056b4c43334c070c2c0"
+  },
+  "limits": [
+    "No phone, installed-wallet, live relay or live-chain qualification",
+    "Six opt-in live Desk tests skipped",
+    "No other workspace edits or dependency adoption",
+    "No commit, push or publication"
+  ]
+}

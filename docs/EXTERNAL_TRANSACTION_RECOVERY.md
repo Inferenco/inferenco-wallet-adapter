@@ -43,6 +43,16 @@ wallet.readRecoverableRequest(requestId, { allowMobileRecoveryHandoff: true });
 
 A definite non-submission is exposed through the existing outcome interface as `status: "unknown"`, `reason: "transaction_not_submitted"`, and `submissionDisposition: "not-submitted"`; it is not represented as a user rejection or chain confirmation.
 
+### Consumer acceptance of a mobile terminal failure
+
+A validated, durably saved mobile `not-submitted` result is also delivered through `onRecoveredOutcome` and `subscribeRecoveredOutcomes`. The application must persist this distinct terminal failure before explicitly calling `acknowledgeRecoverableRequest(outcome.recoveryId)`. A failed consumer write leaves delivery active for a later wake or explicit retry. Merely reading a result never acknowledges it.
+
+Mobile acknowledgement changes only the exact origin-bound browser record. Like recovered mobile approvals, it works offline after a reload or wallet-session change; it does not mint a read grant, contact the relay, open the Wallet, sign, submit, or clear a different request. It is not a wallet-side retention acknowledgement. Desk retains its existing separate remote revalidation and acknowledgement protocol.
+
+The IndexedDB transition revalidates the original request, invocation, payload commitment and scope. Missing or uncertain evidence, a known hash, or contradictory evidence cannot be acknowledged as non-submission. A failed storage write leaves the original evidence active and retryable. Concurrent acceptance is idempotent. A verified terminal failure must be acknowledged rather than archived as uncertain; its local tombstone and exactly linked invocation become eligible for cleanup after 30 days. Unacknowledged and unknown requests do not expire under that rule.
+
+The evidence is an authenticated wallet execution assertion, not independent proof of chain non-inclusion. Any subsequent transaction requires a separately reviewed, explicitly approved operation; acknowledgement never retries execution.
+
 ## Acceptance boundary
 
 Local fixtures cover interruption at storage/signing/broadcast/receipt boundaries, duplicate execution prevention, lost acknowledgements, exact chain evidence, ownership changes, strict binding and read-only handoff. No live blockchain transactions are used.

@@ -5,6 +5,15 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0-rc.3] - Unreleased
+
+### Fixed
+
+- Allow consumer acknowledgement of validated, durably stored mobile `not-submitted` recovery evidence. Mobile acknowledgement remains local and works offline without launching the Wallet or repeating execution.
+- Deliver these mobile terminal failures through existing recovery callbacks, retaining failed consumer writes for retry.
+- Reject archiving verified mobile terminal failures as uncertainty; prune only acknowledged evidence after the existing 30-day retention period, preserving unresolved requests and exact invocation links.
+- Preserve the existing desktop remote acknowledgement and recovery rules. No Wallet, Desk or relay changes are required for this adapter repair.
+
 ## [0.3.0-rc.2] - Unreleased
 
 ### Fixed

@@ -1246,7 +1246,8 @@ async function acknowledgeNativeResult(row: DurableInvocation, options: InferWal
   }
 }
 
-/** Remote retention acknowledgement precedes the local delivery CAS so failures remain retryable. */
+/** Desktop remote retention acknowledgement precedes local delivery CAS.
+ * Mobile acknowledgement only accepts already verified local evidence; it never contacts or opens the wallet. */
 export async function acknowledgeRecoverableRequest(
   requestIdOrRecoveryId: string,
   options: InferWalletOptions = {}
@@ -1262,7 +1263,7 @@ export async function acknowledgeRecoverableRequest(
   }
   const row = await exactRecord(requestIdOrRecoveryId, options);
   const final = replay(row);
-  const failure = row.transport === "desktop-bridge" ? externalOutcome(row) : null;
+  const failure = externalOutcome(row);
   const notSubmitted = failure?.submissionDisposition === "not-submitted";
   if ((!final || (final.status !== "approved" && final.status !== "rejected")) && !notSubmitted)
     throw new InferAdapterError(InferErrorCode.InternalError, "Read a verified final outcome before acknowledging this request");
@@ -1331,7 +1332,7 @@ export async function archiveRecoverableRequest(
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Request is not active in this browser origin");
   }
-  if (row.final || (row.transport === "desktop-bridge" && externalOutcome(row)?.submissionDisposition === "not-submitted")) {
+  if (row.final || externalOutcome(row)?.submissionDisposition === "not-submitted") {
     throw new InferAdapterError(InferErrorCode.InvalidParams,
       "Verified final outcomes must be acknowledged after durable acceptance");
   }
