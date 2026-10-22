@@ -1,0 +1,145 @@
+{
+  "packageVersion": "0.3.0-rc.2",
+  "cases": [
+    {
+      "case": "approved-memory",
+      "loseDirectReply": false,
+      "submissions": 1,
+      "polls": 1,
+      "outcome": "approved"
+    },
+    {
+      "case": "approved-memory",
+      "loseDirectReply": true,
+      "submissions": 1,
+      "polls": 2,
+      "outcome": "approved"
+    },
+    {
+      "case": "rejected-memory",
+      "loseDirectReply": false,
+      "submissions": 1,
+      "polls": 1,
+      "outcome": "rejected"
+    },
+    {
+      "case": "failed-memory",
+      "loseDirectReply": false,
+      "submissions": 1,
+      "polls": 2,
+      "outcome": "unknown"
+    },
+    {
+      "case": "approved-durable",
+      "loseDirectReply": false,
+      "submissions": 1,
+      "polls": 1,
+      "outcome": "approved"
+    },
+    {
+      "case": "approved-durable",
+      "loseDirectReply": true,
+      "submissions": 1,
+      "polls": 2,
+      "outcome": "approved"
+    },
+    {
+      "case": "rejected-durable",
+      "loseDirectReply": false,
+      "submissions": 1,
+      "polls": 1,
+      "outcome": "rejected"
+    },
+    {
+      "case": "failed-durable",
+      "loseDirectReply": false,
+      "submissions": 1,
+      "polls": 2,
+      "outcome": "unknown"
+    },
+    {
+      "case": "legacy-minimal-approval",
+      "submissions": 1,
+      "polls": 1,
+      "failedWrites": 0,
+      "outcome": "approved"
+    },
+    {
+      "case": "wrong-request-id",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "missing-request-id",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "invalid-hash",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "unsupported-version",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "capabilities-without-version",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "malformed-capabilities",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "unknown-capability",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "approval-with-error",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "rejection-with-null-hash",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "rejection-with-signature",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 0,
+      "outcome": "unknown"
+    },
+    {
+      "case": "receipt-write-failure",
+      "submissions": 1,
+      "polls": 2,
+      "failedWrites": 1,
+      "outcome": "approved"
+    }
+  ]
+}

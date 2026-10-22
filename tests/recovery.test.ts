@@ -1,3 +1,4 @@
+import { listDurableInvocations, listDurableRequests, pruneDurableEvidence } from "../src/durableRecovery";
 import {
   storeExternalSession,
   tryLocalBridgeSignAndSubmit,
@@ -71,7 +72,13 @@ describe("exact-ID signing recovery", () => {
       }
       throw new Error("Unexpected request: " + url);
     });
-    await expect(tryLocalBridgeSignAndSubmit({} as never, desktop,
+    await expect(tryLocalBridgeSignAndSubmit({
+          payload: {
+            function: "0x1::fixture::run",
+            typeArguments: [],
+            functionArguments: []
+          }
+        } as never, desktop,
       { bridgePollTimeoutMs: 0, onRequestCreated: hook }))
       .rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN", requestId: "desktop-request" });
     expect(posts).toBe(1);
@@ -91,6 +98,9 @@ describe("exact-ID signing recovery", () => {
     expect(await listRecoverableRequests()).toEqual([]);
     expect(posts).toBe(1);
     expect(cancels).toBe(0);
+    await pruneDurableEvidence(Date.now() + 31 * 86400000);
+    expect(await listDurableRequests()).toHaveLength(0);
+    expect(await listDurableInvocations()).toHaveLength(0);
   });
 
   it("treats a different desktop request ID as unknown and retains the receipt", async () => {
@@ -233,7 +243,13 @@ describe("recovery repair boundaries", () => {
       if (url.endsWith("/transaction-request/token-free")) return json({ status: "pending", requestId: "token-free" });
       throw new Error("Unexpected request: " + url);
     });
-    await expect(tryLocalBridgeSignAndSubmit({} as never, session,
+    await expect(tryLocalBridgeSignAndSubmit({
+          payload: {
+            function: "0x1::fixture::run",
+            typeArguments: [],
+            functionArguments: []
+          }
+        } as never, session,
       { bridgePollTimeoutMs: 0, onRequestCreated: created }))
       .rejects.toMatchObject({ code: "REQUEST_OUTCOME_UNKNOWN", requestId: "token-free" });
     expect(JSON.stringify(created.mock.calls[0]?.[0])).not.toContain(token);
@@ -269,7 +285,13 @@ describe("recovery repair boundaries", () => {
       }
       throw new Error("Unexpected request: " + url);
     });
-    const result = tryLocalBridgeSignAndSubmit({} as never, desktop,
+    const result = tryLocalBridgeSignAndSubmit({
+        payload: {
+          function: "0x1::fixture::run",
+          typeArguments: [],
+          functionArguments: []
+        }
+      } as never, desktop,
       { bridgePollTimeoutMs: 20, bridgePollIntervalMs: 10000 });
     await expect(result).rejects.toMatchObject({
       code: "REQUEST_OUTCOME_UNKNOWN", requestId: "hidden-desktop"

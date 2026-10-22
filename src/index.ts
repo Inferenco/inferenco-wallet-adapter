@@ -1,7 +1,7 @@
 export * from "./constants";
 export * from "./types";
 export * from "./errors";
-export * from "./provider";
+export { detectProvider, isBrowser } from "./provider";
 export * from "./deeplink";
 export * from "./bridge";
 export {
@@ -32,3 +32,5 @@ export * from "./mobileSocket";
 
 export * from "./recovery";
 export type { PendingDesktopBridgeRequest } from "./desktopRequests";
+
+export * from "./integrationContract";

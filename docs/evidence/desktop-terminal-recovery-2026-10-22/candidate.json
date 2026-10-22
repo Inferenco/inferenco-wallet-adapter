@@ -1,0 +1,26 @@
+{
+  "status": "pre-commit validation snapshot; exact source hashes identify the repair committed locally with user authorisation",
+  "baseCommit": "3f60b4cfefb1a0655906b216c674dec27e7be3e2",
+  "branch": "fix/infer-connect-stale-session-reconnect",
+  "archive": "/home/james/nova-plugin-wallet-adapter/artifacts/desktop-terminal-recovery-2026-10-22/infer-wallet-adapter-0.3.0-rc.2-de7ef8ccdc04f154.tgz",
+  "sha256": "de7ef8ccdc04f1540701fd4165dc72bbd6b4d185bf40bcb0100b2305410cfcb2",
+  "integrity": "sha512-E/bvcI7183BXRphCujrCu/+KjIa3+pL8wsH4bGoplW6wD1gWYTyZjkvTHVRgpuKselCFXhEQvS+LHhzMyQJLTA==",
+  "sourceSha256": {
+    "README.md": "39796a087958585213829e4008b327209e49e7bb1e1ec245beb32af9055ff30c",
+    "src/bridge.ts": "c29ddad9ed281d3f0b029a812c70382e8fc484c1e5b257f0d74cf8933ae31831",
+    "src/recovery.ts": "2a7ed19f476174dc7f5ee965e6465d103bd39a69805e61db48bec9c363484171",
+    "src/durableRecovery.ts": "03f4aeed1d96bdebc866f23066f25e20a70d3b3010e5d03cf0b1e0eac800125c",
+    "src/InferClient.ts": "51a17c5e7d2a0ec91423da4ddd4703c52a2ba380fbd98a223dee269641c3923d",
+    "tests/desktopTerminalRecovery.test.ts": "0b606870c42b8643d128c105f51a95c3f8f3daef9bdf424a01493ab25eeef908",
+    "tests/fixtures/desktop-expiry-recovery-v1.json": "866c5d49b1ff8c65b4757ceaf8c8829561805660d6fd6b22d85f076c4d4a9ea1"
+  },
+  "validation": {
+    "tests": "704 passed; 6 live tests skipped",
+    "focusedNewTests": 46,
+    "typecheck": "pass",
+    "build": "pass",
+    "diffCheck": "pass",
+    "acknowledgementLoopRegression": "failed before fix with 3 callbacks instead of 1; now passes with no self-notification and later wake retry"
+  },
+  "commitLookup": "git log -1 -- tests/desktopTerminalRecovery.test.ts"
+}

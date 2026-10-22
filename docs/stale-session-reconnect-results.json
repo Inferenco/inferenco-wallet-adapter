@@ -1,0 +1,48 @@
+{
+  "archive": "/tmp/infer-stale-reconnect-ggi3ejfb/inferenco-infer-wallet-adapter-0.3.0-rc.2.tgz",
+  "sha512Integrity": "sha512-1oq0/DuOgp1TLPsEB7mm2Y56e+bZHrxr17yvaCmJhPsrNwnTw+hQJbag2T906cl+m7cOgGMp73XxrYaZjwgXkw==",
+  "sourceBase": "e3b5c8572e6de72be7a2e5f4c88ec72cf85d2708",
+  "results": [
+    {
+      "mode": "cors",
+      "adapter": "local repaired npm archive public entrypoint",
+      "result": "REPAIRED ARCHIVE PASSED",
+      "connectWaitedForApproval": true,
+      "connectReturnedFreshSession": true,
+      "messageDispatches": 0,
+      "calls": [
+        "old-session-health",
+        "preauth-created",
+        "preauth-poll-started",
+        "fresh-session-health"
+      ]
+    },
+    {
+      "mode": "readable-404",
+      "adapter": "local repaired npm archive public entrypoint",
+      "result": "REPAIRED ARCHIVE PASSED",
+      "connectWaitedForApproval": true,
+      "connectReturnedFreshSession": true,
+      "messageDispatches": 0,
+      "calls": [
+        "old-session-health",
+        "preauth-created",
+        "preauth-poll-started",
+        "fresh-session-health"
+      ]
+    },
+    {
+      "mode": "clean",
+      "adapter": "local repaired npm archive public entrypoint",
+      "result": "REPAIRED ARCHIVE PASSED",
+      "connectWaitedForApproval": true,
+      "connectReturnedFreshSession": true,
+      "messageDispatches": 0,
+      "calls": [
+        "preauth-created",
+        "preauth-poll-started",
+        "fresh-session-health"
+      ]
+    }
+  ]
+}

@@ -70,6 +70,11 @@ class BridgeFixture {
     signature: string;
     fullMessage: string;
     message: string;
+    nonce?: string;
+    prefix?: string;
+    profile?: string;
+    signerAddress?: string;
+    publicKey?: string;
   }> = [];
   private signTxQueue: Array<{
     address: string;
@@ -116,24 +121,25 @@ class BridgeFixture {
     this.connectQueue.push(session);
   }
 
-  queueSignMessage(
-    payload: {
-      address: string;
-      signature: string;
-      fullMessage: string;
-      message: string;
-    }
-  ): void {
+  queueSignMessage(payload: {
+    address: string;
+    signature: string;
+    fullMessage: string;
+    message: string;
+    nonce?: string;
+    prefix?: string;
+    profile?: string;
+    signerAddress?: string;
+    publicKey?: string;
+  }): void {
     this.messageQueue.push(payload);
   }
 
-  queueSignTransaction(
-    payload: {
-      address: string;
-      authenticatorHex: string;
-      rawTransactionBcsHex: string;
-    }
-  ): void {
+  queueSignTransaction(payload: {
+    address: string;
+    authenticatorHex: string;
+    rawTransactionBcsHex: string;
+  }): void {
     this.signTxQueue.push(payload);
   }
 
@@ -156,7 +162,7 @@ class BridgeFixture {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Accept, X-Nova-Session",
-      "Vary": "Origin"
+      Vary: "Origin"
     });
     res.end(payload);
   }
@@ -165,7 +171,10 @@ class BridgeFixture {
     this.json(res, 404, { error: "not_found" });
   }
 
-  private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async handle(
+    req: IncomingMessage,
+    res: ServerResponse
+  ): Promise<void> {
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         "Access-Control-Allow-Origin": "*",
@@ -181,13 +190,23 @@ class BridgeFixture {
     const origin = req.headers.origin as string | undefined;
     const authorization = req.headers.authorization as string | undefined;
     const body = await this.readBody(req);
-    this.captured.push({ method: req.method ?? "", pathname: path, origin, body, authorization });
+    this.captured.push({
+      method: req.method ?? "",
+      pathname: path,
+      origin,
+      body,
+      authorization
+    });
 
     // ---- Preauth routes (token-less, Nova Desk 0.6.0-rc.6+ primary path) ----
     if (req.method === "POST" && path === "/preauth-connect") {
       const requestId = `preauth-${this.nextId++}`;
       const queued = this.connectQueue.shift();
-      this.pending.set(requestId, { kind: "connect", approval: queued ? "approved" : "pending", session: queued });
+      this.pending.set(requestId, {
+        kind: "connect",
+        approval: queued ? "approved" : "pending",
+        session: queued
+      });
       if (queued) this.sessions.set(queued.sessionId, queued);
       this.json(res, 200, {
         requestId,
@@ -261,7 +280,16 @@ class BridgeFixture {
     if (req.method === "GET" && rest.startsWith("/message-request/")) {
       const requestId = rest.slice("/message-request/".length);
       const entry = this.pending.get(requestId) as
-        | { kind: string; approval: string; payload?: { address: string; signature: string; fullMessage: string; message: string } }
+        | {
+            kind: string;
+            approval: string;
+            payload?: {
+              address: string;
+              signature: string;
+              fullMessage: string;
+              message: string;
+            };
+          }
         | undefined;
       if (!entry || entry.kind !== "message") {
         this.notFound(res);
@@ -272,7 +300,11 @@ class BridgeFixture {
         return;
       }
       if (!entry.payload) {
-        this.json(res, 200, { status: "rejected", requestId, error: "user_cancelled" });
+        this.json(res, 200, {
+          status: "rejected",
+          requestId,
+          error: "user_cancelled"
+        });
         return;
       }
       this.json(res, 200, { status: "approved", requestId, ...entry.payload });
@@ -297,7 +329,11 @@ class BridgeFixture {
         | {
             kind: string;
             approval: string;
-            payload?: { address: string; authenticatorHex: string; rawTransactionBcsHex: string };
+            payload?: {
+              address: string;
+              authenticatorHex: string;
+              rawTransactionBcsHex: string;
+            };
           }
         | undefined;
       if (!entry || entry.kind !== "sign-transaction") {
@@ -309,7 +345,11 @@ class BridgeFixture {
         return;
       }
       if (!entry.payload) {
-        this.json(res, 200, { status: "rejected", requestId, error: "user_cancelled" });
+        this.json(res, 200, {
+          status: "rejected",
+          requestId,
+          error: "user_cancelled"
+        });
         return;
       }
       this.json(res, 200, { status: "approved", requestId, ...entry.payload });
@@ -331,7 +371,11 @@ class BridgeFixture {
     if (req.method === "GET" && rest.startsWith("/transaction-request/")) {
       const requestId = rest.slice("/transaction-request/".length);
       const entry = this.pending.get(requestId) as
-        | { kind: string; approval: string; payload?: { address: string; hash: string } }
+        | {
+            kind: string;
+            approval: string;
+            payload?: { address: string; hash: string };
+          }
         | undefined;
       if (!entry || entry.kind !== "submit") {
         this.notFound(res);
@@ -342,10 +386,18 @@ class BridgeFixture {
         return;
       }
       if (!entry.payload) {
-        this.json(res, 200, { status: "rejected", requestId, error: "user_cancelled" });
+        this.json(res, 200, {
+          status: "rejected",
+          requestId,
+          error: "user_cancelled"
+        });
         return;
       }
-      this.json(res, 200, { status: "approved", requestId, hash: entry.payload.hash });
+      this.json(res, 200, {
+        status: "approved",
+        requestId,
+        hash: entry.payload.hash
+      });
       return;
     }
 
@@ -423,7 +475,8 @@ function makeSession(
 
 function ed25519Sign(privateKey: Ed25519PrivateKey, message: string): string {
   const bytes = new TextEncoder().encode(message);
-  const hex = "0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  const hex =
+    "0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   const sig = privateKey.sign(hex);
   return `0x${Buffer.from(sig.toUint8Array()).toString("hex")}`;
 }
@@ -466,7 +519,9 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({
+      bridgeBaseUrl: fixture.sessionBridgeUrl()
+    });
     const result = await client.connect();
 
     expect(result.account.address.toString()).toBe(signer.address);
@@ -491,28 +546,48 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({
+      bridgeBaseUrl: fixture.sessionBridgeUrl()
+    });
     await client.connect();
 
+    const fullMessage = [
+      "CEDRA",
+      `address: ${signer.address}`,
+      "message: hello-world",
+      "nonce: 0x00"
+    ].join("\n");
     fixture.queueSignMessage({
       address: signer.address,
-      signature: ed25519Sign(signer.privateKey, "hello-world"),
-      fullMessage: "hello-world",
+      signerAddress: signer.address,
+      profile: "cedra:message:v1",
+      publicKey: signer.publicKeyHex,
+      nonce: "0x00",
+      prefix: "CEDRA",
+      signature: ed25519Sign(signer.privateKey, fullMessage),
+      fullMessage,
       message: "hello-world"
     });
 
-    const output = await client.signMessage({ message: "hello-world", nonce: "0x00" });
+    const output = await client.signMessage({
+      message: "hello-world",
+      nonce: "0x00",
+      address: true
+    });
 
     expect(output.signature).toBeDefined();
     expect(output.address).toBe(signer.address);
-    expect(output.fullMessage).toBe("hello-world");
+    expect(output.fullMessage).toBe(fullMessage);
     expect(output.message).toBe("hello-world");
 
     const signPosts = fixture.captured.filter(
-      (r) => r.method === "POST" && r.pathname === `/${fixture.token}/sign-message`
+      (r) =>
+        r.method === "POST" && r.pathname === `/${fixture.token}/sign-message`
     );
     const msgPolls = fixture.captured.filter(
-      (r) => r.method === "GET" && r.pathname.startsWith(`/${fixture.token}/message-request/`)
+      (r) =>
+        r.method === "GET" &&
+        r.pathname.startsWith(`/${fixture.token}/message-request/`)
     );
     expect(signPosts).toHaveLength(1);
     expect(msgPolls.length).toBeGreaterThanOrEqual(1);
@@ -523,15 +598,26 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({
+      bridgeBaseUrl: fixture.sessionBridgeUrl()
+    });
     await client.connect();
 
     const sdk = await import("@cedra-labs/ts-sdk");
-    const { RawTransaction, TransactionPayloadEntryFunction, EntryFunction, ChainId, parseTypeTag, SimpleTransaction } = sdk;
+    const {
+      RawTransaction,
+      TransactionPayloadEntryFunction,
+      EntryFunction,
+      ChainId,
+      parseTypeTag,
+      SimpleTransaction
+    } = sdk;
     const rawTransaction = new RawTransaction(
       signer.account.accountAddress,
       0n,
-      new TransactionPayloadEntryFunction(EntryFunction.build("0x1::account", "transfer", [], [])),
+      new TransactionPayloadEntryFunction(
+        EntryFunction.build("0x1::account", "transfer", [], [])
+      ),
       1_000n,
       1n,
       60n,
@@ -539,13 +625,14 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
       parseTypeTag("0x1::cedra_coin::CedraCoin")
     );
     const simpleTransaction = new SimpleTransaction(rawTransaction);
-// Sign with the SDK's full signing pipeline so the produced
+    // Sign with the SDK's full signing pipeline so the produced
     // authenticator hex round-trips through the adapter's deserializer.
     // `signTransactionWithAuthenticator` adds the SDK's domain separator
     // ("CEDRA::RawTransaction") before signing; a bare Ed25519 signature
     // over the BCS bytes would not verify on-chain but the test doesn't
     // verify on-chain — it only verifies wire format.
-    const authenticator = signer.account.signTransactionWithAuthenticator(simpleTransaction);
+    const authenticator =
+      signer.account.signTransactionWithAuthenticator(simpleTransaction);
     fixture.queueSignTransaction({
       address: signer.address,
       authenticatorHex: authenticator.toString(),
@@ -553,7 +640,9 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     });
 
     const output = (await client.signTransaction(
-      simpleTransaction as unknown as Parameters<typeof client.signTransaction>[0]
+      simpleTransaction as unknown as Parameters<
+        typeof client.signTransaction
+      >[0]
     )) as {
       authenticator: unknown;
       authenticatorHex: string;
@@ -562,14 +651,20 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
 
     expect(output.authenticator).toBeDefined();
     expect(output.authenticatorHex).toBe(authenticator.toString());
-    expect(output.rawTransactionBcsHex).toBe(simpleTransaction.bcsToHex().toString());
+    expect(output.rawTransactionBcsHex).toBe(
+      simpleTransaction.bcsToHex().toString()
+    );
 
     const signPosts = fixture.captured.filter(
-      (r) => r.method === "POST" && r.pathname === `/${fixture.token}/sign-transaction`
+      (r) =>
+        r.method === "POST" &&
+        r.pathname === `/${fixture.token}/sign-transaction`
     );
     expect(signPosts).toHaveLength(1);
     const stxPolls = fixture.captured.filter(
-      (r) => r.method === "GET" && r.pathname.startsWith(`/${fixture.token}/sign-transaction-request/`)
+      (r) =>
+        r.method === "GET" &&
+        r.pathname.startsWith(`/${fixture.token}/sign-transaction-request/`)
     );
     expect(stxPolls.length).toBeGreaterThanOrEqual(1);
   });
@@ -579,24 +674,33 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({
+      bridgeBaseUrl: fixture.sessionBridgeUrl()
+    });
     await client.connect();
 
     const fakeHash = "0x" + "ab".repeat(32);
     fixture.queueSignAndSubmit({ address: signer.address, hash: fakeHash });
 
     const output = await client.signAndSubmitTransaction({
-      transactionOrPayload: { function: "0x1::coin::transfer", typeArguments: [], functionArguments: [] }
+      payload: {
+        function: "0x1::coin::transfer",
+        typeArguments: [],
+        functionArguments: []
+      }
     } as never);
 
     expect(output.hash).toBe(fakeHash);
 
     const submitPosts = fixture.captured.filter(
-      (r) => r.method === "POST" && r.pathname === `/${fixture.token}/transaction`
+      (r) =>
+        r.method === "POST" && r.pathname === `/${fixture.token}/transaction`
     );
     expect(submitPosts).toHaveLength(1);
     const submitPolls = fixture.captured.filter(
-      (r) => r.method === "GET" && r.pathname.startsWith(`/${fixture.token}/transaction-request/`)
+      (r) =>
+        r.method === "GET" &&
+        r.pathname.startsWith(`/${fixture.token}/transaction-request/`)
     );
     expect(submitPolls.length).toBeGreaterThanOrEqual(1);
   });
@@ -606,16 +710,21 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({
+      bridgeBaseUrl: fixture.sessionBridgeUrl()
+    });
     await client.connect();
 
     await client.disconnect();
 
     const deletes = fixture.captured.filter(
-      (r) => r.method === "DELETE" && r.pathname === `/${fixture.token}/connection`
+      (r) =>
+        r.method === "DELETE" && r.pathname === `/${fixture.token}/connection`
     );
     expect(deletes.length).toBeGreaterThanOrEqual(1);
-    expect(browser.window.localStorage.getItem("inferenco:nova-session")).toBeNull();
+    expect(
+      browser.window.localStorage.getItem("inferenco:nova-session")
+    ).toBeNull();
   });
 
   it("restart: kill + restart server with new token invalidates prior session", async () => {
@@ -623,7 +732,9 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     const session = makeSession(signer, fixture);
     fixture.approveNextConnect(session);
 
-    const client = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client = new InferClient({
+      bridgeBaseUrl: fixture.sessionBridgeUrl()
+    });
     await client.connect();
     expect(client.account?.address.toString()).toBe(signer.address);
 
@@ -639,7 +750,9 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
     // against the new bridge first; the OLD token is rejected with 404,
     // `tryResumeInferWalletConnection` falls through, and the dapp is
     // prompted via a fresh preauth round-trip.
-    const client2 = new InferClient({ bridgeBaseUrl: fixture.sessionBridgeUrl() });
+    const client2 = new InferClient({
+      bridgeBaseUrl: fixture.sessionBridgeUrl()
+    });
     const newSigner = await makeSigner();
     const newSession = makeSession(newSigner, fixture);
     fixture.approveNextConnect(newSession);
@@ -648,7 +761,9 @@ describe("wallet-bridge round-trip (audit-08 ND-COMPAT-001)", () => {
 
     // Crucial guarantee: the new bridge never accepted a request with
     // the OLD token (which would have bypassed F-03).
-    const oldTokenCalls = fixture.captured.filter((r) => r.pathname.includes(`/${oldToken}/`));
+    const oldTokenCalls = fixture.captured.filter((r) =>
+      r.pathname.includes(`/${oldToken}/`)
+    );
     expect(oldTokenCalls).toHaveLength(0);
   });
 });

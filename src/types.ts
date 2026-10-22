@@ -67,6 +67,8 @@ export interface InferSignMessageResponse {
 }
 
 export interface InferWalletOptions {
+  /** Internal per-call requirement; a legacy peer cannot silently discard v1 restrictions. */
+  requireContractVersion?: 1;
   /** Persist the action/request association before wallet launch. Does not authorize a retry. */
   onMobileRequestCreated?: (request: Readonly<PendingMobileRelayRequest>) => void | Promise<void>;
   /** Persist the request ID with the application action before awaiting approval. */
@@ -163,9 +165,22 @@ export type InferConnectionHealth =
   | { state: "checking"; identity: InferConnectionIdentity; reason?: string }
   | { state: "connected"; identity: InferConnectionIdentity }
   | { state: "unreachable"; identity: InferConnectionIdentity; reason: string }
-  | { state: "reconnect-required"; identity: InferConnectionIdentity; reason: string };
+  | { state: "reconnect-required"; identity: InferConnectionIdentity; reason: string;
+    };
 
+export interface InferIntegrationCapabilities {
+  transactionRestrictions?: boolean;
+  messageProfile?: "cedra:message:v1";
+  completeResults?: boolean;
+  durableInvocationLookup?: boolean;
+  /** Exact external transaction evidence can be delivered through a read-only handoff. */
+  durableExternalSubmissionRecovery?: boolean;
+  /** True only with wallet persistence acknowledged before native broadcast. */
+  durableInvocationSubmission?: boolean;
+}
 export interface InferExternalSession {
+  integrationContractVersion?: 1;
+  capabilities?: InferIntegrationCapabilities;
   transport: "desktop-bridge" | "mobile-relay";
   address: string;
   publicKey: string;
@@ -187,6 +202,8 @@ export interface InferBridgeStartResponse {
 }
 
 export interface InferBridgeConnectPoll {
+  integrationContractVersion?: 1;
+  capabilities?: InferIntegrationCapabilities;
   status?: string;
   requestId?: string;
   address?: string;
@@ -204,7 +221,18 @@ export interface InferBridgeConnectPoll {
   error?: string;
 }
 
-export interface InferBridgeMessagePoll {
+export interface InferBridgeResultMetadata {
+  integrationContractVersion?: 1;
+  capabilities?: InferIntegrationCapabilities;
+}
+
+export interface InferBridgeMessagePoll extends InferBridgeResultMetadata {
+  signerAddress?: string;
+  profile?: string;
+  prefix?: string;
+  nonce?: string;
+  application?: string;
+  chainId?: number;
   status?: string;
   requestId?: string;
   address?: string;
@@ -217,7 +245,7 @@ export interface InferBridgeMessagePoll {
   error?: string;
 }
 
-export interface InferBridgeSignTransactionPoll {
+export interface InferBridgeSignTransactionPoll extends InferBridgeResultMetadata {
   status?: string;
   requestId?: string;
   address?: string;
@@ -235,9 +263,10 @@ export interface InferBridgeSignTransactionPoll {
   };
 }
 
-export type InferTerminalStatus = "pending" | "approved" | "rejected" | "failed";
+export type InferTerminalStatus =
+  | "pending" | "approved" | "rejected" | "failed";
 
-interface InferBridgeTransactionPollBase {
+interface InferBridgeTransactionPollBase extends InferBridgeResultMetadata {
   requestId: string;
   signature?: unknown;
   result?: unknown;
@@ -279,7 +308,8 @@ export interface InferMobilePairingCreateResponse {
 
 export interface InferMobilePairingStatus {
   pairingId: string;
-  status: "pending" | "claimed" | "approved" | "rejected" | "expired" | "revoked";
+  status:
+    | "pending" | "claimed" | "approved" | "rejected" | "expired" | "revoked";
   callbackUrl: string;
   encryptedResult?: string;
   dappSessionToken?: string;
@@ -299,13 +329,15 @@ export interface InferMobileRequestCreateResponse {
   /** Omitted on idempotent replay; an existing request must not auto-launch twice. */
   walletDeeplinkUrl?: string;
   expiresAt: string;
-  status?: "pending" | "approved" | "rejected" | "failed" | "expired" | "cancelled" | "revoked";
+  status?:
+    | "pending" | "approved" | "rejected" | "failed" | "expired" | "cancelled" | "revoked";
 }
 
 export interface InferMobileInvocationReceipt {
   requestId: string;
   expiresAt: string;
-  status: "pending" | "approved" | "rejected" | "failed" | "expired" | "cancelled" | "revoked";
+  status:
+    | "pending" | "approved" | "rejected" | "failed" | "expired" | "cancelled" | "revoked";
 }
 
 export interface InferMobileInvocationRelaunchReceipt extends InferMobileInvocationReceipt {
@@ -337,7 +369,8 @@ export type InferMobileRequestStatus =
   | (InferMobileRequestStatusBase & { status: "rejected" })
   | (InferMobileRequestStatusBase & { status: "failed" })
   | (InferMobileRequestStatusBase & { status: "pending" })
-  | (InferMobileRequestStatusBase & { status: "expired" | "cancelled" | "revoked" });
+  | (InferMobileRequestStatusBase & { status: "expired" | "cancelled" | "revoked";
+    });
 
 export type InferTransactionPayload =
   | InputGenerateTransactionPayloadData
@@ -420,6 +453,15 @@ export type InferExternalSignTransactionInput =
   | InferExternalWalletStandardSignInput;
 
 export interface InferProvider {
+  /** Acknowledge a retained terminal native outcome; never authorizes execution. */
+  acknowledgeInvocation?: (invocationId: string, requestCommitment: string) => Promise<unknown>;
+  /** Authorized read of a retained native invocation; this must never execute it. */
+  readInvocation?: (
+    invocationId: string,
+    requestCommitment: string
+  ) => Promise<unknown>;
+  integrationContractVersion?: 1;
+  capabilities?: InferIntegrationCapabilities;
   /** Canonical brand flag set by Infer Desk (v0.6.0+) / Infer Wallet (post-rebrand). */
   isInferWallet?: boolean;
   /**
@@ -432,14 +474,31 @@ export interface InferProvider {
   connect?: (...args: unknown[]) => Promise<InferProviderAccount | InferProviderResponse<InferProviderAccount>>;
   account?: () => Promise<InferProviderAccount | InferProviderResponse<InferProviderAccount>>;
   disconnect?: () => Promise<void | InferProviderResponse<void>>;
-  network?: () => Promise<string | number | NetworkInfo | InferProviderResponse<string | number | NetworkInfo>>;
+  network?: () => Promise<
+    | string | number | NetworkInfo | InferProviderResponse<string | number | NetworkInfo>>;
   signMessage?: (
-    input: CedraSignMessageInput | SignMessagePayload
-  ) => Promise<CedraSignMessageOutput | InferSignMessageResponse | InferProviderResponse<CedraSignMessageOutput | InferSignMessageResponse>>;
+    input: CedraSignMessageInput | SignMessagePayload,
+    metadata?: unknown
+  ) => Promise<
+    | CedraSignMessageOutput
+    | InferSignMessageResponse
+    | InferProviderResponse<CedraSignMessageOutput | InferSignMessageResponse>
+  >;
   signTransaction?: (
-    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1 | InferExternalSignTransactionInput,
+    transaction:
+      | AnyRawTransaction
+      | InferTransactionPayload
+      | CedraSignTransactionInputV1_1
+      | InferExternalSignTransactionInput,
     options?: unknown
-  ) => Promise<InferSerializedSignTransactionResult | AccountAuthenticator | Uint8Array | InferSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1 | InferProviderResponse<InferSerializedSignTransactionResult | AccountAuthenticator | Uint8Array | InferSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1>>;
+  ) => Promise<
+    | InferSerializedSignTransactionResult
+    | AccountAuthenticator
+    | Uint8Array
+    | InferSignedTransactionWithAuthenticator
+    | CedraSignTransactionOutputV1_1
+    | InferProviderResponse<
+        | InferSerializedSignTransactionResult | AccountAuthenticator | Uint8Array | InferSignedTransactionWithAuthenticator | CedraSignTransactionOutputV1_1>>;
   signAndSubmitTransaction?: (
     transaction: AnyRawTransaction | InferTransactionPayload,
     options?: unknown
@@ -448,7 +507,8 @@ export interface InferProvider {
   onNetworkChange?: (callback: (network: string | number | NetworkInfo) => void) => Promise<void> | void;
   submitTransaction?: (
     input: InputSubmitTransactionData
-  ) => Promise<PendingTransactionResponse | InferProviderResponse<PendingTransactionResponse>>;
+  ) => Promise<
+    | PendingTransactionResponse | InferProviderResponse<PendingTransactionResponse>>;
 }
 
 export interface InferWindow extends Window {
@@ -480,12 +540,17 @@ export interface InferWalletAdapterLike {
     transaction: InferTransactionPayload,
     options?: InputGenerateTransactionOptions
   ): Promise<CedraSignAndSubmitTransactionOutput>;
+  /**
+   * @deprecated Payload-only compatibility alias; does not accept raw transactions or BCS bytes.
+   * Use signAndSubmitTransaction for payload submission, or signTransaction for prebuilt signing.
+   */
   signAndSubmitBCSTransaction(
     transaction: InferTransactionPayload,
     options?: InputGenerateTransactionOptions
   ): Promise<CedraSignAndSubmitTransactionOutput>;
   signTransaction(
-    transaction: AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
+    transaction:
+      | AnyRawTransaction | InferTransactionPayload | CedraSignTransactionInputV1_1,
     options?: InputGenerateTransactionOptions
   ): Promise<Uint8Array | InferSignedTransactionWithAuthenticator>;
   signMessage(

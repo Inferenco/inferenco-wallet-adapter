@@ -1,21 +1,43 @@
+import { validateNativeNotSubmitted } from "./nativeNotSubmitted";
+import { detectProvider, nativeProviderBinding, nativeRecoveryKey } from "./provider";
+import {
+  canonicalAddress,
+  encodeWireValue,
+  requestCommitment
+} from "./integrationContract";
 import type {
   CedraSignAndSubmitTransactionOutput,
   CedraSignMessageOutput,
   CedraSignTransactionOutputV1_1
 } from "@cedra-labs/wallet-standard";
-import { BridgeHttpError, readExternalSession, readDesktopBridgeRequestOnce, readResultForSession } from "./bridge";
+import { BridgeHttpError, readExternalSession, readDesktopBridgeRequestOnce, readResultForSession,
+  lookupDesktopInvocation,
+  acknowledgeDesktopResult
+} from "./bridge";
 import { archivePendingDesktopBridgeRequest, clearPendingDesktopBridgeRequest, desktopBridgeOrigin, readPendingDesktopBridgeRequests, type RecoverableMethod } from "./desktopRequests";
 import {
-  listDurableRequests, listDurableInvocations, saveDurableRequest, saveDurableFinal, serializeStoredFinal, transitionDurableRequest,
-  type DurableRequest, type DurableInvocation, type StoredFinal
+  listDurableRequests, listDurableInvocations, getDurableInvocation, findDurableRequests, saveDurableRequest, saveDurableFinal, serializeStoredFinal, transitionDurableRequest,
+  updateDurableInvocation,
+  saveDurableTransactionHash,
+  saveDurableExternalTransactionRecovery,
+  updateInjectedInvocationEvidence,
+  type DurableRequest,
+  type DurableInvocation,
+  type StoredFinal
 } from "./durableRecovery";
-import { deserializeSignTransactionResult } from "./conversion";
+import {
+  normalizeSignMessageOutput,
+  verifySignedMessageOutput,
+  deserializeSignTransactionResult,
+  normalizeNetwork
+} from "./conversion";
 import { InferAdapterError, InferErrorCode, isValidTransactionHash } from "./errors";
 import { decryptJson } from "./mobileCrypto";
 import {
   decodeMobileRelayResult,
   getReadGrant,
   mintReadGrant,
+  launchMobileRelayRecoveryRead,
   readMobileRelayRequestOnce,
   reconcileMobileRelayInvocationReceipt,
   relaunchMobileRelayInvocation,
@@ -24,14 +46,17 @@ import {
 } from "./mobileRelay";
 import { archivePendingMobileRelayRequest, clearPendingMobileRelayRequest, readPendingMobileRelayRequests } from "./mobileRequests";
 import { makeRecoveryArchive, type RecoveryArchive } from "./requestArchive";
+import { validateExternalTransactionRecovery, type ExternalTransactionRecovery } from "./externalTransactionRecovery";
 import type { InferExternalSession, InferWalletOptions } from "./types";
 
 export interface RecoverableRequest {
+  origin: string;
+  requestCommitment?: string;
   /** Opaque, stable handle for this original invocation and session. */
   recoveryId: string;
   requestId: string;
   method: RecoverableMethod;
-  transport: "mobile-relay" | "desktop-bridge";
+  transport: "mobile-relay" | "desktop-bridge" | "injected";
   sessionId: string;
   address: string;
   network: string;
@@ -41,8 +66,10 @@ export interface RecoverableRequest {
 
 export interface ArchivedRecoverableRequest extends RecoverableRequest, RecoveryArchive {}
 export interface RecoverableInvocation {
+  origin: string;
+  requestCommitment?: string;
   invocationId: string;
-  transport: "mobile-relay" | "desktop-bridge";
+  transport: "mobile-relay" | "desktop-bridge" | "injected";
   sessionId: string;
   address: string;
   network: string;
@@ -56,7 +83,9 @@ export interface RecoverableInvocation {
 
 export function invocationDescriptor(row: DurableInvocation): RecoverableInvocation {
   return {
-    invocationId: row.id, transport: row.transport, sessionId: row.sessionId,
+    invocationId: row.id,
+    origin: row.origin,
+    requestCommitment: row.requestCommitment, transport: row.transport, sessionId: row.sessionId,
     address: row.address, network: row.network, chainId: row.chainId,
     method: row.method, state: row.state,
     ...(row.requestId ? { requestId: row.requestId } : {}),
@@ -79,20 +108,59 @@ export async function reconcileRecoverableInvocation(
   if (typeof window === "undefined") {
     throw new InferAdapterError(InferErrorCode.Unsupported, "Recovery requires a browser");
   }
-  const invocation = (await listDurableInvocations()).find((row) => row.id === invocationId);
+  const invocation = await getDurableInvocation(invocationId);
   if (!invocation) {
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Invocation is not bound to this browser origin");
   }
-  if (invocation.requestId) {
+  if (invocation.requestId && invocation.transport !== "injected") {
     try {
-      return await readRecoverableRequest(invocation.requestId, options);
+      const linked = await findDurableRequests(invocation.requestId, invocation);
+      if (linked.length !== 1) throw new Error("Original invocation receipt is unavailable");
+      return await readRecoverableRequest(linked[0]!.id, options);
     } catch {
       // A receipt may have been saved before the durable request was created.
     }
   }
   if (invocation.state === "not-invoked") {
     return { invocationId, status: "unknown", reason: "request_not_invoked" };
+  }
+  if (invocation.transport === "injected")
+    return readInjectedInvocation(invocation, options);
+  if (invocation.transport === "desktop-bridge") {
+    const session = readExternalSession();
+    if (!session || session.transport !== "desktop-bridge")
+      return {
+        invocationId,
+        status: "unknown",
+        reason: "original_scope_unavailable"
+      };
+    try {
+      const pending = await lookupDesktopInvocation(
+        invocation,
+        session,
+        options
+      );
+      if (!pending)
+        return {
+          invocationId,
+          status: "unknown",
+          reason: "invocation_identity_mismatch"
+        };
+      await saveDurableRequest(pending, invocation.id);
+      await updateDurableInvocation(
+        invocation.id,
+        "created",
+        pending.requestId
+      );
+      return await readRecoverableRequest(pending.requestId, options);
+    } catch {
+      return {
+        invocationId,
+        status: "unknown",
+        reason: "invocation_reconciliation_unavailable"
+      };
+    }
   }
   if (invocation.transport !== "mobile-relay" || !invocation.mobileRequest) {
     return { invocationId, status: "unknown", reason: "invocation_lookup_unavailable" };
@@ -126,7 +194,7 @@ export async function relaunchRecoverableInvocation(
   invocationId: string,
   options: InferWalletOptions = {}
 ): Promise<void> {
-  const invocation = (await listDurableInvocations()).find((row) => row.id === invocationId);
+  const invocation = await getDurableInvocation(invocationId);
   if (!invocation || invocation.transport !== "mobile-relay" || !invocation.requestId) {
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Reconcile the original mobile request before relaunch");
@@ -149,18 +217,38 @@ export type RecoveredInvocationOutcome =
   | RecoveredRequestOutcome
   | { invocationId: string; status: "unknown"; reason: string };
 
-export type RecoveredRequestOutcome =
-  | (RecoverableRequest & { status: "pending" })
+export type RecoveryReadOptions = Readonly<{
+  /** Explicit user action only; background reads never open the wallet. */
+  allowMobileRecoveryHandoff?: boolean;
+}>;
+
+/** Request status describes the wallet operation, not the chain. Only explicit
+ * chainStatus with an exact transaction identity is node transaction evidence. */
+export type NativeExecutionEvidence = Readonly<{
+  submissionDisposition?: "not-submitted";
+  failureCode?: "EXECUTION_FAILED_BEFORE_BROADCAST";
+  submissionAcceptance?: "unknown" | "accepted";
+  chainStatus?: "unknown" | "pending" | "confirmed" | "aborted";
+  chainVersion?: string;
+}>;
+export type RecoveredRequestOutcome = (
+  | (RecoverableRequest & { status: "pending"; transactionHash?: string })
   | (RecoverableRequest & { status: "approved"; output:
-      CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput })
+        | CedraSignMessageOutput
+        | CedraSignTransactionOutputV1_1
+        | CedraSignAndSubmitTransactionOutput;
+    })
   | (RecoverableRequest & { status: "rejected" })
-  | (RecoverableRequest & { status: "unknown"; reason: string });
+  | (RecoverableRequest & { status: "unknown"; reason: string; transactionHash?: string })
+) & NativeExecutionEvidence;
 
 const inFlight = new Map<string, Promise<RecoveredRequestOutcome>>();
 
 function descriptor(row: DurableRequest): RecoverableRequest {
   return {
-    recoveryId: row.id, requestId: row.requestId, method: row.method,
+    recoveryId: row.id,
+    origin: row.origin,
+    requestCommitment: row.requestCommitment, requestId: row.requestId, method: row.method,
     transport: row.transport, sessionId: row.sessionId, address: row.address,
     network: row.network, chainId: row.chainId,
     ...(row.invocationId ? { invocationId: row.invocationId } : {})
@@ -177,8 +265,10 @@ function matchingSession(row: DurableRequest, session: InferExternalSession | nu
       session.address !== row.address || session.network !== row.network ||
       session.chainId !== row.chainId) return false;
   if (row.transport === "mobile-relay") {
-    return row.endpoint === session.relayBaseUrl &&
-      typeof session.dappSessionToken === "string" && typeof session.sharedSecret === "string";
+    return (
+      row.endpoint === session.relayBaseUrl &&
+      typeof session.dappSessionToken === "string" && typeof session.sharedSecret === "string"
+    );
   }
   try {
     return desktopBridgeOrigin(session, options) === row.endpoint;
@@ -229,6 +319,11 @@ async function records(options: InferWalletOptions): Promise<DurableRequest[]> {
   return listDurableRequests();
 }
 
+async function exactRecord(id: string, options: InferWalletOptions): Promise<DurableRequest> {
+  await migrateCurrentTab(readExternalSession(), options);
+  return findExact(await findDurableRequests(id), id);
+}
+
 function findExact(rows: DurableRequest[], id: string): DurableRequest {
   const matches = rows.filter((row) => row.id === id || row.requestId === id);
   if (matches.length !== 1) {
@@ -246,6 +341,50 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function externalEvidenceFields(evidence: ExternalTransactionRecovery, freshRead = false): NativeExecutionEvidence & { transactionHash?: string } {
+  return {
+    ...(evidence.transactionHash ? { transactionHash: evidence.transactionHash } : {}),
+    ...(evidence.submissionAcceptance ? { submissionAcceptance: evidence.submissionAcceptance } : {}),
+    // Pending is a transient node observation; cached evidence cannot prove it is still pending.
+    ...(evidence.chainStatus ? { chainStatus: evidence.chainStatus === "pending" && !freshRead ? "unknown" as const : evidence.chainStatus } : {}),
+    ...(evidence.chainVersion ? { chainVersion: evidence.chainVersion } : {}),
+    ...(evidence.status === "not-submitted" ? { submissionDisposition: "not-submitted" as const, failureCode: evidence.failureCode } : {})
+  };
+}
+function externalOutcome(row: DurableRequest, freshRead = false): RecoveredRequestOutcome | null {
+  if (!row.externalTransactionRecovery) return null;
+  try {
+    const evidence = validateExternalTransactionRecovery(row.externalTransactionRecovery, row);
+    const fields = externalEvidenceFields(evidence, freshRead);
+    return evidence.status === "approved"
+      ? { ...descriptor(row), ...fields, status: "approved", output: { hash: evidence.transactionHash! } }
+      : { ...descriptor(row), ...fields, status: "unknown", reason: evidence.status === "not-submitted" ? "transaction_not_submitted" : "original_execution_unresolved" };
+  } catch { return null; }
+}
+/** Cached evidence stays useful when the wallet is temporarily unavailable. */
+function uncertainExecution(row: DurableRequest | DurableInvocation): NativeExecutionEvidence & { transactionHash?: string } {
+  try {
+    if ("pending" in row && row.externalTransactionRecovery)
+      return externalEvidenceFields(validateExternalTransactionRecovery(row.externalTransactionRecovery, row));
+    if (row.method === "signAndSubmitTransaction" && row.requestCommitment &&
+        isValidTransactionHash(row.transactionHash) &&
+        requestCommitment(row.method, {
+          origin: row.origin, accountAddress: canonicalAddress(row.address),
+          network: row.network, chainId: row.chainId
+        }, "pending" in row ? row.pending.requestPayload : row.requestPayload) === row.requestCommitment)
+      return { transactionHash: row.transactionHash };
+  } catch { /* Invalid stored bindings never become execution evidence. */ }
+  return {};
+}
+
+function explicitRejectedPayload(payload: unknown): boolean {
+  if (payload === undefined) return true;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const fields = Object.getOwnPropertyDescriptors(payload);
+  return Object.keys(fields).length === 1 && "value" in (fields.error ?? {}) &&
+    fields.error!.value === "user_rejected";
+}
+
 function replay(row: DurableRequest): RecoveredRequestOutcome | null {
   const final = row.final;
   if (!final) return null;
@@ -257,15 +396,26 @@ function replay(row: DurableRequest): RecoveredRequestOutcome | null {
   try {
     if (final.method === "signAndSubmitTransaction") {
       if (!isValidTransactionHash(final.hash)) throw new Error("Invalid saved transaction hash");
-      return { ...base, status: "approved", output: { hash: final.hash } };
+      return { ...base, ...uncertainExecution(row), status: "approved", output: { hash: final.hash } };
     }
     if (final.method === "signMessage") {
-      if (typeof final.output.address !== "string" ||
-          typeof final.output.signature !== "string" ||
-          typeof final.output.fullMessage !== "string" ||
-          typeof final.output.message !== "string") throw new Error("Invalid saved signed message");
-      return { ...base, status: "approved",
-        output: final.output as unknown as CedraSignMessageOutput };
+      const output =
+        row.pending.expectedMessageInput && row.pending.signerPublicKey
+          ? verifySignedMessageOutput(
+              final.output,
+              row.pending.expectedMessageInput,
+              {
+                origin: row.origin,
+                accountAddress: canonicalAddress(row.address),
+                network: row.network,
+                chainId: row.chainId
+              },
+              row.pending.signerPublicKey,
+              (row.pending.expectedMessageInput as { profile?: string })
+                .profile !== "cedra:message:v1"
+            )
+          : normalizeSignMessageOutput(final.output);
+      return { ...base, status: "approved", output };
     }
     return { ...base, status: "approved",
       output: deserializeSignTransactionResult({
@@ -334,10 +484,29 @@ function sameBridgeOrigin(row: DurableRequest, session: InferExternalSession | n
  * non-success path so the caller can fall back to rc.21 behavior
  * (`{status: "unknown"}`).
  */
+const mobileRecoveryReads = new Map<string, Promise<RecoveredRequestOutcome | null>>();
 async function authorizedReadMobileRelay(
   row: DurableRequest,
   session: InferExternalSession,
-  base: ReturnType<typeof descriptor>
+  base: ReturnType<typeof descriptor>,
+  options: InferWalletOptions = {},
+  readOptions: RecoveryReadOptions = {}
+): Promise<RecoveredRequestOutcome | null> {
+  const key = JSON.stringify([row.id, session.sessionId, readOptions.allowMobileRecoveryHandoff === true]);
+  const existing = mobileRecoveryReads.get(key);
+  if (existing) return existing;
+  const task = performAuthorizedMobileRead(row, session, base, options, readOptions).catch(() =>
+    ({ ...base, status: "unknown" as const, ...uncertainExecution(row), reason: "authorized_recovery_unavailable" }));
+  mobileRecoveryReads.set(key, task);
+  try { return await task; }
+  finally { mobileRecoveryReads.delete(key); }
+}
+async function performAuthorizedMobileRead(
+  row: DurableRequest,
+  session: InferExternalSession,
+  base: ReturnType<typeof descriptor>,
+  options: InferWalletOptions = {},
+  readOptions: RecoveryReadOptions = {}
 ): Promise<RecoveredRequestOutcome | null> {
   if (!session.relayBaseUrl || !session.dappSessionToken || !session.sharedSecret) return null;
   // The relay's S1 endpoint REQUIRES `method` in the scope (it validates
@@ -352,6 +521,13 @@ async function authorizedReadMobileRelay(
     ...(row.invocationId ? { invocationId: row.invocationId } : {}),
     newSessionId: session.sessionId
   };
+  const assertCurrentSession = () => {
+    const current = readExternalSession();
+    if (!current || !sameScope(row, current) || current.sessionId !== session.sessionId ||
+        current.dappSessionToken !== session.dappSessionToken || current.sharedSecret !== session.sharedSecret ||
+        !sameRelayBaseUrl(row, current)) throw new Error("Recovery authorization changed");
+  };
+  assertCurrentSession();
   const mint = await mintReadGrant({
     relayBaseUrl: session.relayBaseUrl,
     requestId: row.requestId,
@@ -363,17 +539,31 @@ async function authorizedReadMobileRelay(
     return null;
   }
 
+  assertCurrentSession();
   const deadline = Date.now() + READ_GRANT_POLL_TIMEOUT_MS;
   let grant: ReadGrantDescriptor | null = null;
+  let handoffOpened = false;
   while (Date.now() < deadline) {
     const poll = await getReadGrant({
       relayBaseUrl: session.relayBaseUrl,
       requestId: row.requestId,
       dappSessionToken: session.dappSessionToken
     });
+    assertCurrentSession();
     if (!poll.ok) return null;
     grant = poll.grant;
+    if (grant.grantId !== mint.grantId || grant.requestId !== row.requestId ||
+        grant.scope.origin !== row.origin || canonicalAddress(grant.scope.accountAddress) !== canonicalAddress(row.address) ||
+        grant.scope.network !== row.network || grant.scope.chainId !== row.chainId || grant.scope.method !== row.method ||
+        (grant.scope.invocationId ?? null) !== (row.invocationId ?? null))
+      return { ...base, status: "unknown", ...uncertainExecution(row), reason: "read_grant_binding_changed" };
     if (grant.status === "fulfilled") break;
+    if (!handoffOpened && readOptions.allowMobileRecoveryHandoff === true &&
+        session.capabilities?.durableExternalSubmissionRecovery === true &&
+        row.method === "signAndSubmitTransaction" && grant.status === "pending_fulfillment") {
+      launchMobileRelayRecoveryRead(grant, row.sessionId, session, options);
+      handoffOpened = true;
+    }
     // Terminal grant states ("expired" / "denied" — the relay's enum)
     // cannot become fulfilled; fall back to rc.21 behavior. The relay
     // usually signals these via HTTP 410, which lands in the
@@ -381,10 +571,12 @@ async function authorizedReadMobileRelay(
     if (grant.status === "expired" || grant.status === "denied") {
       return null;
     }
+    if (session.capabilities?.durableExternalSubmissionRecovery === true && !readOptions.allowMobileRecoveryHandoff)
+      return { ...base, status: "unknown", ...uncertainExecution(row), reason: "wallet_read_required" };
     await new Promise((resolve) => window.setTimeout(resolve, READ_GRANT_POLL_INTERVAL_MS));
   }
   if (!grant || grant.status !== "fulfilled" || !grant.redeliveredEncryptedResult) {
-    return { ...base, status: "unknown", reason: "grant_pending_timeout" };
+    return { ...base, status: "unknown", ...uncertainExecution(row), reason: "grant_pending_timeout" };
   }
 
   // The wallet (W2) sealed the original result under the NEW session's
@@ -399,10 +591,20 @@ async function authorizedReadMobileRelay(
   try {
     decoded = decryptJson<unknown>(grant.redeliveredEncryptedResult, session.sharedSecret);
   } catch {
-    return { ...base, status: "unknown", reason: "decrypt_failed" };
+    return { ...base, status: "unknown", ...uncertainExecution(row), reason: "decrypt_failed" };
   }
 
-  let output: CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput;
+  if (isRecord(decoded) && "recoverySchema" in decoded) {
+    try {
+      assertCurrentSession();
+      validateExternalTransactionRecovery(decoded, row);
+      const saved = await saveDurableExternalTransactionRecovery(row.id, decoded);
+      assertCurrentSession();
+      return externalOutcome(saved, true);
+    } catch { return { ...base, status: "unknown", ...uncertainExecution(row), reason: "external_recovery_evidence_invalid_or_unavailable" }; }
+  }
+  let output:
+    | CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput;
   try {
     if (row.method === "signAndSubmitTransaction") {
       if (!isRecord(decoded) || Object.keys(decoded).length !== 1 ||
@@ -412,15 +614,22 @@ async function authorizedReadMobileRelay(
       }
       output = { hash: decoded.hash };
     } else if (row.method === "signMessage") {
-      if (!isRecord(decoded) || typeof decoded.address !== "string" ||
-          decoded.address.toLowerCase() !== row.address.toLowerCase() ||
-          typeof decoded.signature !== "string" ||
-          typeof decoded.fullMessage !== "string" || typeof decoded.message !== "string" ||
-          typeof decoded.nonce !== "string" || typeof decoded.prefix !== "string") {
-        throw new InferAdapterError(InferErrorCode.InternalError,
-          "Infer Connect returned an invalid signed message");
-      }
-      output = decoded as unknown as CedraSignMessageOutput;
+      output =
+        row.pending.expectedMessageInput && row.pending.signerPublicKey
+          ? verifySignedMessageOutput(
+              decoded,
+              row.pending.expectedMessageInput,
+              {
+                origin: row.origin,
+                accountAddress: canonicalAddress(row.address),
+                network: row.network,
+                chainId: row.chainId
+              },
+              row.pending.signerPublicKey,
+              (row.pending.expectedMessageInput as { profile?: string })
+                .profile !== "cedra:message:v1"
+            )
+          : normalizeSignMessageOutput(decoded);
     } else {
       // signTransaction: the original `expectedTransactionBcsHex` is
       // preserved on the row's pending.
@@ -441,7 +650,9 @@ async function authorizedReadMobileRelay(
   // ordering invariant so a follow-up read locally replays without
   // re-querying the relay.
   try {
+    assertCurrentSession();
     await saveDurableFinal(row.id, serializeStoredFinal(row.method, output));
+    assertCurrentSession();
   } catch {
     return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
   }
@@ -463,65 +674,442 @@ async function authorizedReadDesktopBridge(
   options: InferWalletOptions,
   base: ReturnType<typeof descriptor>
 ): Promise<RecoveredRequestOutcome | null> {
-  // The IPC bridge authenticates per-session URL token. The token is
-  // stored in sessionStorage by the postMessage flow; if it's not
-  // present, the endpoint cannot be reached → fall back to rc.21.
   const result = await readResultForSession({
+    invocationId: row.invocationId,
+    requestCommitment: row.requestCommitment,
+    requestPayload: row.pending.requestPayload, originalSessionId: row.sessionId,
     bridgeOrigin: row.endpoint,
     requestId: row.requestId,
     newSessionId: session.sessionId,
     scope: {
-      origin: row.origin,
-      transport: "desktop-bridge",
-      accountAddress: row.address,
-      network: row.network,
-      chainId: row.chainId,
-      method: row.method
+      origin: row.origin, transport: "desktop-bridge", accountAddress: row.address,
+      network: row.network, chainId: row.chainId, method: row.method
     },
-    options
+    session, options
   });
   if (!result.ok) return null;
-  if (result.status === "rejected") {
-    try {
-      await saveDurableFinal(row.id, { status: "rejected" });
-    } catch {
-      return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
-    }
-    return { ...base, status: "rejected" };
-  }
+  const assertCurrentSession = () => {
+    const current = readExternalSession();
+    if (!sameScope(row, current) || current.sessionId !== session.sessionId ||
+        !sameBridgeOrigin(row, current, options)) throw new Error("Desktop read authorization changed");
+  };
   try {
-    await saveDurableFinal(row.id, serializeStoredFinal(row.method, result.payload));
-  } catch {
-    return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
+    assertCurrentSession();
+    if (result.status === "not-submitted") {
+      const stored = await saveDurableExternalTransactionRecovery(row.id, result.transactionRecovery);
+      assertCurrentSession();
+      return externalOutcome(stored, true);
+    }
+    if (result.status === "pending" || result.status === "unknown") {
+      if (result.transactionHash) {
+        await saveDurableTransactionHash(row.id, result.transactionHash);
+        row.transactionHash = result.transactionHash;
+      }
+      return result.status === "pending"
+        ? { ...base, status: "pending", ...uncertainExecution(row) }
+        : { ...base, status: "unknown", reason: result.reason ?? "original_execution_unresolved", ...uncertainExecution(row) };
+    }
+    if (result.status === "rejected") {
+      if (!explicitRejectedPayload(result.payload) || result.hash !== undefined)
+        throw new Error("Ambiguous recovered rejection");
+      await saveDurableFinal(row.id, { status: "rejected" });
+      return { ...base, status: "rejected" };
+    }
+    if (result.status !== "approved") throw new Error("Unsupported recovered outcome");
+    const output = validateInjectedApproval({
+      method: row.method, origin: row.origin, address: row.address,
+      network: row.network, chainId: row.chainId,
+      requestPayload: row.pending.expectedMessageInput ?? row.pending.requestPayload,
+      signerPublicKey: row.pending.signerPublicKey,
+      expectedTransactionBcsHex: row.pending.expectedTransactionBcsHex
+    }, result.payload);
+    if (result.hash !== undefined &&
+        (row.method !== "signAndSubmitTransaction" ||
+          (output as CedraSignAndSubmitTransactionOutput).hash.toLowerCase() !== result.hash.toLowerCase()))
+      throw new Error("Recovered transaction identities differ");
+    await saveDurableFinal(row.id, serializeStoredFinal(row.method, output));
+    return { ...base, status: "approved", output };
+  } catch (cause) {
+    return { ...base, status: "unknown", ...uncertainExecution(row),
+      reason: cause instanceof Error ? cause.message : "Recovered result could not be validated or saved" };
   }
-  return { ...base, status: "approved", output: result.payload };
+}
+
+function injectedDescriptor(row: DurableInvocation): RecoverableRequest {
+  return {
+    recoveryId: "invocation:" + row.id,
+    requestId: row.id,
+    invocationId: row.id,
+    requestCommitment: row.requestCommitment,
+    origin: row.origin,
+    transport: "injected",
+    sessionId: row.sessionId,
+    address: row.address,
+    network: row.network,
+    chainId: row.chainId,
+    method: row.method
+  };
+}
+function validateInjectedApproval(
+  row: Pick<DurableInvocation, "method" | "origin" | "address" | "network" | "chainId" | "requestPayload" | "signerPublicKey"> &
+    { expectedTransactionBcsHex?: string },
+  payload: unknown
+) {
+  const scope = {
+    origin: row.origin,
+    accountAddress: canonicalAddress(row.address),
+    network: row.network,
+    chainId: row.chainId
+  };
+  if (row.method === "signAndSubmitTransaction") {
+    const fields = encodeWireValue(payload);
+    if (
+      !fields ||
+      Array.isArray(fields) ||
+      typeof fields !== "object" ||
+      Object.keys(fields).length !== 1 ||
+      !isValidTransactionHash(fields.hash)
+    )
+      throw new Error("Incomplete submitted result");
+    return { hash: fields.hash };
+  }
+  if (row.method === "signMessage") {
+    if (!row.signerPublicKey || !row.requestPayload)
+      throw new Error("Original signer or message is unavailable");
+    return verifySignedMessageOutput(
+      payload,
+      row.requestPayload as Parameters<typeof verifySignedMessageOutput>[1],
+      scope,
+      row.signerPublicKey,
+      (row.requestPayload as { profile?: string }).profile !==
+        "cedra:message:v1"
+    );
+  }
+  const expected =
+    row.requestPayload && typeof row.requestPayload === "object"
+      ? (row.requestPayload as { rawTransactionBcsHex?: string })
+          .rawTransactionBcsHex
+      : undefined;
+  return deserializeSignTransactionResult(payload, row.expectedTransactionBcsHex ?? expected);
+}
+function replayInjected(
+  row: DurableInvocation
+): RecoveredRequestOutcome | null {
+  const base = injectedDescriptor(row);
+  if (!row.final) return null;
+  if (row.final.status === "rejected") return { ...base, status: "rejected" };
+  if (row.final.method !== row.method)
+    return { ...base, status: "unknown", reason: "stored_method_mismatch" };
+  try {
+    const payload =
+      row.final.method === "signMessage"
+        ? row.final.output
+        : row.final.method === "signAndSubmitTransaction"
+          ? { hash: row.final.hash }
+          : row.final;
+    return {
+      ...base,
+      status: "approved",
+      output: validateInjectedApproval(row, payload)
+    };
+  } catch {
+    return { ...base, status: "unknown", reason: "stored_result_incomplete" };
+  }
+}
+function nativeExecutionEvidence(result: Record<string, unknown>, method: string): NativeExecutionEvidence {
+  const evidence: {submissionAcceptance?: "unknown" | "accepted"; chainStatus?: "unknown" | "pending" | "confirmed" | "aborted"; chainVersion?: string} = {};
+  if (result.submissionAcceptance !== undefined) {
+    if (method !== "signAndSubmitTransaction" || typeof result.submissionAcceptance !== "string" ||
+        !["unknown", "accepted"].includes(result.submissionAcceptance))
+      throw new Error("Invalid native acceptance evidence");
+    evidence.submissionAcceptance = result.submissionAcceptance as "unknown" | "accepted";
+  }
+  if (result.chainStatus !== undefined) {
+    if (method !== "signAndSubmitTransaction" || typeof result.chainStatus !== "string" ||
+        !["unknown", "pending", "confirmed", "aborted"].includes(result.chainStatus))
+      throw new Error("Invalid native chain evidence");
+    evidence.chainStatus = result.chainStatus as NativeExecutionEvidence["chainStatus"];
+  }
+  if (result.chainVersion !== undefined) {
+    if (typeof result.chainVersion !== "string" || !/^(0|[1-9]\d{0,19})$/.test(result.chainVersion) ||
+        BigInt(result.chainVersion) > (1n << 64n) - 1n ||
+        !["confirmed", "aborted"].includes(String(evidence.chainStatus)))
+      throw new Error("Invalid native chain version");
+    evidence.chainVersion = result.chainVersion;
+  }
+  if ((evidence.chainStatus === "confirmed" || evidence.chainStatus === "aborted") &&
+      evidence.chainVersion === undefined) throw new Error("Missing native chain version");
+  if (result.status === "approved" && evidence.submissionAcceptance === "unknown")
+    throw new Error("Contradictory native acceptance evidence");
+  if (result.status === "pending" && ["confirmed", "aborted"].includes(String(evidence.chainStatus)))
+    throw new Error("Conflicting native pending evidence");
+  return evidence;
+}
+async function readInjectedInvocation(
+  row: DurableInvocation,
+  options: InferWalletOptions
+): Promise<RecoveredRequestOutcome> {
+  const id = "invocation:" + row.id + ":" + nativeRecoveryKey(options);
+  const binding = nativeProviderBinding(options);
+  const scope = {origin:row.origin,accountAddress:canonicalAddress(row.address),network:row.network,chainId:row.chainId};
+  await binding?.assertScope(scope);
+  const existing = inFlight.get(id);
+  if (existing) {
+    const result = await existing;
+    await binding?.assertScope(scope);
+    return result;
+  }
+  const task = readInjectedInvocationOnce(row, options);
+  inFlight.set(id, task);
+  try {
+    const result = await task;
+    await binding?.assertScope(scope);
+    return result;
+  } finally {
+    if (inFlight.get(id) === task) inFlight.delete(id);
+  }
+}
+async function readInjectedInvocationOnce(
+  row: DurableInvocation,
+  options: InferWalletOptions
+): Promise<RecoveredRequestOutcome> {
+  const base = injectedDescriptor(row);
+  const scope = {
+    origin: row.origin,
+    accountAddress: canonicalAddress(row.address),
+    network: row.network,
+    chainId: row.chainId
+  };
+  try {
+    if (
+      !row.requestCommitment ||
+      requestCommitment(row.method, scope, row.requestPayload) !==
+        row.requestCommitment
+    )
+      return {
+        ...base,
+        status: "unknown", ...uncertainExecution(row),
+        reason: "invocation_commitment_mismatch"
+      };
+    // A selected native consumer must still hold the exact live scope before
+    // a cached final can be published.
+    await nativeProviderBinding(options)?.assertScope(scope);
+    const final = replayInjected(row);
+    // The selected wallet's raw read authenticates the current native grant.
+    // JS account/network caches alone cannot authorize terminal publication.
+    if (final && !nativeProviderBinding(options)) return final;
+    const provider = detectProvider(options);
+    if (
+      !provider?.readInvocation ||
+      provider.integrationContractVersion !== 1 ||
+      !provider.capabilities?.durableInvocationLookup ||
+      !provider.account ||
+      !provider.network
+    )
+      return {
+        ...base,
+        status: "unknown", ...uncertainExecution(row),
+        reason: "invocation_lookup_unavailable"
+      };
+    const unwrap = (value: unknown): unknown => {
+      if (value && typeof value === "object" && "status" in value) {
+        const fields = value as { status?: unknown; args?: unknown };
+        return fields.status === "Approved" && Object.keys(fields).length === 2
+          ? fields.args
+          : null;
+      }
+      return value;
+    };
+    const account = unwrap(await provider.account()) as {
+      address?: unknown;
+    } | null;
+    const networkValue = unwrap(await provider.network());
+    if (
+      typeof networkValue !== "string" &&
+      typeof networkValue !== "number" &&
+      (!networkValue ||
+        typeof networkValue !== "object" ||
+        !("name" in networkValue) ||
+        !("chainId" in networkValue))
+    )
+      return {
+        ...base,
+        status: "unknown", ...uncertainExecution(row),
+        reason: "current_provider_scope_mismatch"
+      };
+    const network = normalizeNetwork(
+      networkValue as Parameters<typeof normalizeNetwork>[0]
+    );
+    if (
+      !account ||
+      canonicalAddress(String(account.address)) !== scope.accountAddress ||
+      network.name !== scope.network ||
+      network.chainId !== scope.chainId
+    )
+      return {
+        ...base,
+        status: "unknown", ...uncertainExecution(row),
+        reason: "current_provider_scope_mismatch"
+      };
+    const result = encodeWireValue(
+      await provider.readInvocation(row.id, row.requestCommitment)
+    ) as Record<string, unknown>;
+    await nativeProviderBinding(options)?.assertScope(scope);
+    const returned = result.scope as Record<string, unknown> | undefined;
+    if (
+      result.contractVersion !== 1 ||
+      result.invocationId !== row.id ||
+      result.requestCommitment !== row.requestCommitment ||
+      result.method !== row.method ||
+      !returned ||
+      returned.origin !== scope.origin ||
+      returned.accountAddress !== scope.accountAddress ||
+      returned.network !== scope.network ||
+      returned.chainId !== scope.chainId
+    )
+      return {
+        ...base,
+        status: "unknown", ...uncertainExecution(row),
+        reason: "native_invocation_scope_mismatch"
+      };
+    if (result.submissionDisposition !== undefined || result.failureCode !== undefined) {
+      const proof = validateNativeNotSubmitted(result, row);
+      const assertNativeAuthority = async () => {
+        if (detectProvider(options) !== provider) throw new Error("Native provider changed");
+        const currentAccount = unwrap(await provider.account!()) as { address?: unknown } | null;
+        const currentNetwork = normalizeNetwork(unwrap(await provider.network!()) as Parameters<typeof normalizeNetwork>[0]);
+        if (!currentAccount || canonicalAddress(String(currentAccount.address)) !== scope.accountAddress ||
+            currentNetwork.name !== scope.network || currentNetwork.chainId !== scope.chainId || detectProvider(options) !== provider)
+          throw new Error("Native recovery authority changed");
+        await nativeProviderBinding(options)?.assertScope(scope);
+      };
+      await assertNativeAuthority();
+      if (row.deliveryState === "acknowledged") {
+        validateNativeNotSubmitted(row.nativeNotSubmitted, row);
+      } else await updateInjectedInvocationEvidence(row.id, { nativeNotSubmitted: proof });
+      await assertNativeAuthority();
+      return { ...base, status: "unknown", reason: "transaction_not_submitted",
+        submissionDisposition: proof.submissionDisposition, failureCode: proof.failureCode };
+    }
+    if (row.nativeNotSubmitted) throw new Error("Native terminal proof contradicted");
+    const evidence = nativeExecutionEvidence(result, row.method);
+    const recoveredHash = result.transactionHash ?? result.hash;
+    if (result.transactionHash !== undefined && result.hash !== undefined &&
+        result.transactionHash !== result.hash) throw new Error("Conflicting native identity");
+    if (result.status === "pending" || result.status === "unknown") {
+      if (result.payload !== undefined) throw new Error("Unexpected unresolved payload");
+      if (recoveredHash !== undefined) {
+        if (row.method !== "signAndSubmitTransaction" || !isValidTransactionHash(recoveredHash))
+          throw new Error("Invalid recovered execution identity");
+        await saveDurableTransactionHash(row.id, recoveredHash, true);
+        await nativeProviderBinding(options)?.assertScope(scope);
+        row.transactionHash = recoveredHash.toLowerCase();
+      } else if (evidence.chainStatus === "pending" || evidence.chainStatus === "confirmed" || evidence.chainStatus === "aborted" ||
+                 evidence.submissionAcceptance === "accepted") {
+        throw new Error("Native execution evidence lacks identity");
+      }
+      return result.status === "pending"
+        ? { ...base, status: "pending", ...uncertainExecution(row), ...evidence }
+        : { ...base, status: "unknown", reason: "original_execution_unresolved", ...uncertainExecution(row), ...evidence };
+    }
+    if (result.status === "rejected" && explicitRejectedPayload(result.payload) &&
+        recoveredHash === undefined && Object.keys(evidence).length === 0) {
+      if (!row.final) await updateInjectedInvocationEvidence(row.id, { final: { status: "rejected" } });
+      else if (row.final.status !== "rejected") throw new Error("Conflicting native decline");
+      await nativeProviderBinding(options)?.assertScope(scope);
+      return { ...base, status: "rejected" };
+    }
+    if (result.status !== "approved")
+      return { ...base, status: "unknown", ...uncertainExecution(row), reason: "native_outcome_unavailable" };
+    const output = validateInjectedApproval(row, result.payload);
+    if (recoveredHash !== undefined &&
+        (row.method !== "signAndSubmitTransaction" || !isValidTransactionHash(recoveredHash) ||
+         !("hash" in output) || output.hash.toLowerCase() !== recoveredHash.toLowerCase()))
+      throw new Error("Conflicting native approval identity");
+    const retainedFinal = serializeStoredFinal(row.method, output);
+    if (!row.final) await updateInjectedInvocationEvidence(row.id, {final: retainedFinal});
+    else if (JSON.stringify(row.final) !== JSON.stringify(retainedFinal))
+      throw new Error("Conflicting native terminal outcome");
+    await nativeProviderBinding(options)?.assertScope(scope);
+    return { ...base, status: "approved", output, ...evidence };
+  } catch {
+    return {
+      ...base,
+      status: "unknown", ...uncertainExecution(row),
+      reason: "native_invocation_read_unavailable"
+    };
+  }
 }
 
 /** List all active same-origin receipts, including those from an older wallet session. */
 export async function listRecoverableRequests(options: InferWalletOptions = {}): Promise<RecoverableRequest[]> {
-  return (await records(options)).filter((row) => row.state === "active").map(descriptor);
+  const external = (await records(options)).filter((row) => row.state === "active").map(descriptor);
+  const injected = (await listDurableInvocations())
+    .filter(
+      (row) =>
+        row.transport === "injected" &&
+        row.state !== "not-invoked" &&
+        (!row.deliveryState || row.deliveryState === "active")
+    )
+    .map(injectedDescriptor);
+  return [...external, ...injected];
 }
 
 export async function listArchivedRecoverableRequests(
   options: InferWalletOptions = {}
 ): Promise<ArchivedRecoverableRequest[]> {
-  return (await records(options)).flatMap((row) =>
+  const external = (await records(options)).flatMap((row) =>
     row.state === "archived" && row.archive ? [{ ...descriptor(row), ...row.archive }] : []);
+  const injected = (await listDurableInvocations()).flatMap((row) =>
+    row.transport === "injected" &&
+    row.deliveryState === "archived" &&
+    row.archive
+      ? [{ ...injectedDescriptor(row), ...row.archive }]
+      : []
+  );
+  return [...external, ...injected];
 }
 
 /** Read only the original request. A locally verified final result replays without network access. */
 export async function readRecoverableRequest(
   requestIdOrRecoveryId: string,
-  options: InferWalletOptions = {}
+  options: InferWalletOptions = {},
+  readOptions: RecoveryReadOptions = {}
 ): Promise<RecoveredRequestOutcome> {
   if (typeof window === "undefined") {
-    throw new InferAdapterError(InferErrorCode.Unsupported, "Recovery requires a browser");
+    throw new InferAdapterError(InferErrorCode.Unsupported, "Recovery requires a browser"
+    );
   }
-  const row = findExact(await records(options), requestIdOrRecoveryId);
+  if (requestIdOrRecoveryId.startsWith("invocation:")) {
+    const invocation = await getDurableInvocation(requestIdOrRecoveryId.slice(11));
+    if (!invocation || invocation.transport !== "injected")
+      throw new InferAdapterError(
+        InferErrorCode.Unauthorized,
+        "Unknown injected invocation handle"
+      );
+    return readInjectedInvocation(invocation, options);
+  }
+  const row = await exactRecord(requestIdOrRecoveryId, options);
   const locallyVerified = replay(row);
   if (locallyVerified) return locallyVerified;
+  const cached = externalOutcome(row);
+  if (cached?.submissionDisposition === "not-submitted") return cached;
   const base = descriptor(row);
   const session = readExternalSession();
+  const readKey = JSON.stringify([row.id, readOptions.allowMobileRecoveryHandoff === true]);
+  if (row.transport === "desktop-bridge" && row.requestCommitment && row.invocationId &&
+      session?.integrationContractVersion === 1 && session.capabilities?.durableInvocationLookup &&
+      sameScope(row, session) && sameBridgeOrigin(row, session, options)) {
+    const existing = inFlight.get(readKey);
+    if (existing) return existing;
+    const task = (async (): Promise<RecoveredRequestOutcome> => {
+      const authorized = await authorizedReadDesktopBridge(row, session, options, base);
+      return authorized ?? { ...base, status: "unknown", ...uncertainExecution(row), reason: "durable_result_unavailable" };
+    })();
+    inFlight.set(readKey, task);
+    try { return await task; }
+    finally { inFlight.delete(readKey); }
+  }
   if (!matchingSession(row, session, options)) {
     // v0.2.0-rc.22 (A1): if no verified local final is available and the
     // original session is gone, attempt the authorized-read fallback
@@ -538,17 +1126,17 @@ export async function readRecoverableRequest(
     // that older relay/Desk deployments see no behavior change.
     if (sameScope(row, session)) {
       if (row.transport === "mobile-relay" && sameRelayBaseUrl(row, session)) {
-        const authorized = await authorizedReadMobileRelay(row, session!, base);
+        const authorized = await authorizedReadMobileRelay(row, session!, base, options, readOptions);
         if (authorized) return authorized;
       } else if (row.transport === "desktop-bridge" && sameBridgeOrigin(row, session, options)) {
         const authorized = await authorizedReadDesktopBridge(row, session!, options, base);
         if (authorized) return authorized;
       }
     }
-    return { ...base, status: "unknown",
+    return { ...base, status: "unknown", ...uncertainExecution(row),
       reason: "Original wallet session cannot authenticate a remote read; reconnect or reconcile externally" };
   }
-  const existing = inFlight.get(row.id);
+  const existing = inFlight.get(readKey);
   if (existing) return existing;
   const task = (async (): Promise<RecoveredRequestOutcome> => {
     let outcome: RecoveredRequestOutcome;
@@ -557,9 +1145,15 @@ export async function readRecoverableRequest(
         const { pending, status } = await readMobileRelayRequestOnce(
           row.requestId, session, options, row.pending as Extract<DurableRequest["pending"], { version: 1 }>
         );
-        if (status.status === "pending") return { ...base, status: "pending" };
+        if (status.status !== "approved" && (status.status !== "rejected" || status.errorCode === "EXECUTION_FAILED_BEFORE_BROADCAST") &&
+            row.method === "signAndSubmitTransaction" && row.requestCommitment &&
+            session.capabilities?.durableExternalSubmissionRecovery === true) {
+          const recovered = await authorizedReadMobileRelay(row, session, base, options, readOptions);
+          if (recovered) return recovered;
+        }
+        if (status.status === "pending") return cached ?? { ...base, status: "pending", ...uncertainExecution(row) };
         if (status.status !== "approved" && status.status !== "rejected") {
-          return { ...base, status: "unknown", reason: "Relay returned " + status.status };
+          return { ...base, status: "unknown", ...uncertainExecution(row), reason: "Relay returned " + status.status };
         }
         outcome = { ...base, status: "approved",
           output: decodeMobileRelayResult(status, pending, session) };
@@ -567,15 +1161,23 @@ export async function readRecoverableRequest(
         const result = await readDesktopBridgeRequestOnce(
           row.requestId, session, options, row.pending as Extract<DurableRequest["pending"], { version: 2 }>
         );
-        if (result.status === "pending") return { ...base, status: "pending" };
-        if (!result.output) return { ...base, status: "unknown", reason: "Missing approved output" };
+        if (!matchingSession(row, readExternalSession(), options))
+          throw new Error("Desktop read authorization changed");
+        if (result.status === "not-submitted") {
+          const stored = await saveDurableExternalTransactionRecovery(row.id, result.transactionRecovery);
+          if (!matchingSession(row, readExternalSession(), options))
+            throw new Error("Desktop read authorization changed");
+          return externalOutcome(stored, true)!;
+        }
+        if (result.status === "pending") return { ...base, status: "pending", ...uncertainExecution(row) };
+        if (!result.output) return { ...base, status: "unknown", ...uncertainExecution(row), reason: "Missing approved output" };
         outcome = { ...base, status: "approved", output: result.output };
       }
     } catch (error) {
       if (error instanceof InferAdapterError && error.code === InferErrorCode.UserRejected) {
         outcome = { ...base, status: "rejected" };
       } else {
-        return { ...base, status: "unknown", reason:
+        return { ...base, status: "unknown", ...uncertainExecution(row), reason:
           error instanceof Error ? error.message : "Result could not be validated" };
       }
     }
@@ -585,32 +1187,166 @@ export async function readRecoverableRequest(
         : serializeStoredFinal(row.method, outcome.output));
       return outcome;
     } catch {
-      return { ...base, status: "unknown", reason: "Verified outcome could not be saved durably" };
+      return { ...base, status: "unknown", ...uncertainExecution(row), reason: "Verified outcome could not be saved durably" };
     }
   })();
-  inFlight.set(row.id, task);
+  inFlight.set(readKey, task);
   try { return await task; }
-  finally { inFlight.delete(row.id); }
+  finally { inFlight.delete(readKey); }
 }
 
-/** Acknowledgement is an awaitable exact-record CAS after durable app acceptance. */
+/** Check optional native retention support without weakening original scope. */
+async function acknowledgeNativeResult(row: DurableInvocation, options: InferWalletOptions): Promise<void> {
+  const scope = { origin: row.origin, accountAddress: canonicalAddress(row.address), network: row.network, chainId: row.chainId };
+  await nativeProviderBinding(options)?.assertScope(scope);
+  const final = replayInjected(row);
+  let reconciledHash: string | undefined;
+  const notSubmitted = !!row.nativeNotSubmitted;
+  if (row.deliveryState === "acknowledged") return;
+  if (notSubmitted) {
+    validateNativeNotSubmitted(row.nativeNotSubmitted, row);
+    const observed = await readInjectedInvocation(row, options);
+    if (observed.submissionDisposition !== "not-submitted")
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "Native terminal proof cannot be revalidated");
+  }
+  if (!notSubmitted && (!final || (final.status !== "approved" && final.status !== "rejected"))) {
+    // Wallet C can prove an originally uncertain broadcast using exact committed
+    // chain evidence. Explicit acknowledgement may then retain acceptance,
+    // including a committed abort; neither is an application-success decision.
+    if (!isValidTransactionHash(row.transactionHash))
+      throw new InferAdapterError(InferErrorCode.InternalError, "native-outcome-not-terminal");
+    const observed = await readInjectedInvocation(row, options);
+    if (row.method !== "signAndSubmitTransaction" || observed.status !== "unknown" ||
+        !isValidTransactionHash(observed.transactionHash) ||
+        (observed.chainStatus !== "confirmed" && observed.chainStatus !== "aborted"))
+      throw new InferAdapterError(InferErrorCode.InternalError, "native-outcome-not-terminal");
+    reconciledHash = observed.transactionHash;
+  }
+  // Explicit false is admission-time evidence of an incapable peer, not a later downgrade.
+  if (!notSubmitted && row.remoteAcknowledgementRequired === false) return;
+  const provider = detectProvider(options);
+  if (!provider ||
+      ((notSubmitted || row.remoteAcknowledgementRequired === true) &&
+       (provider.integrationContractVersion !== 1 || !provider.acknowledgeInvocation)))
+    throw new InferAdapterError(InferErrorCode.Unauthorized,
+      "Reconnect the original acknowledgement-capable wallet to retain a retryable acknowledgement");
+  if (!row.requestCommitment ||
+      requestCommitment(row.method, scope, row.requestPayload) !== row.requestCommitment ||
+      !provider.account || !provider.network)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement requires the original invocation binding");
+  const unwrap = (value: unknown): unknown => {
+    if (value && typeof value === "object" && "status" in value) {
+      const fields = value as { status?: unknown; args?: unknown };
+      return fields.status === "Approved" && Object.keys(fields).length === 2 ? fields.args : null;
+    }
+    return value;
+  };
+  const account = unwrap(await provider.account()) as { address?: unknown } | null;
+  const network = normalizeNetwork(unwrap(await provider.network()) as Parameters<typeof normalizeNetwork>[0]);
+  if (!account || canonicalAddress(String(account.address)) !== scope.accountAddress ||
+      network.name !== scope.network || network.chainId !== scope.chainId)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Current native scope differs from the original request");
+  if (detectProvider(options) !== provider)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Native provider changed before acknowledgement");
+  // Historical rows lack a capability marker. A present, scope-checked mobile/legacy
+  // provider without this optional API is known incapable; absence alone is not proof.
+  if (!provider.acknowledgeInvocation) return;
+  if (provider.integrationContractVersion !== 1)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement requires contract v1");
+  const result = encodeWireValue(await provider.acknowledgeInvocation(row.id, row.requestCommitment));
+  if (!result || typeof result !== "object" || Array.isArray(result))
+    throw new InferAdapterError(InferErrorCode.InternalError, "Malformed native acknowledgement");
+  const returned = result.scope;
+  if (result.status !== "acknowledged" || result.contractVersion !== 1 ||
+      result.invocationId !== row.id || result.requestCommitment !== row.requestCommitment ||
+      result.method !== row.method || typeof result.requestId !== "string" || !result.requestId ||
+      (row.requestId !== undefined && result.requestId !== row.requestId) ||
+      !returned || typeof returned !== "object" || Array.isArray(returned) ||
+      returned.origin !== scope.origin || returned.accountAddress !== scope.accountAddress ||
+      returned.network !== scope.network || returned.chainId !== scope.chainId)
+    throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement differs from the original request");
+  await nativeProviderBinding(options)?.assertScope(scope);
+  if (notSubmitted) {
+    const currentAccount = unwrap(await provider.account()) as { address?: unknown } | null;
+    const currentNetwork = normalizeNetwork(unwrap(await provider.network()) as Parameters<typeof normalizeNetwork>[0]);
+    if (detectProvider(options) !== provider || !currentAccount ||
+        canonicalAddress(String(currentAccount.address)) !== scope.accountAddress ||
+        currentNetwork.name !== scope.network || currentNetwork.chainId !== scope.chainId)
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "Native acknowledgement authority changed");
+  }
+  if (reconciledHash) {
+    await updateInjectedInvocationEvidence(row.id, {
+      final: {status:"approved",method:"signAndSubmitTransaction",hash:reconciledHash}
+    });
+    await nativeProviderBinding(options)?.assertScope(scope);
+  }
+}
+
+/** Desktop remote retention acknowledgement precedes local delivery CAS.
+ * Mobile acknowledgement only accepts already verified local evidence; it never contacts or opens the wallet. */
 export async function acknowledgeRecoverableRequest(
   requestIdOrRecoveryId: string,
   options: InferWalletOptions = {}
 ): Promise<void> {
-  const row = findExact(await records(options), requestIdOrRecoveryId);
-  if (!row.final) {
-    throw new InferAdapterError(InferErrorCode.InternalError,
-      "Read a verified final outcome before acknowledging this request");
+  if (requestIdOrRecoveryId.startsWith("invocation:")) {
+    const row = await getDurableInvocation(requestIdOrRecoveryId.slice(11));
+    if (!row || row.transport !== "injected") throw new InferAdapterError(InferErrorCode.Unauthorized, "Unknown native invocation");
+    await acknowledgeNativeResult(row, options);
+    await nativeProviderBinding(options)?.assertScope({origin:row.origin,accountAddress:canonicalAddress(row.address),network:row.network,chainId:row.chainId});
+    await updateInjectedInvocationEvidence(row.id, { deliveryState: "acknowledged" });
+    await nativeProviderBinding(options)?.assertScope({origin:row.origin,accountAddress:canonicalAddress(row.address),network:row.network,chainId:row.chainId});
+    return;
+  }
+  const row = await exactRecord(requestIdOrRecoveryId, options);
+  const final = replay(row);
+  const failure = externalOutcome(row);
+  const notSubmitted = failure?.submissionDisposition === "not-submitted";
+  if ((!final || (final.status !== "approved" && final.status !== "rejected")) && !notSubmitted)
+    throw new InferAdapterError(InferErrorCode.InternalError, "Read a verified final outcome before acknowledging this request");
+  if (row.state === "acknowledged") return;
+  const session = readExternalSession();
+  // Missing historical metadata is not proof of a legacy peer: retain possible
+  // Desktop v1 debt until its original result is remotely acknowledged.
+  if (row.transport === "desktop-bridge" && (notSubmitted || (row.remoteAcknowledgementRequired !== false &&
+      (row.remoteAcknowledgementRequired === true || (row.requestCommitment && row.invocationId))))) {
+    if (!row.requestCommitment || !row.invocationId ||
+        session?.integrationContractVersion !== 1 || !session.capabilities?.durableInvocationLookup ||
+        !sameScope(row, session) || !sameBridgeOrigin(row, session, options))
+      throw new InferAdapterError(InferErrorCode.Unauthorized, "Reconnect the original account and network to acknowledge its retained result");
+    if (notSubmitted) {
+      const remote = await readResultForSession({
+        invocationId: row.invocationId, requestCommitment: row.requestCommitment,
+        requestPayload: row.pending.requestPayload, originalSessionId: row.sessionId,
+        bridgeOrigin: row.endpoint, requestId: row.requestId, newSessionId: session.sessionId,
+        scope: { origin: row.origin, transport: "desktop-bridge", accountAddress: row.address,
+          network: row.network, chainId: row.chainId, method: row.method }, session, options
+      });
+      if (!remote.ok || remote.status !== "not-submitted")
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Original terminal failure could not be revalidated before acknowledgement");
+      await saveDurableExternalTransactionRecovery(row.id, remote.transactionRecovery);
+      const current = readExternalSession();
+      if (!sameScope(row, current) || current.sessionId !== session.sessionId || !sameBridgeOrigin(row, current, options))
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Desktop acknowledgement authority changed");
+    }
+    await acknowledgeDesktopResult({
+      invocationId: row.invocationId, requestCommitment: row.requestCommitment,
+      bridgeOrigin: row.endpoint, requestId: row.requestId, newSessionId: session.sessionId,
+      scope: { origin: row.origin, transport: "desktop-bridge", accountAddress: row.address,
+        network: row.network, chainId: row.chainId, method: row.method },
+      session, options
+    });
+    if (notSubmitted) {
+      const current = readExternalSession();
+      if (!sameScope(row, current) || current.sessionId !== session.sessionId || !sameBridgeOrigin(row, current, options))
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Desktop acknowledgement authority changed");
+    }
   }
   await transitionDurableRequest(row.id, "acknowledge");
-  if (matchingSession(row, readExternalSession(), options)) {
+  if (matchingSession(row, session, options)) {
     try {
       if (row.transport === "mobile-relay") clearPendingMobileRelayRequest(row.requestId);
       else clearPendingDesktopBridgeRequest(row.requestId);
-    } catch {
-      // The committed IDB tombstone is authoritative.
-    }
+    } catch { /* The committed IDB tombstone is authoritative. */ }
   }
 }
 
@@ -620,12 +1356,19 @@ export async function archiveRecoverableRequest(
   reconciliationReference: string,
   options: InferWalletOptions = {}
 ): Promise<void> {
-  const row = findExact(await records(options), requestIdOrRecoveryId);
+  if (requestIdOrRecoveryId.startsWith("invocation:")) {
+    await updateInjectedInvocationEvidence(requestIdOrRecoveryId.slice(11), {
+      deliveryState: "archived",
+      archive: makeRecoveryArchive(reconciliationReference)
+    });
+    return;
+  }
+  const row = await exactRecord(requestIdOrRecoveryId, options);
   if (row.state !== "active") {
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Request is not active in this browser origin");
   }
-  if (row.final) {
+  if (row.final || externalOutcome(row)?.submissionDisposition === "not-submitted") {
     throw new InferAdapterError(InferErrorCode.InvalidParams,
       "Verified final outcomes must be acknowledged after durable acceptance");
   }

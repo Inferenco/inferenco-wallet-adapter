@@ -1,3 +1,6 @@
+import { validateNativeNotSubmitted, type NativeNotSubmittedProof } from "./nativeNotSubmitted";
+import { normalizeSignMessageOutput } from "./conversion";
+import { canonicalAddress, canonicalJson, requestCommitment } from "./integrationContract";
 import type {
   CedraSignAndSubmitTransactionOutput,
   CedraSignMessageOutput,
@@ -8,6 +11,8 @@ import type { PendingDesktopBridgeRequest } from "./desktopRequests";
 import type { PendingMobileRelayRequest } from "./mobileRequests";
 import type { RecoveryArchive } from "./requestArchive";
 import type { InferExternalSession } from "./types";
+
+import { validateExternalTransactionRecovery, mergeExternalTransactionRecovery, type ExternalTransactionRecovery } from "./externalTransactionRecovery";
 
 const DB_NAME = "inferenco:infer-recovery";
 const DB_VERSION = 1;
@@ -36,13 +41,22 @@ export interface DurableMobileRequestEnvelope {
   method: "signMessage" | "signTransaction" | "signAndSubmitTransaction";
   callbackUrl: string;
   encryptedRequest: string;
-  requestMetadata: { origin: string; appName: string };
+  requestMetadata: { origin: string; appName: string; invocationId?: string; requestCommitment?: string };
 }
 
 export interface DurableInvocation {
+  nativeNotSubmitted?: NativeNotSubmittedProof;
+  /** Absent on historical rows; false records an originally incapable peer. */
+  remoteAcknowledgementRequired?: boolean;
+  transactionHash?: string;
+  requestCommitment?: string;
+  requestPayload?: unknown;
+  endpoint?: string;
+  signerPublicKey?: string;
+  updatedAt?: string;
   id: string;
   origin: string;
-  transport: InferExternalSession["transport"];
+  transport: InferExternalSession["transport"] | "injected";
   sessionId: string;
   address: string;
   network: string;
@@ -57,19 +71,30 @@ export interface DurableInvocation {
     expectedTransactionBcsHex?: string;
   };
   failureReason?: string;
+  final?: StoredFinal;
+  deliveryState?: "active" | "acknowledged" | "archived";
+  archive?: RecoveryArchive;
 }
 
-export type DurablePending = PendingDesktopBridgeRequest | PendingMobileRelayRequest;
+export type DurablePending =
+  | PendingDesktopBridgeRequest | PendingMobileRelayRequest;
 export type StoredFinal =
   | { status: "rejected" }
   | { status: "approved"; method: "signAndSubmitTransaction"; hash: string }
-  | { status: "approved"; method: "signMessage"; output: Record<string, unknown> }
-  | { status: "approved"; method: "signTransaction"; authenticatorHex: string; rawTransactionBcsHex: string };
+  | { status: "approved"; method: "signMessage"; output: Record<string, unknown>;
+    }
+  | {
+      status: "approved";
+      method: "signTransaction";
+      authenticatorHex: string;
+      rawTransactionBcsHex: string;
+    };
 
 /** Store only validated, serializable final output before returning it to a dapp. */
 export function serializeStoredFinal(
   method: DurablePending["method"],
-  output: CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput
+  output:
+    | CedraSignMessageOutput | CedraSignTransactionOutputV1_1 | CedraSignAndSubmitTransactionOutput
 ): StoredFinal {
   if (method === "signAndSubmitTransaction") {
     const hash = (output as CedraSignAndSubmitTransactionOutput).hash;
@@ -77,15 +102,15 @@ export function serializeStoredFinal(
     return { status: "approved", method, hash };
   }
   if (method === "signMessage") {
-    const plain = JSON.parse(JSON.stringify(output)) as Record<string, unknown>;
-    if (typeof plain.address !== "string" || typeof plain.signature !== "string" ||
-        typeof plain.fullMessage !== "string" || typeof plain.message !== "string") {
-      throw new Error("Invalid signed message for persistent recovery");
-    }
+    const normalized = normalizeSignMessageOutput(output);
+    const plain = {
+      ...normalized,
+      signature: normalized.signature.toString()
+    } as unknown as Record<string, unknown>;
     return { status: "approved", method, output: plain };
   }
   const signed = output as CedraSignTransactionOutputV1_1 & {
-    authenticatorHex?: string; rawTransactionBcsHex?: string
+    authenticatorHex?: string; rawTransactionBcsHex?: string;
   };
   if (typeof signed.authenticatorHex !== "string" ||
       typeof signed.rawTransactionBcsHex !== "string") {
@@ -96,6 +121,10 @@ export function serializeStoredFinal(
 }
 
 export interface DurableRequest {
+  externalTransactionRecovery?: ExternalTransactionRecovery;
+  remoteAcknowledgementRequired?: boolean;
+  transactionHash?: string;
+  requestCommitment?: string;
   id: string;
   scopeKey: string;
   origin: string;
@@ -178,7 +207,8 @@ export function durableScopeKey(pending: DurablePending): string {
 }
 
 function sameScope(record: DurableRequest, pending: DurablePending): boolean {
-  return record.transport === (pending.version === 2 ? "desktop-bridge" : "mobile-relay") &&
+  return (
+    record.transport === (pending.version === 2 ? "desktop-bridge" : "mobile-relay") &&
     record.origin === (pending.origin ?? window.location.origin) &&
     record.sessionId === pending.sessionId &&
     record.address === pending.address &&
@@ -186,7 +216,9 @@ function sameScope(record: DurableRequest, pending: DurablePending): boolean {
     record.chainId === pending.chainId &&
     record.method === pending.method &&
     record.endpoint === pendingEndpoint(pending) &&
-    record.requestId === pending.requestId;
+    record.requestId === pending.requestId &&
+    record.requestCommitment === pending.requestCommitment
+  );
 }
 
 function validStoredRecord(row: DurableRequest): boolean {
@@ -206,7 +238,24 @@ function validStoredRecord(row: DurableRequest): boolean {
     const endpoint = new URL(row.endpoint);
     if (!["http:", "https:"].includes(endpoint.protocol) ||
         (row.transport === "desktop-bridge" && endpoint.origin !== row.endpoint)) return false;
-    return row.scopeKey === durableScopeKey(row.pending) && sameScope(row, row.pending);
+    if (
+      row.requestCommitment &&
+      requestCommitment(
+        row.method,
+        {
+          origin: row.origin,
+          accountAddress: canonicalAddress(row.address),
+          network: row.network,
+          chainId: row.chainId
+        },
+        row.pending.requestPayload
+      ) !== row.requestCommitment
+    )
+      return false;
+    return (
+      row.scopeKey === durableScopeKey(row.pending) &&
+      sameScope(row, row.pending)
+    );
   } catch {
     return false;
   }
@@ -224,6 +273,14 @@ export async function saveDurableRequest(
   if ((pending.origin ?? window.location.origin) !== window.location.origin) {
     throw new InferAdapterError(InferErrorCode.Unauthorized, "Recovery request origin changed");
   }
+  const invocation = invocationId ? await getDurableInvocation(invocationId) : undefined;
+  const boundInvocation = invocation &&
+    invocation.origin === (pending.origin ?? window.location.origin) &&
+    invocation.transport === (pending.version === 2 ? "desktop-bridge" : "mobile-relay") &&
+    invocation.sessionId === pending.sessionId &&
+    canonicalAddress(invocation.address) === canonicalAddress(pending.address) &&
+    invocation.network === pending.network && invocation.chainId === pending.chainId &&
+    invocation.method === pending.method && invocation.requestCommitment === pending.requestCommitment;
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
@@ -251,7 +308,11 @@ export async function saveDurableRequest(
         method: pending.method, endpoint: pendingEndpoint(pending),
         pending, createdAt: now, updatedAt: now, revision: 1, state: "active",
         ...(pending.archive ? { archive: pending.archive } : {}),
-        ...(invocationId ? { invocationId } : {})
+        ...(invocationId ? { invocationId } : {}),
+        ...(boundInvocation && invocation.remoteAcknowledgementRequired !== undefined
+          ? { remoteAcknowledgementRequired: invocation.remoteAcknowledgementRequired } : {}),
+        ...(pending.requestCommitment
+          ? { requestCommitment: pending.requestCommitment } : {})
       };
       if (pending.archive) result.state = "archived";
       store.add(result);
@@ -278,6 +339,52 @@ export async function listDurableRequests(): Promise<DurableRequest[]> {
   });
 }
 
+/** Use existing keys for opaque handles and linked invocations. Bare request IDs
+ * retain a cursor fallback so duplicate IDs across sessions remain ambiguous. */
+export async function findDurableRequests(
+  id: string,
+  invocation?: DurableInvocation
+): Promise<DurableRequest[]> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly"), store = tx.objectStore(STORE);
+    const matches: DurableRequest[] = [];
+    const direct = store.get(id);
+    direct.onsuccess = () => {
+      if (!invocation && direct.result && validStoredRecord(direct.result)) {
+        matches.push(direct.result);
+        return;
+      }
+      if (invocation?.requestId === id) {
+        const lookup = store.index("scopeKey").get(JSON.stringify([
+          invocation.origin, invocation.transport, invocation.sessionId, id
+        ]));
+        lookup.onsuccess = () => {
+          const row = lookup.result as DurableRequest | undefined;
+          if (row && validStoredRecord(row) && row.method === invocation.method &&
+              canonicalAddress(row.address) === canonicalAddress(invocation.address) &&
+              row.network === invocation.network && row.chainId === invocation.chainId &&
+              row.requestCommitment === invocation.requestCommitment &&
+              (!row.invocationId || row.invocationId === invocation.id))
+            matches.push(row);
+        };
+        return;
+      }
+      const cursor = store.index("origin").openCursor(window.location.origin);
+      cursor.onsuccess = () => {
+        const entry = cursor.result;
+        if (!entry) return;
+        const row = entry.value as DurableRequest;
+        if (row.requestId === id && validStoredRecord(row)) matches.push(row);
+        entry.continue();
+      };
+    };
+    tx.oncomplete = () => { db.close(); resolve(matches); };
+    tx.onabort = () => { db.close(); reject(failure("Unable to inspect the original recovery record", tx.error)); };
+    tx.onerror = () => { /* onabort rejects */ };
+  });
+}
+
 export async function saveDurableFinal(id: string, final: StoredFinal): Promise<DurableRequest> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
@@ -289,7 +396,11 @@ export async function saveDurableFinal(id: string, final: StoredFinal): Promise<
     lookup.onsuccess = () => {
       const row = lookup.result as DurableRequest | undefined;
       if (!row || row.origin !== window.location.origin || row.state !== "active" ||
-          (row.final && JSON.stringify(row.final) !== JSON.stringify(final))) {
+          (row.externalTransactionRecovery?.status === "not-submitted") ||
+          (row.final && JSON.stringify(row.final) !== JSON.stringify(final)) ||
+          (row.transactionHash && (final.status !== "approved" ||
+            final.method !== "signAndSubmitTransaction" ||
+            final.hash.toLowerCase() !== row.transactionHash.toLowerCase()))) {
         tx.abort();
         return;
       }
@@ -307,6 +418,97 @@ export async function saveDurableFinal(id: string, final: StoredFinal): Promise<
   });
 }
 
+/** Atomically retain authenticated recovery evidence and any accepted result. */
+export async function saveDurableExternalTransactionRecovery(id: string, value: unknown): Promise<DurableRequest> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    let result: DurableRequest | undefined;
+    let changed = false;
+    const lookup = store.get(id);
+    lookup.onsuccess = () => {
+      const row = lookup.result as DurableRequest | undefined;
+      try {
+        if (!row || row.origin !== window.location.origin || !["mobile-relay", "desktop-bridge"].includes(row.transport) || !validStoredRecord(row) || row.state !== "active") throw new Error();
+        const next = validateExternalTransactionRecovery(value, row);
+        const previous = row.externalTransactionRecovery && validateExternalTransactionRecovery(row.externalTransactionRecovery, row);
+        const evidence = mergeExternalTransactionRecovery(previous, next);
+        if ((row.transactionHash && evidence.transactionHash !== row.transactionHash) ||
+            (row.final && (row.final.status !== "approved" || row.final.method !== "signAndSubmitTransaction" || row.final.hash !== evidence.transactionHash))) throw new Error();
+        const final: StoredFinal | undefined = evidence.status === "approved"
+          ? { status: "approved", method: "signAndSubmitTransaction", hash: evidence.transactionHash! } : row.final;
+        // Revalidating an already accepted snapshot is a read, not a new
+        // revision. In particular acknowledgement retries must not wake their
+        // own recovered-outcome subscriber and create a retry feedback loop.
+        if (previous && canonicalJson(previous) === canonicalJson(evidence) &&
+            (row.transactionHash ?? null) === (evidence.transactionHash ?? null) &&
+            canonicalJson(row.final ?? null) === canonicalJson(final ?? null)) {
+          result = row;
+          return;
+        }
+        result = { ...row, externalTransactionRecovery: evidence,
+          ...(evidence.transactionHash ? { transactionHash: evidence.transactionHash } : {}),
+          ...(final ? { final } : {}), updatedAt: new Date().toISOString(), revision: row.revision + 1 };
+        store.put(result);
+        changed = true;
+      } catch { tx.abort(); }
+    };
+    tx.oncomplete = () => { db.close(); if (changed) announceRecordChange(); resolve(result!); };
+    tx.onabort = () => { db.close(); reject(failure("External recovery evidence conflicts with the original request", tx.error)); };
+    tx.onerror = () => {};
+  });
+}
+
+/** Persist scoped execution evidence without inventing a terminal outcome. */
+export async function saveDurableTransactionHash(id: string, hash: string, injected = false): Promise<void> {
+  if (!isValidTransactionHash(hash)) throw failure("Invalid transaction identity");
+  hash = hash.toLowerCase();
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(injected ? INVOCATIONS : STORE, "readwrite");
+    const store = tx.objectStore(injected ? INVOCATIONS : STORE);
+    const lookup = store.get(id);
+    let changed = false;
+    lookup.onsuccess = () => {
+      const row = lookup.result as DurableRequest | DurableInvocation | undefined;
+      if (!row || row.origin !== window.location.origin || !row.requestCommitment ||
+          row.method !== "signAndSubmitTransaction" ||
+          ("externalTransactionRecovery" in row && row.externalTransactionRecovery?.status === "not-submitted") ||
+          ("nativeNotSubmitted" in row && !!row.nativeNotSubmitted) ||
+          (row.transactionHash && row.transactionHash.toLowerCase() !== hash) ||
+          (row.final && (row.final.status !== "approved" ||
+            row.final.method !== "signAndSubmitTransaction" || row.final.hash.toLowerCase() !== hash))) {
+        tx.abort(); return;
+      }
+      try {
+        if (requestCommitment(row.method, {
+          origin: row.origin, accountAddress: canonicalAddress(row.address),
+          network: row.network, chainId: row.chainId
+        }, "pending" in row ? row.pending.requestPayload : row.requestPayload) !== row.requestCommitment) {
+          tx.abort(); return;
+        }
+      } catch { tx.abort(); return; }
+      if (row.transactionHash === hash) return;
+      store.put({ ...row, transactionHash: hash, updatedAt: new Date().toISOString(),
+        ...("revision" in row ? { revision: row.revision + 1 } : {}) });
+      changed = true;
+    };
+    tx.oncomplete = () => { db.close(); if (changed) announceRecordChange(); resolve(); };
+    tx.onabort = () => { db.close(); reject(failure("Transaction identity conflicts with the original request", tx.error)); };
+    tx.onerror = () => {};
+  });
+}
+
+/** Only an exact, revalidated external terminal assertion has this retention status. */
+function verifiedExternalNotSubmitted(row: DurableRequest): boolean {
+  try {
+    return (row.transport === "desktop-bridge" || row.transport === "mobile-relay") &&
+      !row.final && !row.transactionHash &&
+      validateExternalTransactionRecovery(row.externalTransactionRecovery, row).status === "not-submitted";
+  } catch { return false; }
+}
+
 export async function transitionDurableRequest(
   id: string,
   operation: "acknowledge" | "archive",
@@ -320,8 +522,8 @@ export async function transitionDurableRequest(
     lookup.onsuccess = () => {
       const row = lookup.result as DurableRequest | undefined;
       if (!row || row.origin !== window.location.origin ||
-          (operation === "acknowledge" && (!row.final || row.state === "archived")) ||
-          (operation === "archive" && (row.state === "acknowledged" || !!row.final))) {
+          (operation === "acknowledge" && ((!row.final && !verifiedExternalNotSubmitted(row)) || row.state === "archived")) ||
+          (operation === "archive" && (row.state === "acknowledged" || !!row.final || verifiedExternalNotSubmitted(row)))) {
         tx.abort();
         return;
       }
@@ -343,7 +545,7 @@ export async function transitionDurableRequest(
 export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
+    const tx = db.transaction([STORE, INVOCATIONS], "readwrite");
     const store = tx.objectStore(STORE);
     const cursor = store.openCursor();
     cursor.onsuccess = () => {
@@ -351,8 +553,39 @@ export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
       if (!entry) return;
       const row = entry.value as DurableRequest;
       const age = now - Date.parse(row.updatedAt);
-      if ((row.state === "acknowledged" && age > ACK_TOMBSTONE_MS) ||
-          (row.state === "archived" && age > ARCHIVE_MS)) entry.delete();
+      if (validStoredRecord(row) &&
+          ((row.state === "acknowledged" && (!!row.final || verifiedExternalNotSubmitted(row)) && age > ACK_TOMBSTONE_MS) ||
+           (row.state === "archived" && !!row.archive && age > ARCHIVE_MS))) {
+        entry.delete();
+        if (row.invocationId) {
+          const lookup = tx.objectStore(INVOCATIONS).get(row.invocationId);
+          lookup.onsuccess = () => {
+            const invocation = lookup.result as DurableInvocation | undefined;
+            // Only a linked completed delivery is eligible; orphan/uncertain work survives.
+            if (invocation && validStoredInvocation(invocation) && invocation.origin === row.origin &&
+                invocation.transport === row.transport && invocation.requestId === row.requestId &&
+                invocation.sessionId === row.sessionId && invocation.method === row.method &&
+                invocation.address === row.address && invocation.network === row.network &&
+                invocation.chainId === row.chainId &&
+                invocation.requestCommitment === row.requestCommitment)
+              tx.objectStore(INVOCATIONS).delete(invocation.id);
+          };
+        }
+      }
+      entry.continue();
+    };
+    const invocations = tx.objectStore(INVOCATIONS).openCursor();
+    invocations.onsuccess = () => {
+      const entry = invocations.result;
+      if (!entry) return;
+      const row = entry.value as DurableInvocation;
+      const age = now - Date.parse(row.updatedAt ?? row.createdAt);
+      if (
+        row.origin === window.location.origin && row.transport === "injected" &&
+        ((row.deliveryState === "acknowledged" && age > ACK_TOMBSTONE_MS) ||
+          (row.deliveryState === "archived" && age > ARCHIVE_MS))
+      )
+        entry.delete();
       entry.continue();
     };
     tx.oncomplete = () => { db.close(); resolve(); };
@@ -363,15 +596,31 @@ export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
 
 /** Persist an invocation identity before any request-creation POST. */
 export async function prepareDurableInvocation(
-  session: InferExternalSession,
-  method: DurablePending["method"]
+  session: Pick<
+    InferExternalSession,
+    "sessionId" | "address" | "network" | "chainId"
+  > & Pick<InferExternalSession, "integrationContractVersion" | "capabilities"> &
+    { transport: DurableInvocation["transport"] },
+  method: DurablePending["method"],
+  binding?: {
+    requestCommitment: string;
+    requestPayload: unknown;
+    endpoint: string;
+    signerPublicKey?: string;
+    remoteAcknowledgementRequired?: boolean;
+  }
 ): Promise<DurableInvocation> {
   const db = await openDatabase();
   const record: DurableInvocation = {
     id: randomUuid(), origin: window.location.origin, transport: session.transport,
     sessionId: session.sessionId, address: session.address, network: session.network,
     chainId: session.chainId, method, state: "prepared",
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    ...(session.transport === "desktop-bridge" ? {
+      remoteAcknowledgementRequired: session.integrationContractVersion === 1 &&
+        session.capabilities?.durableInvocationLookup === true
+    } : {}),
+    ...(binding ?? {})
   };
   return new Promise((resolve, reject) => {
     const tx = db.transaction(INVOCATIONS, "readwrite");
@@ -400,7 +649,9 @@ export async function saveDurableMobileInvocationEnvelope(
           row.transport !== "mobile-relay" || row.state !== "prepared" ||
           row.mobileRequest || row.id !== envelope.clientInvocationId ||
           row.sessionId !== envelope.sessionId || row.method !== envelope.method ||
-          envelope.requestMetadata.origin !== row.origin) {
+          envelope.requestMetadata.origin !== row.origin ||
+          (envelope.requestMetadata.invocationId !== undefined && envelope.requestMetadata.invocationId !== row.id) ||
+          (envelope.requestMetadata.requestCommitment !== undefined && envelope.requestMetadata.requestCommitment !== row.requestCommitment)) {
         tx.abort();
         return;
       }
@@ -443,6 +694,47 @@ export async function updateDurableInvocation(
   });
 }
 
+function validStoredInvocation(row: DurableInvocation): boolean {
+  return !!(row && row.origin === window.location.origin && typeof row.id === "string" &&
+          row.id.length > 0 &&
+          ["mobile-relay", "desktop-bridge", "injected"].includes(
+            row.transport
+          ) &&
+          [
+            "signMessage",
+            "signTransaction",
+            "signAndSubmitTransaction"
+          ].includes(row.method) &&
+          ["prepared", "created", "unknown", "not-invoked"].includes(
+            row.state
+          ) &&
+          typeof row.sessionId === "string" &&
+          typeof row.address === "string" &&
+          /^0x[0-9a-fA-F]{1,64}$/.test(row.address) &&
+          typeof row.network === "string" &&
+          Number.isInteger(row.chainId) &&
+          row.chainId >= 0 &&
+          row.chainId <= 255 &&
+          (!row.requestCommitment ||
+            /^[0-9a-f]{64}$/.test(row.requestCommitment)));
+}
+
+/** Exact-ID lookup keeps single-operation recovery independent of historical payload volume. */
+export async function getDurableInvocation(id: string): Promise<DurableInvocation | undefined> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(INVOCATIONS, "readonly");
+    const request = tx.objectStore(INVOCATIONS).get(id);
+    let row: DurableInvocation | undefined;
+    request.onsuccess = () => {
+      if (validStoredInvocation(request.result)) row = request.result;
+    };
+    tx.oncomplete = () => { db.close(); resolve(row); };
+    tx.onabort = () => { db.close(); reject(failure("Unable to inspect the original invocation", tx.error)); };
+    tx.onerror = () => { /* onabort rejects */ };
+  });
+}
+
 export async function listDurableInvocations(): Promise<DurableInvocation[]> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
@@ -450,12 +742,81 @@ export async function listDurableInvocations(): Promise<DurableInvocation[]> {
     const request = tx.objectStore(INVOCATIONS).getAll();
     let rows: DurableInvocation[] = [];
     request.onsuccess = () => {
-      rows = (request.result as DurableInvocation[]).filter((row) =>
-        row && row.origin === window.location.origin && typeof row.id === "string"
-      );
+      rows = (request.result as DurableInvocation[]).filter(validStoredInvocation);
     };
     tx.oncomplete = () => { db.close(); resolve(rows); };
     tx.onabort = () => { db.close(); reject(failure("Unable to inspect durable invocations", tx.error)); };
     tx.onerror = () => { /* onabort rejects */ };
+  });
+}
+
+/** Reuse the existing invocation table for injected outcomes and delivery CAS. */
+export async function updateInjectedInvocationEvidence(
+  id: string,
+  change: {
+    nativeNotSubmitted?: NativeNotSubmittedProof;
+    final?: StoredFinal;
+    deliveryState?: "acknowledged" | "archived";
+    archive?: RecoveryArchive;
+  }
+): Promise<void> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(INVOCATIONS, "readwrite"),
+      store = tx.objectStore(INVOCATIONS),
+      lookup = store.get(id);
+    let changed = false;
+    lookup.onsuccess = () => {
+      const row = lookup.result as DurableInvocation | undefined;
+      let proof: NativeNotSubmittedProof | undefined;
+      try {
+        if (row && (change.nativeNotSubmitted || row.nativeNotSubmitted))
+          proof = validateNativeNotSubmitted(change.nativeNotSubmitted ?? row.nativeNotSubmitted, row);
+      } catch { tx.abort(); return; }
+      if (
+        !row ||
+        row.origin !== window.location.origin ||
+        row.transport !== "injected" ||
+        row.state === "not-invoked" ||
+        (change.final && row.transactionHash &&
+          (change.final.status !== "approved" || change.final.method !== "signAndSubmitTransaction" ||
+            change.final.hash.toLowerCase() !== row.transactionHash.toLowerCase())) ||
+        (change.final &&
+          row.final &&
+          JSON.stringify(change.final) !== JSON.stringify(row.final)) ||
+        (change.final &&
+          !row.final &&
+          row.deliveryState &&
+          row.deliveryState !== "active") ||
+        (proof && (row.final || row.transactionHash || change.final)) ||
+        (change.nativeNotSubmitted && row.deliveryState && row.deliveryState !== "active") ||
+        (change.deliveryState === "acknowledged" && !row.final && !proof) ||
+        (change.deliveryState === "archived" && (row.final || proof)) ||
+        (row.deliveryState &&
+          row.deliveryState !== "active" &&
+          row.deliveryState !== change.deliveryState)
+      ) {
+        tx.abort();
+        return;
+      }
+      if (canonicalJson({ ...row, ...change }) === canonicalJson(row)) return;
+      store.put({ ...row, ...change, updatedAt: new Date().toISOString() });
+      changed = true;
+    };
+    tx.oncomplete = () => {
+      db.close();
+      if (changed) announceRecordChange();
+      resolve();
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(
+        failure(
+          "Injected invocation evidence changed or could not be saved",
+          tx.error
+        )
+      );
+    };
+    tx.onerror = () => {};
   });
 }

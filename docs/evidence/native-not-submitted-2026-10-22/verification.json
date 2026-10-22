@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-22",
+  "branch": "fix/infer-connect-stale-session-reconnect",
+  "baseCommit": "949da5cb230066e1473f916aa2c8f822b8568acf",
+  "status": "local implementation; not committed",
+  "verification": {
+    "testsPassed": 753,
+    "testsSkipped": 6,
+    "testFilesPassed": 47,
+    "testFilesSkipped": 1,
+    "newNativeProofTests": 25,
+    "typecheck": "passed",
+    "build": "ESM, CommonJS, declarations passed",
+    "packageExports": "passed in extracted archive using existing local dependencies"
+  },
+  "sources": {
+    "src/nativeNotSubmitted.ts": "76f2ab83bd6f4e506e7a7b58f67e2ea09d777ccf7b0ad11239cdd88a59a8636d",
+    "src/recovery.ts": "3e196b1f5a47af32802ac097280c1f0f309a837732b6f169baad0ed36cb736e6",
+    "src/durableRecovery.ts": "25ca6b6da16ae9eecfb9b1ee87fd37da6458fe973bc26d6c25dadcb6f00e3836",
+    "src/InferClient.ts": "cd8eb9594996f28bbd55f5ebed313b8343293e4badca4cefb9b0f923ebf7572d",
+    "tests/nativeNotSubmitted.test.ts": "c35c5efd6bd15126a135d156bc35796c54d639bad6c7100787e2ad42da199320",
+    "docs/NATIVE_TRANSACTION_RECOVERY_HANDOFF.md": "2a6cf012edada6c669cd786dae7530221f2c0af4c36b328dc99b2f8cbd9a8fbf",
+    "CHANGELOG.md": "63cadf354909d42c01d55e8b1afb5c70f4855dfc5178e6ad768fe016044a3235"
+  },
+  "limits": [
+    "No installed-device or live-chain acceptance",
+    "No NFT dependency adoption",
+    "No commit, push, package publication or other workspace source edits"
+  ]
+}

@@ -51,22 +51,22 @@ const wallet = new InferWallet(options?: InferWalletOptions);
 
 #### Constructor
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `options` | `InferWalletOptions` | `{}` | Configuration options |
+| Parameter | Type                 | Default | Description           |
+| --------- | -------------------- | ------- | --------------------- |
+| `options` | `InferWalletOptions` | `{}`    | Configuration options |
 
 #### Properties
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `name` | `InferWalletName` | `"Infer Connect"` |
-| `url` | `string` | Wallet website URL |
-| `icon` | `string` | Base64-encoded SVG icon |
-| `readyState` | `InferWalletReadyState` | Current detection state |
-| `connecting` | `boolean` | `true` during connection attempt |
-| `connected` | `boolean` | `true` when connected |
-| `publicAccount` | `InferAccountKeys` | Cached account keys |
-| `network` | `InferNetworkInfo` | Cached network info |
+| Property        | Type                    | Description                      |
+| --------------- | ----------------------- | -------------------------------- |
+| `name`          | `InferWalletName`       | `"Infer Connect"`                |
+| `url`           | `string`                | Wallet website URL               |
+| `icon`          | `string`                | Base64-encoded SVG icon          |
+| `readyState`    | `InferWalletReadyState` | Current detection state          |
+| `connecting`    | `boolean`               | `true` during connection attempt |
+| `connected`     | `boolean`               | `true` when connected            |
+| `publicAccount` | `InferAccountKeys`      | Cached account keys              |
+| `network`       | `InferNetworkInfo`      | Cached network info              |
 
 #### Methods
 
@@ -101,8 +101,8 @@ Signs an arbitrary message.
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
+| Parameter | Type                                          | Description                |
+| --------- | --------------------------------------------- | -------------------------- |
 | `message` | `CedraSignMessageInput \| SignMessagePayload` | Message to sign with nonce |
 
 **Returns:** Signed message response with `signature` and `fullMessage`.
@@ -110,7 +110,7 @@ Signs an arbitrary message.
 ```typescript
 const response = await wallet.signMessage({
   message: "Hello Infer!",
-  nonce: "unique-nonce",
+  nonce: "unique-nonce"
 });
 ```
 
@@ -120,10 +120,10 @@ Signs a transaction without submitting it.
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `transaction` | `AnyRawTransaction \| InferTransactionPayload \| CedraSignTransactionInputV1_1` | Transaction to sign |
-| `options` | `InputGenerateTransactionOptions` | Optional transaction options |
+| Parameter     | Type                                                                            | Description                  |
+| ------------- | ------------------------------------------------------------------------------- | ---------------------------- |
+| `transaction` | `AnyRawTransaction \| InferTransactionPayload \| CedraSignTransactionInputV1_1` | Transaction to sign          |
+| `options`     | `InputGenerateTransactionOptions`                                               | Optional transaction options |
 
 Prebuilt SDK transactions are serialized for external signing. Wallet-standard v1.1
 inputs may include `secondarySigners` and fee payer fields. Signed results preserve
@@ -132,29 +132,29 @@ addresses and fee payer metadata.
 
 ##### `signAndSubmitTransaction(transaction, options?): Promise<CedraSignAndSubmitTransactionOutput>`
 
-Signs and submits a transaction in one step. Falls back to local submission via `@cedra-labs/ts-sdk` if the provider does not support direct submit.
+Signs and submits one normalized entry-function transaction through the active wallet transport. There is no automatic local submission fallback. SDK `{data,options}` convenience is separate from the wallet-standard `{payload,maxGasAmount?,gasUnitPrice?}` feature. Required expiry/sequence/sender/chain restrictions require contract v1 and fail before dispatch on an unsupported peer.
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `transaction` | `InferTransactionPayload` | Transaction payload |
-| `options` | `InputGenerateTransactionOptions` | Optional transaction options |
+| Parameter     | Type                              | Description                  |
+| ------------- | --------------------------------- | ---------------------------- |
+| `transaction` | `InferTransactionPayload`         | Transaction payload          |
+| `options`     | `InputGenerateTransactionOptions` | Optional transaction options |
 
 ```typescript
 const result = await wallet.signAndSubmitTransaction({
   data: {
     function: "0x1::coin::transfer",
     typeArguments: ["0x1::aptos_coin::AptosCoin"],
-    functionArguments: ["0xrecipient", 1000],
-  },
+    functionArguments: ["0xrecipient", 1000]
+  }
 });
 console.log(result.hash);
 ```
 
 ##### `signAndSubmitBCSTransaction(transaction, options?): Promise<CedraSignAndSubmitTransactionOutput>`
 
-Same as `signAndSubmitTransaction` but retries without unsupported options when the provider rejects object-style options.
+**Deprecated:** payload-only compatibility alias for `signAndSubmitTransaction`. It does not strip options, retry signing or accept arbitrary raw-transaction submission. Use sign-only `signTransaction` for exact prebuilt BCS.
 
 ##### `onAccountChange(callback: (account: AccountInfo) => void): Promise<void>`
 
@@ -178,9 +178,9 @@ Generates a deeplink URL for launching Infer Desk or Infer Wallet.
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `url` | `string` | current page URL | Callback URL |
+| Parameter | Type     | Default          | Description  |
+| --------- | -------- | ---------------- | ------------ |
+| `url`     | `string` | current page URL | Callback URL |
 
 ---
 
@@ -196,9 +196,9 @@ const client = new InferClient(options?: InferWalletOptions);
 
 #### Properties
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `account` | `AccountInfo \| null` | Cached account (getter) |
+| Property        | Type                  | Description             |
+| --------------- | --------------------- | ----------------------- |
+| `account`       | `AccountInfo \| null` | Cached account (getter) |
 | `cachedNetwork` | `NetworkInfo \| null` | Cached network (getter) |
 
 #### Methods
@@ -225,7 +225,7 @@ Sign a message via the active transport (provider, Infer Desk bridge, or Infer W
 
 ##### `signMessageAndVerify(input: CedraSignMessageInput): Promise<boolean>`
 
-Sign a message and verify the signature locally using the connected public key.
+Sign a message and verify its exact requested profile, message, nonce, signed context and approved key. Invalid approvals return false; explicit decline and operational errors retain their error meaning.
 
 ##### `signTransaction(transaction, options?): Promise<InferSignTransactionResult>`
 
@@ -233,11 +233,15 @@ Sign a transaction.
 
 ##### `signAndSubmitTransaction(transaction, options?): Promise<CedraSignAndSubmitTransactionOutput>`
 
-Sign and submit a transaction.
+Sign and submit an entry-function request (`InferTransactionPayload` or the standard
+`CedraSignAndSubmitTransactionInput` shape). Prebuilt SDK `AnyRawTransaction` and BCS
+bytes are unsupported; use sign-only `signTransaction` and a separate explicit SDK
+submission flow when exact prebuilt transaction signing is required.
 
 ##### `signAndSubmitBCSTransaction(transaction, options?): Promise<CedraSignAndSubmitTransactionOutput>`
 
-Sign and submit with retry for BCS payloads.
+**Deprecated:** payload-only compatibility alias for `signAndSubmitTransaction`.
+It does not accept `AnyRawTransaction` or BCS bytes, retry automatically or remove restrictions.
 
 ##### `refreshProvider(): InferProvider | undefined`
 
@@ -270,12 +274,12 @@ class InferAdapterError extends Error {
 
 **Properties:**
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `code` | `InferErrorCode` | Typed error code |
-| `message` | `string` | Human-readable error message |
-| `cause` | `unknown` | Original error (if remapped) |
-| `name` | `string` | Always `"InferAdapterError"` |
+| Property  | Type             | Description                  |
+| --------- | ---------------- | ---------------------------- |
+| `code`    | `InferErrorCode` | Typed error code             |
+| `message` | `string`         | Human-readable error message |
+| `cause`   | `unknown`        | Original error (if remapped) |
+| `name`    | `string`         | Always `"InferAdapterError"` |
 
 ---
 
@@ -292,6 +296,7 @@ registerInferWallet({ forceRegistration: true });
 ```
 
 **Registration conditions** (registers if any are true):
+
 - Injected provider detected
 - Stored external session exists
 - `forceRegistration: true`
@@ -311,6 +316,7 @@ const wallet = createInferAIP62Wallet();
 ```
 
 **Implemented features:**
+
 - `cedra:connect` (v1.0.0)
 - `cedra:disconnect` (v1.0.0)
 - `cedra:network` (v1.0.0)
@@ -368,14 +374,14 @@ if (provider) {
 
 ```typescript
 enum InferErrorCode {
-  UserRejected    = "USER_REJECTED",
-  Unauthorized    = "UNAUTHORIZED",
-  Unsupported     = "UNSUPPORTED",
-  NotInstalled    = "NOT_INSTALLED",
+  UserRejected = "USER_REJECTED",
+  Unauthorized = "UNAUTHORIZED",
+  Unsupported = "UNSUPPORTED",
+  NotInstalled = "NOT_INSTALLED",
   ConnectionTimeout = "CONNECTION_TIMEOUT",
-  InvalidParams   = "INVALID_PARAMS",
-  InvalidNetwork  = "INVALID_NETWORK",
-  InternalError   = "INTERNAL_ERROR",
+  InvalidParams = "INVALID_PARAMS",
+  InvalidNetwork = "INVALID_NETWORK",
+  InternalError = "INTERNAL_ERROR"
 }
 ```
 
@@ -383,10 +389,10 @@ enum InferErrorCode {
 
 ```typescript
 enum InferWalletReadyState {
-  Installed   = "Installed",     // Provider found or session stored
-  NotDetected = "NotDetected",   // No provider, no session
-  Loadable    = "Loadable",      // Can be loaded (deeplink capable)
-  Unsupported = "Unsupported",   // Non-browser environment
+  Installed = "Installed", // Provider found or session stored
+  NotDetected = "NotDetected", // No provider, no session
+  Loadable = "Loadable", // Can be loaded (deeplink capable)
+  Unsupported = "Unsupported" // Non-browser environment
 }
 ```
 
@@ -434,12 +440,12 @@ interface InferExternalSession {
   network: string;
   chainId: number;
   sessionId: string;
-  bridgeUrl?: string;              // desktop-bridge only
-  relayBaseUrl?: string;           // mobile-relay only
-  protocolPublicKey?: string;      // mobile-relay crypto
-  dappSessionToken?: string;       // mobile-relay auth
-  sharedSecret?: string;           // mobile-relay encryption
-  walletPublicKey?: string;        // mobile-relay key exchange
+  bridgeUrl?: string; // desktop-bridge only
+  relayBaseUrl?: string; // mobile-relay only
+  protocolPublicKey?: string; // mobile-relay crypto
+  dappSessionToken?: string; // mobile-relay auth
+  sharedSecret?: string; // mobile-relay encryption
+  walletPublicKey?: string; // mobile-relay key exchange
   walletName?: string;
 }
 ```
@@ -491,11 +497,11 @@ Message signing payload format.
 
 ```typescript
 interface SignMessagePayload {
-  address?: boolean;      // Include address in full message
-  application?: boolean;  // Include application origin
-  chainId?: boolean;      // Include chain ID
-  message: string;        // Message content
-  nonce: string;          // Unique nonce
+  address?: boolean; // Include address in full message
+  application?: boolean; // Include application origin
+  chainId?: boolean; // Include chain ID
+  message: string; // Message content
+  nonce: string; // Unique nonce
 }
 ```
 
@@ -511,7 +517,7 @@ interface InferSignMessageResponse {
   fullMessage: string;
   message: string;
   nonce: string;
-  prefix: string;         // Typically "CEDRA"
+  prefix: string; // Typically "CEDRA"
   signature: string;
 }
 ```
@@ -556,7 +562,10 @@ Possible return types from `signTransaction`.
 type InferSignTransactionResult =
   | AccountAuthenticator
   | Uint8Array
-  | { authenticator: AccountAuthenticator; rawTransaction?: Uint8Array | AnyRawTransaction }
+  | {
+      authenticator: AccountAuthenticator;
+      rawTransaction?: Uint8Array | AnyRawTransaction;
+    }
   | CedraSignTransactionOutputV1_1;
 ```
 
@@ -565,46 +574,48 @@ type InferSignTransactionResult =
 Branded string type for wallet names.
 
 ```typescript
-type InferWalletName<T extends string = string> = T & { __brand__: "WalletName" };
+type InferWalletName<T extends string = string> = T & {
+  __brand__: "WalletName";
+};
 ```
 
 ---
 
 ## Constants
 
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `INFER_CONNECT_NAME` | `"Infer Connect"` | Public wallet display name |
-| `INFER_WALLET_NAME` | `"Infer Wallet"` | Internal wallet name |
-| `INFER_DESK_NAME` | `"Infer Connect"` | Deprecated alias for `INFER_CONNECT_NAME` |
-| `DEFAULT_DESKTOP_WEBSITE_URL` | `"https://inferenco.com/infer-desk"` | Default desktop website URL |
-| `DEFAULT_MOBILE_WEBSITE_URL` | `"https://inferenco.com/infer-wallet"` | Default mobile website URL |
-| `DEFAULT_WEBSITE_URL` | `"https://inferenco.com/infer-desk"` | Deprecated desktop website URL alias |
-| `DEFAULT_DEEPLINK_BASE_URL` | `"inferenco://connect?callback="` | Deeplink base |
-| `DEFAULT_DESKTOP_LOGIN_URL` | `"inferenco://login"` | Desktop login deeplink |
-| `DEFAULT_DESKTOP_BRIDGE_URL` | `"http://127.0.0.1:21984"` | Local bridge URL |
-| `DEFAULT_DEEPLINK_SCHEME` | `"inferenco"` | URI scheme |
-| `DEFAULT_MOBILE_RELAY_BASE_URL` | `"https://nova-service-....run.app"` | Hosted relay |
-| `DEFAULT_MOBILE_WEBSOCKET_URL` | `"wss://nova-service-....run.app/v1/ws"` | Hosted WebSocket |
-| `DEFAULT_MOBILE_POLL_INTERVAL_MS` | `1000` | Mobile poll interval |
-| `DEFAULT_MOBILE_REQUEST_TIMEOUT_MS` | `180000` | Mobile request timeout (3 min) |
-| `DEFAULT_MOBILE_SOCKET_TIMEOUT_MS` | `15000` | WebSocket timeout (15s) |
-| `DEFAULT_DETECT_ALIASES` | `true` | Check branded aliases |
-| `DEFAULT_REGISTER_FORCE` | `false` | Force registration |
-| `DEFAULT_DESKTOP_REGISTRATION` | `true` | Desktop auto-registration |
-| `DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS` | `1200` | Bridge connect timeout |
-| `DEFAULT_BRIDGE_POLL_INTERVAL_MS` | `250` | Bridge poll interval |
-| `DEFAULT_BRIDGE_POLL_TIMEOUT_MS` | `120000` | Bridge poll timeout (2 min) |
-| `INFER_WALLET_ICON` | `data:image/svg+xml;base64,...` | Base64 SVG icon |
+| Constant                            | Value                                    | Description                               |
+| ----------------------------------- | ---------------------------------------- | ----------------------------------------- |
+| `INFER_CONNECT_NAME`                | `"Infer Connect"`                        | Public wallet display name                |
+| `INFER_WALLET_NAME`                 | `"Infer Wallet"`                         | Internal wallet name                      |
+| `INFER_DESK_NAME`                   | `"Infer Connect"`                        | Deprecated alias for `INFER_CONNECT_NAME` |
+| `DEFAULT_DESKTOP_WEBSITE_URL`       | `"https://inferenco.com/infer-desk"`     | Default desktop website URL               |
+| `DEFAULT_MOBILE_WEBSITE_URL`        | `"https://inferenco.com/infer-wallet"`   | Default mobile website URL                |
+| `DEFAULT_WEBSITE_URL`               | `"https://inferenco.com/infer-desk"`     | Deprecated desktop website URL alias      |
+| `DEFAULT_DEEPLINK_BASE_URL`         | `"inferenco://connect?callback="`        | Deeplink base                             |
+| `DEFAULT_DESKTOP_LOGIN_URL`         | `"inferenco://login"`                    | Desktop login deeplink                    |
+| `DEFAULT_DESKTOP_BRIDGE_URL`        | `"http://127.0.0.1:21984"`               | Local bridge URL                          |
+| `DEFAULT_DEEPLINK_SCHEME`           | `"inferenco"`                            | URI scheme                                |
+| `DEFAULT_MOBILE_RELAY_BASE_URL`     | `"https://nova-service-....run.app"`     | Hosted relay                              |
+| `DEFAULT_MOBILE_WEBSOCKET_URL`      | `"wss://nova-service-....run.app/v1/ws"` | Hosted WebSocket                          |
+| `DEFAULT_MOBILE_POLL_INTERVAL_MS`   | `1000`                                   | Mobile poll interval                      |
+| `DEFAULT_MOBILE_REQUEST_TIMEOUT_MS` | `180000`                                 | Mobile request timeout (3 min)            |
+| `DEFAULT_MOBILE_SOCKET_TIMEOUT_MS`  | `15000`                                  | WebSocket timeout (15s)                   |
+| `DEFAULT_DETECT_ALIASES`            | `true`                                   | Check branded aliases                     |
+| `DEFAULT_REGISTER_FORCE`            | `false`                                  | Force registration                        |
+| `DEFAULT_DESKTOP_REGISTRATION`      | `true`                                   | Desktop auto-registration                 |
+| `DEFAULT_BRIDGE_CONNECT_TIMEOUT_MS` | `1200`                                   | Bridge connect timeout                    |
+| `DEFAULT_BRIDGE_POLL_INTERVAL_MS`   | `250`                                    | Bridge poll interval                      |
+| `DEFAULT_BRIDGE_POLL_TIMEOUT_MS`    | `120000`                                 | Bridge poll timeout (2 min)               |
+| `INFER_WALLET_ICON`                 | `data:image/svg+xml;base64,...`          | Base64 SVG icon                           |
 
 ### Storage Keys
 
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `INFER_EXTERNAL_SESSION_STORAGE_KEY` | `"inferenco:nova-session"` | Session storage |
-| `INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY` | `"inferenco:nova-pending-mobile-pairing"` | Pending pairing |
-| `INFER_CALLBACK_MARKER_STORAGE_KEY` | `"inferenco:nova-callback-marker"` | Callback markers |
-| `INFER_PROTOCOL_KEY_STORAGE_KEY` | `"inferenco:nova-protocol-key"` | Protocol key |
+| Constant                                   | Value                                     | Description      |
+| ------------------------------------------ | ----------------------------------------- | ---------------- |
+| `INFER_EXTERNAL_SESSION_STORAGE_KEY`       | `"inferenco:nova-session"`                | Session storage  |
+| `INFER_PENDING_MOBILE_PAIRING_STORAGE_KEY` | `"inferenco:nova-pending-mobile-pairing"` | Pending pairing  |
+| `INFER_CALLBACK_MARKER_STORAGE_KEY`        | `"inferenco:nova-callback-marker"`        | Callback markers |
+| `INFER_PROTOCOL_KEY_STORAGE_KEY`           | `"inferenco:nova-protocol-key"`           | Protocol key     |
 
 ---
 
@@ -612,19 +623,19 @@ type InferWalletName<T extends string = string> = T & { __brand__: "WalletName" 
 
 Exported from the main entry point.
 
-| Function | Description |
-|----------|-------------|
-| `readExternalSession()` | Read stored session from localStorage |
-| `storeExternalSession(session)` | Save session to localStorage |
-| `clearExternalSession()` | Remove stored session |
-| `readPendingMobilePairing()` | Read pending mobile pairing |
-| `storePendingMobilePairing(pairing)` | Save pending pairing |
-| `validateExternalSession(session, options)` | Validate session against bridge |
-| `revokeExternalSession(session, options)` | Delete session from bridge/relay |
-| `readValidatedExternalSession(options)` | Read + validate in one call |
-| `sessionToAccountInfo(session)` | Convert session to `AccountInfo` |
-| `isMobileBrowser()` | Detect mobile user agent |
-| `fetchJsonWithTimeout(url, timeoutMs, init?)` | Fetch with abort controller |
+| Function                                      | Description                           |
+| --------------------------------------------- | ------------------------------------- |
+| `readExternalSession()`                       | Read stored session from localStorage |
+| `storeExternalSession(session)`               | Save session to localStorage          |
+| `clearExternalSession()`                      | Remove stored session                 |
+| `readPendingMobilePairing()`                  | Read pending mobile pairing           |
+| `storePendingMobilePairing(pairing)`          | Save pending pairing                  |
+| `validateExternalSession(session, options)`   | Validate session against bridge       |
+| `revokeExternalSession(session, options)`     | Delete session from bridge/relay      |
+| `readValidatedExternalSession(options)`       | Read + validate in one call           |
+| `sessionToAccountInfo(session)`               | Convert session to `AccountInfo`      |
+| `isMobileBrowser()`                           | Detect mobile user agent              |
+| `fetchJsonWithTimeout(url, timeoutMs, init?)` | Fetch with abort controller           |
 
 ---
 
@@ -632,16 +643,16 @@ Exported from the main entry point.
 
 Exported from the main entry point.
 
-| Function | Description |
-|----------|-------------|
-| `toUint8Array(input)` | Convert hex string to `Uint8Array` |
-| `normalizeProviderAccount(account)` | Normalize provider account to `AccountInfo` |
-| `normalizeNetwork(network)` | Normalize any network format to `NetworkInfo` |
-| `normalizeTransactionPayload(transaction)` | Normalize mixed transaction inputs |
-| `normalizeSignMessageOutput(output)` | Normalize signature outputs |
-| `getSdkNetwork(networkInfo?, fullnodeUrl?)` | Get `Cedra` SDK instance for network |
-| `submitSignedTransaction(args)` | Submit a signed transaction via SDK, including multi-agent authenticators |
-| `createFullMessage(input, address, chainId?)` | Build full message for signing |
+| Function                                      | Description                                                               |
+| --------------------------------------------- | ------------------------------------------------------------------------- |
+| `toUint8Array(input)`                         | Convert hex string to `Uint8Array`                                        |
+| `normalizeProviderAccount(account)`           | Normalize provider account to `AccountInfo`                               |
+| `normalizeNetwork(network)`                   | Normalize any network format to `NetworkInfo`                             |
+| `normalizeTransactionPayload(transaction)`    | Normalize mixed transaction inputs                                        |
+| `normalizeSignMessageOutput(output)`          | Normalize signature outputs                                               |
+| `getSdkNetwork(networkInfo?, fullnodeUrl?)`   | Get `Cedra` SDK instance for network                                      |
+| `submitSignedTransaction(args)`               | Submit a signed transaction via SDK, including multi-agent authenticators |
+| `createFullMessage(input, address, chainId?)` | Build full message for signing                                            |
 
 ---
 
@@ -649,13 +660,57 @@ Exported from the main entry point.
 
 Exported from the main entry point. See [Mobile Relay Protocol](mobile-relay.md) for details.
 
-| Export | Description |
-|--------|-------------|
-| `generateX25519Keypair()` | Generate X25519 keypair for ECDH |
-| `deriveSharedSecret(privateKey, publicKey)` | Derive shared secret from ECDH |
-| `encryptPayload(plaintext, sharedSecret)` | Encrypt with XChaCha20-Poly1305 |
-| `decryptPayload(ciphertext, sharedSecret)` | Decrypt with XChaCha20-Poly1305 |
-| `connectViaMobileRelay(options)` | Full mobile pairing flow |
-| `createMobileRelayRequest(options)` | Create a signing request via relay |
-| `pollMobileRelayRequest(options)` | Poll for request result |
-| `waitForMobileSocket(options)` | Wait for WebSocket notification |
+| Export                                      | Description                        |
+| ------------------------------------------- | ---------------------------------- |
+| `generateX25519Keypair()`                   | Generate X25519 keypair for ECDH   |
+| `deriveSharedSecret(privateKey, publicKey)` | Derive shared secret from ECDH     |
+| `encryptPayload(plaintext, sharedSecret)`   | Encrypt with XChaCha20-Poly1305    |
+| `decryptPayload(ciphertext, sharedSecret)`  | Decrypt with XChaCha20-Poly1305    |
+| `connectViaMobileRelay(options)`            | Full mobile pairing flow           |
+| `createMobileRelayRequest(options)`         | Create a signing request via relay |
+| `pollMobileRelayRequest(options)`           | Poll for request result            |
+| `waitForMobileSocket(options)`              | Wait for WebSocket notification    |
+
+## Contract v1 and original-invocation recovery (0.2.2-rc.1)
+
+The complete normative forms and compatibility matrix are in [integration-contract.md](integration-contract.md). `inferenco:transactionSubmission` is version `1.0.0`, has `contractVersion:1` and exposes:
+
+```typescript
+const feature = wallet.features["inferenco:transactionSubmission"];
+await feature.signAndSubmitTransaction(
+  {
+    contractVersion: 1,
+    data: {
+      function: "0x1::fixture::run",
+      typeArguments: [],
+      functionArguments: []
+    },
+    options: { maxGasAmount: "1000", expireTimestamp: "1900000123" }
+  },
+  {
+    onInvocationPrepared: async (invocation) => {
+      /* durably bind to reviewed intent */
+    }
+  }
+);
+// On an error, feature.isNotInvoked(error, savedInvocation) is the only
+// adapter-owned proof that this exact invocation was never dispatched.
+```
+
+The class equivalent is `InferClient.signAndSubmitTransactionWithRestrictions(input,{onInvocationPrepared?})`. The callback descriptor includes origin, original sessionId, account/network/chain, method, invocationId and requestCommitment. The callback is awaited; its failure prevents signing. Encoding validation happens before transport dispatch.
+
+`inferenco:recoveredOutcomes` retains its public list/read/reconcileInvocation/acknowledge/archive API. Descriptors now include origin and optional requestCommitment. Embedded operations use transport `injected` and an opaque `invocation:` recovery handle; use the returned handle without parsing it. Read-only native/HTTP lookup never recreates a request. Final results are saved before return. Pending, unknown and storage-unavailable are distinct from approval; same-origin retention survives authorized wallet session renewal. Complete message results are reverified and exact prebuilt BCS must remain identical.
+
+`networkOverride` checks the approved network before signing; it never switches or relabels the wallet. The `fullnodeUrl` option is retained but unused by signing transports. Exported SDK conversion helpers accept their own fullnode URL explicitly.
+
+Original execution evidence and retention acknowledgement: pending/unknown public recovery outcomes may contain `transactionHash`, a strict 32-byte hex identity authenticated against the original invocation, commitment and scope. This evidence is persisted independently of terminal results and survives a later wallet outage. It is not an approval or a confirmed chain receipt; applications must verify the original receipt/effects and must never replace the submission. A conflicting later hash is rejected. Desktop recovery applies the same message signature/preimage and exact-BCS validation and SDK hydration before both first return and local replay.
+
+For retained v1 Desktop terminal results, public acknowledgement uses the current authorized account/network session and awaits the wallet's `/acknowledge-result/<requestId>` response before hiding local delivery. A failed acknowledgement leaves the result active for retry. Native providers can expose `acknowledgeInvocation(invocationId, requestCommitment)` with the same scoped acknowledged envelope; older peers without v1 durable recovery or native acknowledgement support retain local-only acknowledgement. Neither operation acknowledges uncertain execution or authorizes signing. Independently reconciled uncertain operations use the existing archive API.
+
+Admission records retain whether the original Desktop/native peer required remote retention acknowledgement. A disappeared or downgraded peer cannot clear a recorded obligation: local delivery remains active until the matching peer acknowledges. Historical Desktop rows with invocation/commitment but no capability marker remain conservatively retryable; only explicit original legacy capability permits local-only acknowledgement. Historical native rows require a present matching-scope peer before treating its missing optional API as legacy support. Already acknowledged results remain idempotent without a wallet connection.
+
+Injected signing rechecks provider identity, contract version, live account/key and network after the awaited preparation hook; account/network events during those reads also invalidate preparation. A changed scope produces invocation-bound non-dispatch. An explicitly requested v1 message requires an explicitly labelled complete v1 result; verified legacy message handling remains unchanged.
+
+Browser retention deletes eligible acknowledged/archived external request records and their exactly linked invocation payloads in one transaction, while preserving active, uncertain and unlinked work. Recovery uses direct invocation/opaque-handle keys and the existing scope index; bare request IDs retain a cursor fallback to detect ambiguity across sessions. The IndexedDB version remains 1 so older adapter tabs retain access.
+
+Legacy injected sign-only requests with networkOverride also reread the live provider network immediately before signing and reject provider/version or observed scope changes across that read. This check does not require a new account() method or change supported legacy authenticator-only results.

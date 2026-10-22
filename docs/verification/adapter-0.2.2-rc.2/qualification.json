@@ -1,0 +1,59 @@
+{
+  "schema": "infer-adapter-point8-qualification-v1",
+  "date": "2026-10-14",
+  "artifactSha256": "4aa4403abb61836c6bce8bd71e86d63f1f52f133476135620dd29dafa563cf77",
+  "sourceTests": {
+    "passed": 581,
+    "failed": 0,
+    "skipped": 6,
+    "run": "npm test -- --maxWorkers=2 --reporter=json",
+    "report": "/tmp/point8-adapter-20261014/tests-bounded.json"
+  },
+  "initialRun": {
+    "passed": 580,
+    "failed": 1,
+    "skipped": 6,
+    "reason": "Existing real-time 20ms hidden desktop poll expected 2 reads but observed 3 under unrestricted concurrency; isolated 17-test recovery suite and bounded full suite passed. No runtime/test assertion changed.",
+    "report": "/tmp/point8-adapter-20261014/tests.json"
+  },
+  "installedTests": {
+    "passed": 27,
+    "failed": 0,
+    "skipped": 0,
+    "report": "/tmp/point8-adapter-20261014/consumer/packed-native-recovery/results.json",
+    "scope": "Actual current registered Wallet provider template/generated codec and public installed Adapter native recovery and connection APIs; React Native host response boundary is a fixture."
+  },
+  "exports": {
+    "esmRuntime": "passed",
+    "cjsRuntime": "passed",
+    "strictBundler": "passed",
+    "strictNodeNextCommonJs": "passed",
+    "strictNodeNextEsm": "two pre-existing SDK TS2507 EventEmitter declarations; exact SDK-only baseline reproduced",
+    "typescript": "5.9.3",
+    "sdkVersion": "2.2.9",
+    "report": "/tmp/point8-adapter-20261014/consumer/packed-export-regression/result.json"
+  },
+  "gates": {
+    "typecheck": "passed",
+    "build": "passed",
+    "lint": "No lint script/configuration in repository; JavaScript qualification runners pass node --check.",
+    "installedPackageAllFilesMatch": true,
+    "dependencyVersionsUnchanged": true
+  },
+  "walletReference": {
+    "commit": "5584086df8a30c168b28bd54494a141d43779c60",
+    "filesSha256": {
+      "src/services/dapp-connection/provider-template.ts": "2ad75a38883836771b964f67a75ace7dbb351c0ce47d77179bde0a43a4680306",
+      "src/services/dapp-connection/provider-codec.generated.ts": "e06deea70865cf13784a729bf80a549c0685ee470ae598bc6ecfcb437764bd2d"
+    }
+  },
+  "boundaries": {
+    "published": false,
+    "committed": false,
+    "pushed": false,
+    "liveChain": false,
+    "deviceAcceptance": false,
+    "walletEdited": false,
+    "externalPackedRecovery": "Validated separately by Ecosystem integrated public-interface test; see its point 8 report."
+  }
+}

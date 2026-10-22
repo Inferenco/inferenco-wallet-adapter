@@ -1,3 +1,4 @@
+import { Account } from "@cedra-labs/ts-sdk";
 import {
   UserResponseStatus,
   type CedraSignAndSubmitTransactionInput
@@ -24,6 +25,14 @@ import { InferClient } from "../src/InferClient";
 import type { InferExternalSession } from "../src/types";
 
 const TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const providerSigner = Account.generate();
+const providerScope = {
+  account: async () => ({
+    address: providerSigner.accountAddress.toString(),
+    publicKey: providerSigner.publicKey.toUint8Array()
+  }),
+  network: async () => "testnet"
+};
 const HASH = `0x${"ab".repeat(32)}`;
 const GENERIC_AIP62_INPUT: CedraSignAndSubmitTransactionInput = {
   gasUnitPrice: 7,
@@ -40,17 +49,20 @@ function expectCode(promise: Promise<unknown>, code: InferErrorCode) {
 }
 
 function signAndSubmitFeature() {
-  const feature = createInferAIP62Wallet().features["cedra:signAndSubmitTransaction"];
-  if (!feature) throw new Error("Missing cedra:signAndSubmitTransaction feature");
+  const feature =
+    createInferAIP62Wallet().features["cedra:signAndSubmitTransaction"];
+  if (!feature)
+    throw new Error("Missing cedra:signAndSubmitTransaction feature");
   return feature;
 }
 
 async function invokeProvider(result: unknown): Promise<unknown> {
   (window as any).inferenco = {
     isNovaWallet: true,
+    ...providerScope,
     signAndSubmitTransaction: vi.fn().mockResolvedValue(result)
   };
-  return new InferClient().signAndSubmitTransaction({} as never);
+  return new InferClient().signAndSubmitTransaction(GENERIC_AIP62_INPUT);
 }
 
 async function invokeBridge(result: Record<string, unknown>): Promise<unknown> {
@@ -64,10 +76,13 @@ async function invokeBridge(result: Record<string, unknown>): Promise<unknown> {
       });
     }
     if (url.endsWith("/transaction-request/bridge-request")) {
-      return new Response(JSON.stringify({ requestId: "bridge-request", ...result }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
+      return new Response(
+        JSON.stringify({ requestId: "bridge-request", ...result }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
     }
     if (url.endsWith("/request/bridge-request") && init?.method === "DELETE") {
       return new Response(null, { status: 204 });
@@ -84,7 +99,7 @@ async function invokeBridge(result: Record<string, unknown>): Promise<unknown> {
     sessionId: "session-1",
     bridgeUrl: "http://127.0.0.1:21984"
   };
-  return tryLocalBridgeSignAndSubmit({} as never, session);
+  return tryLocalBridgeSignAndSubmit(GENERIC_AIP62_INPUT, session);
 }
 
 async function invokeMobile(result: Record<string, unknown>): Promise<unknown> {
@@ -137,15 +152,11 @@ async function invokeMobile(result: Record<string, unknown>): Promise<unknown> {
     sharedSecret,
     walletPublicKey: wallet.publicKey
   };
-  return signAndSubmitViaMobileRelay(
-    {} as never,
-    session,
-    {
-      relayBaseUrl: "https://relay.example",
-      mobilePollIntervalMs: 1,
-      mobileRequestTimeoutMs: 100
-    }
-  );
+  return signAndSubmitViaMobileRelay(GENERIC_AIP62_INPUT, session, {
+    relayBaseUrl: "https://relay.example",
+    mobilePollIntervalMs: 1,
+    mobileRequestTimeoutMs: 100
+  });
 }
 
 async function invokeAip62Bridge(
@@ -162,12 +173,18 @@ async function invokeAip62Bridge(
     sessionId: "aip62-bridge-session",
     bridgeUrl: "http://127.0.0.1:21984"
   };
-  window.localStorage.setItem(INFER_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.localStorage.setItem(
+    INFER_EXTERNAL_SESSION_STORAGE_KEY,
+    JSON.stringify(session)
+  );
   _setBridgeTokenForTesting(TOKEN);
 
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input.toString();
-    if (url.includes("/session/aip62-bridge-session") && init?.method !== "DELETE") {
+    if (
+      url.includes("/session/aip62-bridge-session") &&
+      init?.method !== "DELETE"
+    ) {
       return new Response(JSON.stringify(session), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -178,10 +195,13 @@ async function invokeAip62Bridge(
         transaction?: unknown;
       };
       captureInput?.(body.transaction);
-      return new Response(JSON.stringify({ requestId: "aip62-bridge-request" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
+      return new Response(
+        JSON.stringify({ requestId: "aip62-bridge-request" }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
     }
     if (url.endsWith("/transaction-request/aip62-bridge-request")) {
       return new Response(
@@ -189,7 +209,10 @@ async function invokeAip62Bridge(
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }
-    if (url.endsWith("/request/aip62-bridge-request") && init?.method === "DELETE") {
+    if (
+      url.endsWith("/request/aip62-bridge-request") &&
+      init?.method === "DELETE"
+    ) {
       return new Response(null, { status: 204 });
     }
     throw new Error(`Unexpected fetch: ${url}`);
@@ -218,7 +241,10 @@ async function invokeAip62Mobile(
     sharedSecret,
     walletPublicKey: wallet.publicKey
   };
-  window.localStorage.setItem(INFER_EXTERNAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.localStorage.setItem(
+    INFER_EXTERNAL_SESSION_STORAGE_KEY,
+    JSON.stringify(session)
+  );
   window.sessionStorage.setItem(
     INFER_CALLBACK_MARKER_STORAGE_KEY,
     JSON.stringify({ requestId: "aip62-mobile-request", status: "rejected" })
@@ -233,21 +259,27 @@ async function invokeAip62Mobile(
       };
       captureInput?.(decryptJson(body.encryptedRequest, sharedSecret));
 
-      return new Response(JSON.stringify({
-        requestId: "aip62-mobile-request",
-        walletDeeplinkUrl: window.location.href,
-        expiresAt: new Date(Date.now() + 60_000).toISOString()
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          requestId: "aip62-mobile-request",
+          walletDeeplinkUrl: window.location.href,
+          expiresAt: new Date(Date.now() + 60_000).toISOString()
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
     }
     if (url.endsWith("/v1/requests/aip62-mobile-request")) {
-      return new Response(JSON.stringify({
-        requestId: "aip62-mobile-request",
-        sessionId: "aip62-mobile-session",
-        method: "signAndSubmitTransaction",
-        callbackUrl: window.location.href,
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        ...result
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          requestId: "aip62-mobile-request",
+          sessionId: "aip62-mobile-session",
+          method: "signAndSubmitTransaction",
+          callbackUrl: window.location.href,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          ...result
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
     }
     throw new Error(`Unexpected fetch: ${url}`);
   });
@@ -267,39 +299,55 @@ describe("sign-and-submit rejection conformance", () => {
 
   it.each([
     ["injected provider", () => invokeProvider({ status: "Rejected" })],
-    ["external bridge", () => invokeBridge({ status: "rejected", error: "user_cancelled" })],
-    ["mobile relay", () => invokeMobile({
-      status: "rejected",
-      encryptedRequest: "encrypted-request",
-      encryptedResult: null,
-      requestMetadata: {
-        origin: window.location.origin,
-        appName: "Infer Connect"
-      },
-      resultMetadata: null,
-      errorCode: "user_cancelled",
-      errorMessage: null,
-      origin: window.location.origin,
-      appName: "Infer Connect",
-      accountAddress: null,
-      network: null,
-      chainId: null,
-      walletName: null
-    })]
-  ])("%s maps only a clean explicit rejection to USER_REJECTED", async (_name, invoke) => {
-    await expectCode(invoke(), InferErrorCode.UserRejected);
-  });
+    [
+      "external bridge",
+      () => invokeBridge({ status: "rejected", error: "user_cancelled" })
+    ],
+    [
+      "mobile relay",
+      () =>
+        invokeMobile({
+          status: "rejected",
+          encryptedRequest: "encrypted-request",
+          encryptedResult: null,
+          requestMetadata: {
+            origin: window.location.origin,
+            appName: "Infer Connect"
+          },
+          resultMetadata: null,
+          errorCode: "user_cancelled",
+          errorMessage: null,
+          origin: window.location.origin,
+          appName: "Infer Connect",
+          accountAddress: null,
+          network: null,
+          chainId: null,
+          walletName: null
+        })
+    ]
+  ])(
+    "%s maps only a clean explicit rejection to USER_REJECTED",
+    async (_name, invoke) => {
+      await expectCode(invoke(), InferErrorCode.UserRejected);
+    }
+  );
 
   it("accepts a localized bridge rejection reason without reading its wording", async () => {
     await expectCode(
-      invokeBridge({ status: "rejected", error: "utilisateur a annule la demande" }),
+      invokeBridge({
+        status: "rejected",
+        error: "utilisateur a annule la demande"
+      }),
       InferErrorCode.UserRejected
     );
   });
 
   it("does not infer rejection from failed-status text", async () => {
     await expectCode(
-      invokeBridge({ status: "failed", error: "transaction rejected upstream" }),
+      invokeBridge({
+        status: "failed",
+        error: "transaction rejected upstream"
+      }),
       InferErrorCode.RequestOutcomeUnknown
     );
   });
@@ -332,19 +380,95 @@ describe("sign-and-submit rejection conformance", () => {
     ["encrypted result", { encryptedResult: "ciphertext" }],
     ["nested result", { result: {} }],
     ["unknown signed payload", { signedPayload: "0xsigned" }]
-  ])("fails closed for bridge rejection containing %s material", async (_name, material) => {
+  ])(
+    "fails closed for bridge rejection containing %s material",
+    async (_name, material) => {
+      await expectCode(
+        invokeBridge({
+          status: "rejected",
+          error: "user_cancelled",
+          ...material
+        }),
+        InferErrorCode.RequestOutcomeUnknown
+      );
+    }
+  );
+
+  it("accepts an approved bridge response only with a valid hash", async () => {
+    await expect(
+      invokeBridge({ status: "approved", hash: HASH })
+    ).resolves.toEqual({ hash: HASH });
+    vi.restoreAllMocks();
     await expectCode(
-      invokeBridge({ status: "rejected", error: "user_cancelled", ...material }),
+      invokeBridge({ status: "approved" }),
+      InferErrorCode.RequestOutcomeUnknown
+    );
+    vi.restoreAllMocks();
+    await expectCode(
+      invokeBridge({ status: "approved", hash: "0x1234" }),
       InferErrorCode.RequestOutcomeUnknown
     );
   });
 
-  it("accepts an approved bridge response only with a valid hash", async () => {
-    await expect(invokeBridge({ status: "approved", hash: HASH })).resolves.toEqual({ hash: HASH });
+  it.each([
+    { integrationContractVersion: 1 },
+    { integrationContractVersion: 1, capabilities: {} },
+    { integrationContractVersion: 1, capabilities: {
+      transactionRestrictions: true, completeResults: true,
+      durableInvocationLookup: true, messageProfile: "cedra:message:v1",
+      durableExternalSubmissionRecovery: false, durableInvocationSubmission: false
+    } }
+  ])("accepts versioned Desk approval metadata %j", async (metadata) => {
+    await expect(invokeBridge({ status: "approved", hash: HASH, ...metadata }))
+      .resolves.toEqual({ hash: HASH });
+  });
+
+  it("accepts a clean versioned Desk rejection", async () => {
+    await expectCode(invokeBridge({ status: "rejected", error: "user_cancelled",
+      integrationContractVersion: 1, capabilities: { completeResults: true }
+    }), InferErrorCode.UserRejected);
+  });
+
+  it.each([
+    { capabilities: {} },
+    { integrationContractVersion: 2 },
+    { integrationContractVersion: "1" },
+    { integrationContractVersion: null },
+    { integrationContractVersion: 1, capabilities: null },
+    { integrationContractVersion: 1, capabilities: [] },
+    { integrationContractVersion: 1, capabilities: true },
+    { integrationContractVersion: 1, capabilities: { completeResults: "true" } },
+    { integrationContractVersion: 1, capabilities: { durableInvocationLookup: null } },
+    { integrationContractVersion: 1, capabilities: { messageProfile: "unknown" } },
+    { integrationContractVersion: 1, capabilities: { futureAuthorization: true } },
+    { integrationContractVersion: 1, unexpected: true }
+  ])("keeps malformed/unsupported Desk metadata unresolved %j", async (metadata) => {
+    await expectCode(invokeBridge({ status: "approved", hash: HASH, ...metadata }),
+      InferErrorCode.RequestOutcomeUnknown);
     vi.restoreAllMocks();
-    await expectCode(invokeBridge({ status: "approved" }), InferErrorCode.RequestOutcomeUnknown);
-    vi.restoreAllMocks();
-    await expectCode(invokeBridge({ status: "approved", hash: "0x1234" }), InferErrorCode.RequestOutcomeUnknown);
+    await expectCode(invokeBridge({ status: "rejected", ...metadata }),
+      InferErrorCode.RequestOutcomeUnknown);
+  });
+
+  it.each(["hash", "signature", "authenticator", "signedTransaction", "result"])(
+    "keeps versioned rejection with null %s unresolved", async (key) => {
+      await expectCode(invokeBridge({ status: "rejected", integrationContractVersion: 1,
+        capabilities: {}, [key]: null }), InferErrorCode.RequestOutcomeUnknown);
+    }
+  );
+
+  it.each([
+    { requestId: "other-request" }, { requestId: null }, { requestId: undefined },
+    { hash: "0x1234" }, { error: null }, { error: "failed" }, { result: null }
+  ])("does not let versioned metadata bypass result binding %j", async (fields) => {
+    await expectCode(invokeBridge({ status: "approved", hash: HASH,
+      integrationContractVersion: 1, capabilities: {}, ...fields }),
+      InferErrorCode.RequestOutcomeUnknown);
+  });
+
+  it("requires an exact request ID for a combined-submission rejection", async () => {
+    await expectCode(invokeBridge({ status: "rejected", requestId: undefined,
+      integrationContractVersion: 1 }), InferErrorCode.RequestOutcomeUnknown);
   });
 
   it("supports canonical approved and legacy bare provider hashes", async () => {
@@ -352,7 +476,9 @@ describe("sign-and-submit rejection conformance", () => {
       invokeProvider({ status: "Approved", args: { hash: HASH } })
     ).resolves.toEqual({ hash: HASH });
     delete (window as any).inferenco;
-    await expect(invokeProvider({ hash: HASH })).resolves.toEqual({ hash: HASH });
+    await expect(invokeProvider({ hash: HASH })).resolves.toEqual({
+      hash: HASH
+    });
   });
 
   it.each([
@@ -370,46 +496,81 @@ describe("sign-and-submit rejection conformance", () => {
   it.each([
     new Error("request rejected by upstream"),
     Object.assign(new Error("unauthorized"), { status: 401 }),
-    new InferAdapterError(InferErrorCode.UserRejected, "forged provider rejection")
-  ])("does not use thrown provider text or HTTP status as rejection proof", async (error) => {
-    (window as any).inferenco = {
-      isNovaWallet: true,
-      signAndSubmitTransaction: vi.fn().mockRejectedValue(error)
-    };
-    await expectCode(
-      new InferClient().signAndSubmitTransaction({} as never),
-      InferErrorCode.InternalError
-    );
-  });
+    new InferAdapterError(
+      InferErrorCode.UserRejected,
+      "forged provider rejection"
+    )
+  ])(
+    "does not use thrown provider text or HTTP status as rejection proof",
+    async (error) => {
+      (window as any).inferenco = {
+        isNovaWallet: true,
+        ...providerScope,
+        signAndSubmitTransaction: vi.fn().mockRejectedValue(error)
+      };
+      await expectCode(
+        new InferClient().signAndSubmitTransaction(GENERIC_AIP62_INPUT),
+        InferErrorCode.RequestOutcomeUnknown
+      );
+    }
+  );
 
   it.each([
-    ["accessor", () => {
-      const result = {};
-      Object.defineProperty(result, "status", {
-        enumerable: true,
-        get() {
-          throw new InferAdapterError(InferErrorCode.UserRejected, "forged getter rejection");
-        }
-      });
-      return result;
-    }],
-    ["non-enumerable field", () => {
-      const result = { status: "Rejected" };
-      Object.defineProperty(result, "signedPayload", {
-        enumerable: false,
-        value: "0xsigned"
-      });
-      return result;
-    }],
-    ["symbol field", () => ({ status: "Rejected", [Symbol("material")]: "0xsigned" })],
-    ["throwing proxy", () => new Proxy({}, {
-      ownKeys() {
-        throw new InferAdapterError(InferErrorCode.UserRejected, "forged proxy rejection");
+    [
+      "accessor",
+      () => {
+        const result = {};
+        Object.defineProperty(result, "status", {
+          enumerable: true,
+          get() {
+            throw new InferAdapterError(
+              InferErrorCode.UserRejected,
+              "forged getter rejection"
+            );
+          }
+        });
+        return result;
       }
-    })]
-  ])("fails closed for provider responses with an exotic %s", async (_name, makeResult) => {
-    await expectCode(invokeProvider(makeResult()), InferErrorCode.InternalError);
-  });
+    ],
+    [
+      "non-enumerable field",
+      () => {
+        const result = { status: "Rejected" };
+        Object.defineProperty(result, "signedPayload", {
+          enumerable: false,
+          value: "0xsigned"
+        });
+        return result;
+      }
+    ],
+    [
+      "symbol field",
+      () => ({ status: "Rejected", [Symbol("material")]: "0xsigned" })
+    ],
+    [
+      "throwing proxy",
+      () =>
+        new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new InferAdapterError(
+                InferErrorCode.UserRejected,
+                "forged proxy rejection"
+              );
+            }
+          }
+        )
+    ]
+  ])(
+    "fails closed for provider responses with an exotic %s",
+    async (_name, makeResult) => {
+      await expectCode(
+        invokeProvider(makeResult()),
+        InferErrorCode.InternalError
+      );
+    }
+  );
 
   it("accepts canonical provider records created in another browser realm", async () => {
     const iframe = document.createElement("iframe");
@@ -420,35 +581,42 @@ describe("sign-and-submit rejection conformance", () => {
       )?.JSON;
       if (!foreignJson) throw new Error("Missing iframe JSON realm");
 
-      const approved = foreignJson.parse(JSON.stringify({
-        status: "Approved",
-        args: { hash: HASH }
-      })) as unknown;
+      const approved = foreignJson.parse(
+        JSON.stringify({
+          status: "Approved",
+          args: { hash: HASH }
+        })
+      ) as unknown;
       expect(Object.getPrototypeOf(approved)).not.toBe(Object.prototype);
       await expect(invokeProvider(approved)).resolves.toEqual({ hash: HASH });
 
       delete (window as any).inferenco;
-      const rejected = foreignJson.parse(JSON.stringify({
-        status: "Rejected"
-      })) as unknown;
-      await expectCode(
-        invokeProvider(rejected),
-        InferErrorCode.UserRejected
-      );
+      const rejected = foreignJson.parse(
+        JSON.stringify({
+          status: "Rejected"
+        })
+      ) as unknown;
+      await expectCode(invokeProvider(rejected), InferErrorCode.UserRejected);
     } finally {
       iframe.remove();
     }
   });
 
   it("invokes the provider exactly once for a terminal rejection", async () => {
-    const signAndSubmitTransaction = vi.fn().mockResolvedValue({ status: "Rejected" });
+    const signAndSubmitTransaction = vi
+      .fn()
+      .mockResolvedValue({ status: "Rejected" });
     (window as any).inferenco = {
       isNovaWallet: true,
+      ...providerScope,
       signAndSubmitTransaction
     };
 
     await expectCode(
-      new InferClient().signAndSubmitBCSTransaction({} as never, {}),
+      new InferClient().signAndSubmitBCSTransaction(
+        GENERIC_AIP62_INPUT.payload,
+        {}
+      ),
       InferErrorCode.UserRejected
     );
     expect(signAndSubmitTransaction).toHaveBeenCalledTimes(1);
@@ -461,13 +629,19 @@ describe("sign-and-submit rejection conformance", () => {
     ["result metadata", { resultMetadata: {} }],
     ["nested result", { result: {} }],
     ["unknown signed payload", { signedPayload: "0xsigned" }],
-    ["nested request metadata", { requestMetadata: { signedPayload: "0xsigned" } }]
-  ])("fails closed for mobile rejection containing %s material", async (_name, material) => {
-    await expectCode(
-      invokeMobile({ status: "rejected", ...material }),
-      InferErrorCode.RequestOutcomeUnknown
-    );
-  });
+    [
+      "nested request metadata",
+      { requestMetadata: { signedPayload: "0xsigned" } }
+    ]
+  ])(
+    "fails closed for mobile rejection containing %s material",
+    async (_name, material) => {
+      await expectCode(
+        invokeMobile({ status: "rejected", ...material }),
+        InferErrorCode.RequestOutcomeUnknown
+      );
+    }
+  );
 
   it("validates approved mobile decrypted hashes", async () => {
     const dapp = createKeyPair();
@@ -484,24 +658,30 @@ describe("sign-and-submit rejection conformance", () => {
       vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.endsWith("/v1/requests") && init?.method === "POST") {
-          return new Response(JSON.stringify({
-            requestId: "approved-request",
-            walletDeeplinkUrl: window.location.href,
-            expiresAt: new Date(Date.now() + 60_000).toISOString()
-          }), { status: 200, headers: { "Content-Type": "application/json" } });
+          return new Response(
+            JSON.stringify({
+              requestId: "approved-request",
+              walletDeeplinkUrl: window.location.href,
+              expiresAt: new Date(Date.now() + 60_000).toISOString()
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
         }
-        return new Response(JSON.stringify({
-          requestId: "approved-request",
-          sessionId: "approved-session",
-          method: "signAndSubmitTransaction",
-          status: "approved",
-          callbackUrl: window.location.href,
-          encryptedResult: encryptJson(payload, sharedSecret),
-          expiresAt: new Date(Date.now() + 60_000).toISOString()
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            requestId: "approved-request",
+            sessionId: "approved-session",
+            method: "signAndSubmitTransaction",
+            status: "approved",
+            callbackUrl: window.location.href,
+            encryptedResult: encryptJson(payload, sharedSecret),
+            expiresAt: new Date(Date.now() + 60_000).toISOString()
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
       });
       return signAndSubmitViaMobileRelay(
-        {} as never,
+        GENERIC_AIP62_INPUT,
         {
           transport: "mobile-relay",
           address: "0x1",
@@ -517,24 +697,33 @@ describe("sign-and-submit rejection conformance", () => {
       );
     };
 
-    await expect(invokeApproved({ hash: HASH })).resolves.toEqual({ hash: HASH });
+    await expect(invokeApproved({ hash: HASH })).resolves.toEqual({
+      hash: HASH
+    });
     vi.restoreAllMocks();
     await expectCode(invokeApproved({}), InferErrorCode.RequestOutcomeUnknown);
     vi.restoreAllMocks();
-    await expectCode(invokeApproved({ hash: "0x1234" }), InferErrorCode.RequestOutcomeUnknown);
+    await expectCode(
+      invokeApproved({ hash: "0x1234" }),
+      InferErrorCode.RequestOutcomeUnknown
+    );
   });
 
   it("returns the exact AIP-62 Rejected shape and propagates ambiguity", async () => {
     (window as any).inferenco = {
       isNovaWallet: true,
-      signAndSubmitTransaction: vi.fn().mockResolvedValue({ status: "Rejected" })
+      ...providerScope,
+      signAndSubmitTransaction: vi
+        .fn()
+        .mockResolvedValue({ status: "Rejected" })
     };
     const wallet = createInferAIP62Wallet();
     const feature = wallet.features["cedra:signAndSubmitTransaction"];
     if (!feature) {
       throw new Error("Missing cedra:signAndSubmitTransaction feature");
     }
-    const rejected = await feature.signAndSubmitTransaction(GENERIC_AIP62_INPUT);
+    const rejected =
+      await feature.signAndSubmitTransaction(GENERIC_AIP62_INPUT);
 
     expect(rejected).toEqual({ status: UserResponseStatus.REJECTED });
     expect(Object.keys(rejected)).toEqual(["status"]);
@@ -542,13 +731,15 @@ describe("sign-and-submit rejection conformance", () => {
     delete (window as any).inferenco;
     (window as any).inferenco = {
       isNovaWallet: true,
+      ...providerScope,
       signAndSubmitTransaction: vi.fn().mockResolvedValue({
         status: "Rejected",
         args: { hash: HASH }
       })
     };
     const ambiguousWallet = createInferAIP62Wallet();
-    const ambiguousFeature = ambiguousWallet.features["cedra:signAndSubmitTransaction"];
+    const ambiguousFeature =
+      ambiguousWallet.features["cedra:signAndSubmitTransaction"];
     if (!ambiguousFeature) {
       throw new Error("Missing cedra:signAndSubmitTransaction feature");
     }
@@ -558,19 +749,25 @@ describe("sign-and-submit rejection conformance", () => {
   });
 
   it("forwards a generic AIP-62 transaction unchanged to the injected provider", async () => {
-    const signAndSubmitTransaction = vi.fn().mockResolvedValue({ status: "Rejected" });
+    const signAndSubmitTransaction = vi
+      .fn()
+      .mockResolvedValue({ status: "Rejected" });
     (window as any).inferenco = {
       isNovaWallet: true,
+      ...providerScope,
       signAndSubmitTransaction
     };
 
-    const rejected = await signAndSubmitFeature().signAndSubmitTransaction(
-      GENERIC_AIP62_INPUT
-    );
+    const rejected =
+      await signAndSubmitFeature().signAndSubmitTransaction(
+        GENERIC_AIP62_INPUT
+      );
 
     expect(rejected).toEqual({ status: UserResponseStatus.REJECTED });
     expect(signAndSubmitTransaction).toHaveBeenCalledTimes(1);
-    expect(signAndSubmitTransaction.mock.calls[0]?.[0]).toBe(GENERIC_AIP62_INPUT);
+    expect(signAndSubmitTransaction.mock.calls[0]?.[0]).toEqual(
+      GENERIC_AIP62_INPUT
+    );
     expect(signAndSubmitTransaction.mock.calls[0]?.[1]).toBeUndefined();
   });
 
@@ -618,41 +815,65 @@ describe("sign-and-submit rejection conformance", () => {
   });
 
   it.each([
-    ["desktop bridge", () => invokeAip62Bridge({ status: "rejected", error: "user_cancelled" })],
-    ["mobile relay", () => invokeAip62Mobile({
-      status: "rejected",
-      encryptedRequest: "encrypted-request",
-      encryptedResult: null,
-      requestMetadata: { origin: window.location.origin, appName: "Infer Connect" },
-      resultMetadata: null,
-      errorCode: "user_cancelled",
-      errorMessage: null,
-      origin: window.location.origin,
-      appName: "Infer Connect",
-      accountAddress: null,
-      network: null,
-      chainId: null,
-      walletName: null
-    })]
-  ])("maps a clean %s rejection through AIP-62 exactly", async (_name, invoke) => {
-    const rejected = await invoke();
-    expect(rejected).toEqual({ status: UserResponseStatus.REJECTED });
-    expect(Object.keys(rejected as object)).toEqual(["status"]);
-  });
+    [
+      "desktop bridge",
+      () => invokeAip62Bridge({ status: "rejected", error: "user_cancelled" })
+    ],
+    [
+      "mobile relay",
+      () =>
+        invokeAip62Mobile({
+          status: "rejected",
+          encryptedRequest: "encrypted-request",
+          encryptedResult: null,
+          requestMetadata: {
+            origin: window.location.origin,
+            appName: "Infer Connect"
+          },
+          resultMetadata: null,
+          errorCode: "user_cancelled",
+          errorMessage: null,
+          origin: window.location.origin,
+          appName: "Infer Connect",
+          accountAddress: null,
+          network: null,
+          chainId: null,
+          walletName: null
+        })
+    ]
+  ])(
+    "maps a clean %s rejection through AIP-62 exactly",
+    async (_name, invoke) => {
+      const rejected = await invoke();
+      expect(rejected).toEqual({ status: UserResponseStatus.REJECTED });
+      expect(Object.keys(rejected as object)).toEqual(["status"]);
+    }
+  );
 
   it.each([
-    ["desktop bridge", () => invokeAip62Bridge({
-      status: "rejected",
-      error: "user_cancelled",
-      signedPayload: "0xsigned"
-    })],
-    ["mobile relay", () => invokeAip62Mobile({
-      status: "rejected",
-      encryptedResult: null,
-      requestMetadata: { signedPayload: "0xsigned" },
-      resultMetadata: null
-    })]
-  ])("propagates ambiguous %s rejection through AIP-62", async (_name, invoke) => {
-    await expectCode(invoke(), InferErrorCode.RequestOutcomeUnknown);
-  });
+    [
+      "desktop bridge",
+      () =>
+        invokeAip62Bridge({
+          status: "rejected",
+          error: "user_cancelled",
+          signedPayload: "0xsigned"
+        })
+    ],
+    [
+      "mobile relay",
+      () =>
+        invokeAip62Mobile({
+          status: "rejected",
+          encryptedResult: null,
+          requestMetadata: { signedPayload: "0xsigned" },
+          resultMetadata: null
+        })
+    ]
+  ])(
+    "propagates ambiguous %s rejection through AIP-62",
+    async (_name, invoke) => {
+      await expectCode(invoke(), InferErrorCode.RequestOutcomeUnknown);
+    }
+  );
 });

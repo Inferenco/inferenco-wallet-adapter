@@ -1,4 +1,4 @@
-import EventEmitter from "eventemitter3";
+import { EventEmitter } from "eventemitter3";
 import type {
   AccountAuthenticator,
   AnyRawTransaction
@@ -23,10 +23,12 @@ import { hasStoredExternalSession, isMobileBrowser } from "./bridge";
 import { buildDeeplinkUrl } from "./deeplink";
 import { detectProvider } from "./provider";
 import { InferClient } from "./InferClient";
+import { InferAdapterError, InferErrorCode } from "./errors";
 import type {
   ArchivedRecoverableRequest,
   RecoverableRequest,
   RecoverableInvocation,
+  RecoveryReadOptions,
   RecoveredRequestOutcome
 } from "./recovery";
 import {
@@ -69,11 +71,14 @@ export class InferWallet
   private cachedAccount: AccountInfo | null = null;
   private cachedNetwork: NetworkInfo | null = null;
   private isConnecting = false;
+  private connectionRevision = 0;
+  private connectionOperation: { promise: Promise<AccountInfo>; cancel: () => void } | null = null;
 
   constructor(private readonly options: InferWalletOptions = {}) {
     super();
     this.url = options.websiteUrl ?? (isMobileBrowser() ? DEFAULT_MOBILE_WEBSITE_URL : DEFAULT_DESKTOP_WEBSITE_URL);
     this.client = new InferClient(options);
+    this.client.on("disconnect", () => this.clearConnection());
     this.client.on("connectionHealth", (health) => {
       if (health.state === "unreachable" || health.state === "reconnect-required") {
         this.cachedAccount = null;
@@ -122,17 +127,42 @@ export class InferWallet
     };
   }
 
-  async connect(): Promise<AccountInfo> {
+  private clearConnection(): void {
+    this.connectionRevision++;
+    this.connectionOperation?.cancel();
+    this.connectionOperation = null;
+    this.isConnecting = false;
+    this.cachedAccount = null;
+    this.cachedNetwork = null;
+  }
+
+  connect(): Promise<AccountInfo> {
+    if (this.connectionOperation) return this.connectionOperation.promise;
+    const revision = ++this.connectionRevision;
     this.isConnecting = true;
-    try {
+    let cancel!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      cancel = () => reject(new InferAdapterError(InferErrorCode.Unauthorized, "Connection operation was cancelled"));
+    });
+    const work = (async () => {
       const result = await this.client.connect();
+      if (revision !== this.connectionRevision)
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Connection operation was superseded");
+      await this.client.subscribe();
+      if (revision !== this.connectionRevision)
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Connection operation was superseded");
       this.cachedAccount = result.account;
       this.cachedNetwork = result.network;
-      await this.client.subscribe();
       return result.account;
-    } finally {
-      this.isConnecting = false;
-    }
+    })();
+    const operation = { promise: Promise.race([work, cancelled]).finally(() => {
+      if (this.connectionOperation === operation) {
+        this.isConnecting = false;
+        this.connectionOperation = null;
+      }
+    }), cancel };
+    this.connectionOperation = operation;
+    return operation.promise;
   }
 
   async account(): Promise<AccountInfo> {
@@ -141,6 +171,7 @@ export class InferWallet
   }
 
   async disconnect(): Promise<void> {
+    this.clearConnection();
     await this.client.disconnect();
     this.cachedAccount = null;
     this.cachedNetwork = null;
@@ -178,8 +209,8 @@ export class InferWallet
     return this.client.listArchivedRecoverableRequests();
   }
 
-  readRecoverableRequest(requestId: string): Promise<RecoveredRequestOutcome> {
-    return this.client.readRecoverableRequest(requestId);
+  readRecoverableRequest(requestId: string, readOptions: RecoveryReadOptions = {}): Promise<RecoveredRequestOutcome> {
+    return this.client.readRecoverableRequest(requestId, readOptions);
   }
 
   acknowledgeRecoverableRequest(requestId: string): Promise<void> {
@@ -197,6 +228,10 @@ export class InferWallet
     return this.client.signAndSubmitTransaction(transaction, options);
   }
 
+  /**
+   * @deprecated Payload-only compatibility alias; does not accept raw transactions or BCS bytes.
+   * Use signAndSubmitTransaction for payload submission, or signTransaction for prebuilt signing.
+   */
   async signAndSubmitBCSTransaction(
     transaction: InferTransactionPayload,
     options?: unknown

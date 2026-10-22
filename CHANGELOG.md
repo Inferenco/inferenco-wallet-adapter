@@ -5,6 +5,48 @@ All notable changes to `@inferenco/infer-wallet-adapter` will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0-rc.3] - Unreleased
+
+### Fixed
+
+- Validate and persist native built-in-browser `not-submitted` proofs against the original invocation, deliver them through recovery callbacks, and require matching wallet revalidation and remote acknowledgement before local acceptance. Unknown or conflicting native execution remains unresolved.
+- Allow consumer acknowledgement of validated, durably stored mobile `not-submitted` recovery evidence. Mobile acknowledgement remains local and works offline without launching the Wallet or repeating execution.
+- Deliver these mobile terminal failures through existing recovery callbacks, retaining failed consumer writes for retry.
+- Reject archiving verified mobile terminal failures as uncertainty; prune only acknowledged evidence after the existing 30-day retention period, preserving unresolved requests and exact invocation links.
+- Preserve the existing desktop remote acknowledgement and recovery rules. No Wallet, Desk or relay changes are required for this adapter repair.
+
+## [0.3.0-rc.2] - Unreleased
+
+### Fixed
+
+- Accept valid Infer Desk version-1 result metadata on transaction approvals and clean rejections while preserving legacy response compatibility.
+- Keep malformed metadata, mixed outcomes and mismatched request identities unresolved; metadata never authorizes resubmission.
+- Preserve durable recovery and replay of validated desktop results after lost delivery or a failed local persistence write, without issuing another transaction POST.
+
+### Validation
+
+- Cover legacy and versioned sign-only transaction and Ed25519 message results.
+- Add an extracted-package qualification harness and the Desk Rust-produced response fixture for direct delivery, recovery, malformed-envelope and persistence-failure cases.
+- See [desktop result contract and qualification](docs/DESKTOP_RESULT_METADATA_CONTRACT_2026-10-20.md). This candidate is not yet published; live-wallet and cross-device acceptance remain separate.
+
+## [0.2.2-rc.1] - Unreleased
+
+### Changed
+
+- Prepare the integration repair candidate as `0.2.2-rc.1`, retaining the released `0.2.1` first-time preauth retry behavior. See [verification and release handoff](docs/verification/adapter-0.2.2-rc.1.md) for completed checks and remaining qualification scope.
+
+### Fixed
+
+- Preserve original invocation scope and uncertain transaction identities during recovery; validate complete results before replay and retain remote acknowledgement obligations across peer loss.
+- Recheck live injected account/network scope before dispatch and prune only eligible linked terminal evidence.
+
+### Packaging and compatibility
+
+- Raise the Cedra TypeScript SDK dependency baseline to ^2.2.9.
+- Preserve versioned integration capabilities through desktop preauth session normalization.
+- Route ESM and CommonJS consumers to their matching declarations and use named EventEmitter imports in adapter declarations.
+- Document the pre-existing strict NodeNext ESM declaration errors in Cedra SDK 2.2.8/2.2.9, also reproduced with published adapter 0.2.1; ordinary runtime and Bundler checks pass.
+
 ## [0.2.1] - 2026-10-10
 
 ### Changed

@@ -5,6 +5,7 @@ import {
 import { tryLocalBridgeSignTransaction } from "../src/bridge";
 import { _setBridgeTokenForTesting } from "../src/bridge/token";
 import { InferClient } from "../src/InferClient";
+import { InferWallet } from "../src/InferWallet";
 import { createInferAIP62Wallet } from "../src/aip62";
 import { deserializeAccountAuthenticator, deserializeSignTransactionResult } from "../src/conversion";
 import type { InferWindow } from "../src/types";
@@ -111,8 +112,9 @@ describe("exact prebuilt signing", () => {
       await expect(new InferClient().signTransaction(transaction)).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
     });
 
-  it.each(["approved", "trailing authenticator", "changed raw", "rejected", "ambiguous rejection"])(
-    "validates original desktop signing bytes: %s", async (kind) => {
+  it.each(["approved", "trailing authenticator", "changed raw", "rejected", "ambiguous rejection"]
+    .flatMap(kind => [false, true].map(versioned => [kind, versioned] as const)))(
+    "validates original desktop signing bytes: %s versioned=%s", async (kind, versioned) => {
       const { transaction, wire } = fixture();
       _setBridgeTokenForTesting("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
       const payload = kind === "rejected" ? { status: "rejected", error: "Declined" } :
@@ -121,7 +123,8 @@ describe("exact prebuilt signing", () => {
           ...(kind === "changed raw" ? { rawTransactionBcsHex: fixture().transaction.toString() } : {}) };
       const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
         if (init?.method === "DELETE") return new Response(null, { status: 204 });
-        const body = String(url).endsWith("/sign-transaction") ? { requestId: "request-1" } : payload;
+        const body = String(url).endsWith("/sign-transaction") ? { requestId: "request-1" } : { ...payload,
+          ...(versioned ? { integrationContractVersion: 1, capabilities: { completeResults: true } } : {}) };
         return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
       });
       const promise = tryLocalBridgeSignTransaction({ rawTransactionBcsHex: transaction.toString() }, {
@@ -156,4 +159,37 @@ describe("exact prebuilt signing", () => {
         : vi.fn().mockResolvedValue({ status: "Rejected", ...wire }) };
     await expect(new InferClient().signTransaction(transaction)).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
+});
+
+
+describe("raw transactions cannot enter payload submission", () => {
+  for (const api of ["client", "wallet"] as const)
+    for (const method of ["signAndSubmitTransaction", "signAndSubmitBCSTransaction"] as const)
+      for (const injected of [false, true])
+        it.each(["simple", "multi-agent", "fee-payer"])(
+          `${api}.${method} rejects %s before dispatch (injected=${injected})`, async (kind) => {
+            const { raw, transaction } = fixture();
+            const peer = Account.generate().accountAddress;
+            const input = kind === "simple" ? transaction
+              : kind === "multi-agent" ? new MultiAgentTransaction(raw, [peer])
+              : new SimpleTransaction(raw, peer);
+            const dispatch = vi.fn();
+            const account = vi.fn();
+            const prepared = vi.fn();
+            const fetchSpy = vi.spyOn(globalThis, "fetch");
+            if (injected) (window as InferWindow).inferenco = {
+              isInferWallet: true, account, signAndSubmitTransaction: dispatch
+            };
+            const target = api === "client"
+              ? new InferClient({ onInvocationPrepared: prepared })
+              : new InferWallet({ onInvocationPrepared: prepared });
+            // JavaScript callers can bypass TypeScript; retain the runtime safety boundary.
+            await expect(Reflect.apply(target[method], target, [input]))
+              .rejects.toMatchObject({ code: "INVALID_PARAMS" });
+            expect(account).not.toHaveBeenCalled();
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(fetchSpy).not.toHaveBeenCalled();
+            expect(prepared).not.toHaveBeenCalled();
+          }
+        );
 });
