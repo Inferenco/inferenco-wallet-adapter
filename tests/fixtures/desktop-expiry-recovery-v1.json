@@ -1,0 +1,53 @@
+{
+  "schema": "infer-connect-desktop-expiry-fixture-v1",
+  "requestPayload": {
+    "contractVersion": 1,
+    "data": {
+      "function": "0x1::fixture::run",
+      "typeArguments": [],
+      "functionArguments": []
+    },
+    "options": {
+      "gasUnitPrice": "9",
+      "maxGasAmount": "1000",
+      "expireTimestamp": "2000000100"
+    }
+  },
+  "nowSeconds": 2000000100,
+  "envelope": {
+    "contractVersion": 1,
+    "requestId": "desktop-expired-fixture",
+    "sessionId": "fixture-authorised-reader",
+    "invocationId": "12345678-1234-4234-8234-123456789012",
+    "requestCommitment": "869984eff10bb1737fff56b2f5388d98f05586c09552ef352799a660f96f99c9",
+    "scope": {
+      "origin": "https://fixture.example",
+      "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "network": "testnet",
+      "chainId": 2,
+      "transport": "desktop-bridge",
+      "method": "signAndSubmitTransaction"
+    },
+    "status": "failed",
+    "finalizedAt": "2033-05-18T03:35:00Z",
+    "payload": {
+      "error": "This transaction expired before approval."
+    },
+    "transactionRecovery": {
+      "recoverySchema": "infer-connect-transaction-recovery-v1",
+      "requestId": "desktop-expired-fixture",
+      "invocationId": "12345678-1234-4234-8234-123456789012",
+      "requestCommitment": "869984eff10bb1737fff56b2f5388d98f05586c09552ef352799a660f96f99c9",
+      "scope": {
+        "origin": "https://fixture.example",
+        "accountAddress": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "network": "testnet",
+        "chainId": 2
+      },
+      "method": "signAndSubmitTransaction",
+      "status": "not-submitted",
+      "failureCode": "EXECUTION_FAILED_BEFORE_BROADCAST"
+    },
+    "originalSessionId": "fixture-original-session"
+  }
+}

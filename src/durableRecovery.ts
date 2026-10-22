@@ -1,5 +1,5 @@
 import { normalizeSignMessageOutput } from "./conversion";
-import { canonicalAddress, requestCommitment } from "./integrationContract";
+import { canonicalAddress, canonicalJson, requestCommitment } from "./integrationContract";
 import type {
   CedraSignAndSubmitTransactionOutput,
   CedraSignMessageOutput,
@@ -423,11 +423,12 @@ export async function saveDurableExternalTransactionRecovery(id: string, value: 
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
     let result: DurableRequest | undefined;
+    let changed = false;
     const lookup = store.get(id);
     lookup.onsuccess = () => {
       const row = lookup.result as DurableRequest | undefined;
       try {
-        if (!row || row.origin !== window.location.origin || row.transport !== "mobile-relay" || row.state !== "active") throw new Error();
+        if (!row || row.origin !== window.location.origin || !["mobile-relay", "desktop-bridge"].includes(row.transport) || !validStoredRecord(row) || row.state !== "active") throw new Error();
         const next = validateExternalTransactionRecovery(value, row);
         const previous = row.externalTransactionRecovery && validateExternalTransactionRecovery(row.externalTransactionRecovery, row);
         const evidence = mergeExternalTransactionRecovery(previous, next);
@@ -435,13 +436,23 @@ export async function saveDurableExternalTransactionRecovery(id: string, value: 
             (row.final && (row.final.status !== "approved" || row.final.method !== "signAndSubmitTransaction" || row.final.hash !== evidence.transactionHash))) throw new Error();
         const final: StoredFinal | undefined = evidence.status === "approved"
           ? { status: "approved", method: "signAndSubmitTransaction", hash: evidence.transactionHash! } : row.final;
+        // Revalidating an already accepted snapshot is a read, not a new
+        // revision. In particular acknowledgement retries must not wake their
+        // own recovered-outcome subscriber and create a retry feedback loop.
+        if (previous && canonicalJson(previous) === canonicalJson(evidence) &&
+            (row.transactionHash ?? null) === (evidence.transactionHash ?? null) &&
+            canonicalJson(row.final ?? null) === canonicalJson(final ?? null)) {
+          result = row;
+          return;
+        }
         result = { ...row, externalTransactionRecovery: evidence,
           ...(evidence.transactionHash ? { transactionHash: evidence.transactionHash } : {}),
           ...(final ? { final } : {}), updatedAt: new Date().toISOString(), revision: row.revision + 1 };
         store.put(result);
+        changed = true;
       } catch { tx.abort(); }
     };
-    tx.oncomplete = () => { db.close(); announceRecordChange(); resolve(result!); };
+    tx.oncomplete = () => { db.close(); if (changed) announceRecordChange(); resolve(result!); };
     tx.onabort = () => { db.close(); reject(failure("External recovery evidence conflicts with the original request", tx.error)); };
     tx.onerror = () => {};
   });
@@ -461,6 +472,7 @@ export async function saveDurableTransactionHash(id: string, hash: string, injec
       const row = lookup.result as DurableRequest | DurableInvocation | undefined;
       if (!row || row.origin !== window.location.origin || !row.requestCommitment ||
           row.method !== "signAndSubmitTransaction" ||
+          ("externalTransactionRecovery" in row && row.externalTransactionRecovery?.status === "not-submitted") ||
           (row.transactionHash && row.transactionHash.toLowerCase() !== hash) ||
           (row.final && (row.final.status !== "approved" ||
             row.final.method !== "signAndSubmitTransaction" || row.final.hash.toLowerCase() !== hash))) {
@@ -485,6 +497,14 @@ export async function saveDurableTransactionHash(id: string, hash: string, injec
   });
 }
 
+/** Only the exact, revalidated desktop terminal assertion has this retention status. */
+function verifiedDesktopNotSubmitted(row: DurableRequest): boolean {
+  try {
+    return row.transport === "desktop-bridge" && !row.final && !row.transactionHash &&
+      validateExternalTransactionRecovery(row.externalTransactionRecovery, row).status === "not-submitted";
+  } catch { return false; }
+}
+
 export async function transitionDurableRequest(
   id: string,
   operation: "acknowledge" | "archive",
@@ -498,8 +518,8 @@ export async function transitionDurableRequest(
     lookup.onsuccess = () => {
       const row = lookup.result as DurableRequest | undefined;
       if (!row || row.origin !== window.location.origin ||
-          (operation === "acknowledge" && (!row.final || row.state === "archived")) ||
-          (operation === "archive" && (row.state === "acknowledged" || !!row.final))) {
+          (operation === "acknowledge" && ((!row.final && !verifiedDesktopNotSubmitted(row)) || row.state === "archived")) ||
+          (operation === "archive" && (row.state === "acknowledged" || !!row.final || verifiedDesktopNotSubmitted(row)))) {
         tx.abort();
         return;
       }
@@ -530,7 +550,7 @@ export async function pruneDurableEvidence(now = Date.now()): Promise<void> {
       const row = entry.value as DurableRequest;
       const age = now - Date.parse(row.updatedAt);
       if (validStoredRecord(row) &&
-          ((row.state === "acknowledged" && !!row.final && age > ACK_TOMBSTONE_MS) ||
+          ((row.state === "acknowledged" && (!!row.final || verifiedDesktopNotSubmitted(row)) && age > ACK_TOMBSTONE_MS) ||
            (row.state === "archived" && !!row.archive && age > ARCHIVE_MS))) {
         entry.delete();
         if (row.invocationId) {

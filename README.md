@@ -516,3 +516,40 @@ See [the native recovery handoff](docs/NATIVE_TRANSACTION_RECOVERY_HANDOFF.md)
 for the exact interface, source alignment, consumer ordering and local validation
 limits. This work remains a release candidate; native wallet and ecosystem
 adoption require separate acceptance.
+
+
+### Recovering a desktop transaction that did not broadcast
+
+A lost response or a generic wallet error is **not** permission to submit again.
+Retain the original invocation from `onInvocationPrepared`, then use
+`inferenco:recoveredOutcomes.reconcileInvocation(invocationId)` (or
+`InferClient.reconcileRecoverableInvocation`). These reads never sign, create a
+transaction request, or open a wallet tab.
+
+A scope-checked Desk failure can return the existing recovery result:
+
+```ts
+if (
+  outcome.status === "unknown" &&
+  outcome.submissionDisposition === "not-submitted" &&
+  outcome.failureCode === "EXECUTION_FAILED_BEFORE_BROADCAST"
+) {
+  // Persist a distinct terminal failure for this exact original invocation.
+  // Only after that write succeeds, acknowledge outcome.recoveryId.
+  await recoveredOutcomes.acknowledge(outcome.recoveryId);
+  // A later retry must be a separately reviewed and approved operation.
+}
+```
+
+This is an authenticated wallet execution assertion, not proof from an error
+string or an independent proof of chain non-inclusion. The adapter validates the
+original origin, account, network, chain, method, invocation, request commitment
+and immutable input; it persists the assertion before returning it. Desktop
+reloads replay it from IndexedDB. A bare `failed` result, unsupported schema,
+conflicting identity, known transaction hash, or failed durable write remains
+unresolved. A failed acknowledgement remains retryable without signing again.
+
+Normal wallet-standard signing still returns a transaction hash or throws: a
+pre-broadcast execution failure is not a fabricated user rejection. Consume its
+retained result using the recovery API above. Signed/submitting uncertainty and
+known hashes continue through canonical transaction verification.

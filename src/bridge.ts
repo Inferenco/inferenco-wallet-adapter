@@ -6,6 +6,7 @@ import {
   normalizeSubmitInput,
   type CanonicalTransactionInput
 } from "./integrationContract";
+import { validateExternalTransactionRecovery, type ExternalTransactionRecovery, type ExternalRecoveryBinding } from "./externalTransactionRecovery";
 import { notInvokedError } from "./nonDispatchEvidence";
 import { DESKTOP_RESULT_METADATA_KEYS, hasValidDesktopResultMetadata } from "./desktopResultMetadata";
 import {
@@ -85,7 +86,7 @@ import { deserializeSignTransactionResult, normalizeProviderAccount,
   normalizeSignMessageOutput,
   verifySignedMessageOutput
 } from "./conversion";
-import { prepareDurableInvocation, saveDurableRequest, saveDurableFinal, serializeStoredFinal, updateDurableInvocation } from "./durableRecovery";
+import { prepareDurableInvocation, saveDurableRequest, saveDurableFinal, serializeStoredFinal, updateDurableInvocation, saveDurableExternalTransactionRecovery } from "./durableRecovery";
 import { desktopBridgeOrigin, storePendingDesktopBridgeRequest, readPendingDesktopBridgeRequests, type PendingDesktopBridgeRequest } from "./desktopRequests";
 
 type InferPendingMobilePairing = {
@@ -2488,6 +2489,18 @@ async function completeDesktopResult(
     | CedraSignTransactionOutputV1_1
     | CedraSignAndSubmitTransactionOutput;
   try {
+    if (payload.status === "failed") {
+      const evidence = decodeDesktopNotSubmitted(payload, {
+        requestId: pending.requestId, invocationId: pending.invocationId,
+        requestCommitment: pending.requestCommitment, origin: pending.origin!,
+        address: pending.address, network: pending.network, chainId: pending.chainId,
+        method: pending.method, pending
+      }, pending.sessionId, pending.sessionId);
+      await saveDurableExternalTransactionRecovery(durableId, evidence);
+      // A standard signing call has no safe-failure output variant. The retained
+      // original invocation is recovered through the typed recovery API instead.
+      throw unresolvedRequestError("Original transaction was not submitted; recover its retained result", invocationId, pending.requestId, undefined);
+    }
     if (
       pending.method === "signAndSubmitTransaction" &&
       payload.requestId !== pending.requestId
@@ -2536,6 +2549,31 @@ async function completeDesktopResult(
     );
   }
   return output;
+}
+
+/** A generic failed/error response never proves non-submission. The authenticated
+ * envelope and the strict existing evidence must both bind the original action. */
+function decodeDesktopNotSubmitted(
+  value: unknown,
+  binding: ExternalRecoveryBinding,
+  currentSessionId: string,
+  originalSessionId: string
+): ExternalTransactionRecovery {
+  const wire = encodeWireValue(value);
+  if (!wire || typeof wire !== "object" || Array.isArray(wire) ||
+      wire.status !== "failed" || wire.contractVersion !== 1 ||
+      wire.requestId !== binding.requestId || wire.invocationId !== binding.invocationId ||
+      wire.requestCommitment !== binding.requestCommitment || wire.sessionId !== currentSessionId ||
+      wire.originalSessionId !== originalSessionId || wire.hash !== undefined ||
+      !hasValidDesktopResultMetadata(wire)) throw new Error("Unqualified desktop failure");
+  const scope = parseReadResultScope(wire.scope);
+  if (!scope || scope.transport !== "desktop-bridge" || scope.origin !== binding.origin ||
+      scope.accountAddress !== canonicalAddress(binding.address) || scope.network !== binding.network ||
+      scope.chainId !== binding.chainId || scope.method !== binding.method)
+    throw new Error("Desktop failure scope differs from the original operation");
+  const evidence = validateExternalTransactionRecovery(wire.transactionRecovery, binding);
+  if (evidence.status !== "not-submitted") throw new Error("Desktop failure is not terminal non-submission");
+  return evidence;
 }
 
 function decodeDesktopResult(
@@ -2631,7 +2669,8 @@ export async function readDesktopBridgeRequestOnce(
   durablePending?: PendingDesktopBridgeRequest
 ): Promise<{
   pending: PendingDesktopBridgeRequest;
-  status: "pending" | "approved";
+  status: "pending" | "approved" | "not-submitted";
+  transactionRecovery?: ExternalTransactionRecovery;
   output?:
     | CedraSignMessageOutput
     | CedraSignTransactionOutputV1_1
@@ -2684,6 +2723,15 @@ export async function readDesktopBridgeRequestOnce(
     );
   }
   if (payload.status === "pending") return { pending, status: "pending" };
+  if (payload.status === "failed") return {
+    pending, status: "not-submitted",
+    transactionRecovery: decodeDesktopNotSubmitted(payload, {
+      requestId: pending.requestId, invocationId: pending.invocationId,
+      requestCommitment: pending.requestCommitment, origin: pending.origin!,
+      address: pending.address, network: pending.network, chainId: pending.chainId,
+      method: pending.method, pending
+    }, session.sessionId, pending.sessionId)
+  };
   return {
     pending,
     status: "approved",
@@ -2727,6 +2775,9 @@ export interface ReadResultForSessionScope {
 export interface ReadResultForSessionArgs {
   invocationId?: string;
   requestCommitment?: string;
+  /** Original immutable bytes/input; needed only to validate structured failure evidence. */
+  requestPayload?: unknown;
+  originalSessionId?: string;
   /** Base URL of the Infer Desk IPC bridge (NOT the session URL token path). */
   bridgeOrigin: string;
   requestId: string;
@@ -2745,6 +2796,7 @@ export interface ReadResultForSessionArgs {
  * wire payload into the AIP-63 / `cedra:signAndSubmitTransaction`
  * shape Desk stored. */
 export type ReadResultForSessionResult =
+  | { ok: true; status: "not-submitted"; transactionRecovery: ExternalTransactionRecovery }
   | { ok: true; status: "approved" | "rejected"; hash?: string; payload: unknown; finalizedAt: string }
   | { ok: true; status: "pending" | "unknown"; transactionHash?: string; reason?: string }
   | { ok: false; reason: "scope_mismatch" | "not_found" | "unavailable" };
@@ -2865,16 +2917,32 @@ export async function readResultForSession(
     return { ok: false, reason: "scope_mismatch" };
   const scope = parseReadResultScope(record.scope);
   if (!scope) return { ok: false, reason: "scope_mismatch" };
-  if (
-    scope.origin !== args.scope.origin ||
-    scope.transport !== args.scope.transport ||
-    scope.accountAddress.toLowerCase() !==
-      args.scope.accountAddress.toLowerCase() ||
-    scope.network !== args.scope.network ||
-    scope.chainId !== args.scope.chainId ||
-    scope.method !== args.scope.method
-  ) {
-    return { ok: false, reason: "scope_mismatch" };
+  try {
+    if (
+      scope.origin !== args.scope.origin ||
+      scope.transport !== args.scope.transport ||
+      canonicalAddress(scope.accountAddress) !== canonicalAddress(args.scope.accountAddress) ||
+      scope.network !== args.scope.network || scope.chainId !== args.scope.chainId ||
+      scope.method !== args.scope.method
+    ) return { ok: false, reason: "scope_mismatch" };
+  } catch { return { ok: false, reason: "scope_mismatch" }; }
+  if (record.status === "failed") {
+    try {
+      const session = args.session;
+      if (!session || session.transport !== "desktop-bridge" ||
+          session.sessionId !== args.newSessionId || !args.originalSessionId ||
+          args.scope.origin !== window.location.origin ||
+          canonicalAddress(session.address) !== canonicalAddress(args.scope.accountAddress) ||
+          session.network !== args.scope.network || session.chainId !== args.scope.chainId ||
+          desktopBridgeOrigin(session, args.options) !== args.bridgeOrigin)
+        throw new Error("Current desktop read authority differs from the original scope");
+      return { ok: true, status: "not-submitted", transactionRecovery: decodeDesktopNotSubmitted(payload, {
+        requestId: args.requestId, invocationId: args.invocationId,
+        requestCommitment: args.requestCommitment, origin: args.scope.origin,
+        address: args.scope.accountAddress, network: args.scope.network, chainId: args.scope.chainId,
+        method: args.scope.method, pending: { requestPayload: args.requestPayload }
+      }, args.newSessionId, args.originalSessionId) };
+    } catch { return { ok: false, reason: "unavailable" }; }
   }
   if (record.status === "pending" || record.status === "unknown") {
     if (!args.requestCommitment || !args.invocationId)

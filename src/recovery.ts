@@ -676,6 +676,7 @@ async function authorizedReadDesktopBridge(
   const result = await readResultForSession({
     invocationId: row.invocationId,
     requestCommitment: row.requestCommitment,
+    requestPayload: row.pending.requestPayload, originalSessionId: row.sessionId,
     bridgeOrigin: row.endpoint,
     requestId: row.requestId,
     newSessionId: session.sessionId,
@@ -686,7 +687,18 @@ async function authorizedReadDesktopBridge(
     session, options
   });
   if (!result.ok) return null;
+  const assertCurrentSession = () => {
+    const current = readExternalSession();
+    if (!sameScope(row, current) || current.sessionId !== session.sessionId ||
+        !sameBridgeOrigin(row, current, options)) throw new Error("Desktop read authorization changed");
+  };
   try {
+    assertCurrentSession();
+    if (result.status === "not-submitted") {
+      const stored = await saveDurableExternalTransactionRecovery(row.id, result.transactionRecovery);
+      assertCurrentSession();
+      return externalOutcome(stored, true);
+    }
     if (result.status === "pending" || result.status === "unknown") {
       if (result.transactionHash) {
         await saveDurableTransactionHash(row.id, result.transactionHash);
@@ -1128,6 +1140,14 @@ export async function readRecoverableRequest(
         const result = await readDesktopBridgeRequestOnce(
           row.requestId, session, options, row.pending as Extract<DurableRequest["pending"], { version: 2 }>
         );
+        if (!matchingSession(row, readExternalSession(), options))
+          throw new Error("Desktop read authorization changed");
+        if (result.status === "not-submitted") {
+          const stored = await saveDurableExternalTransactionRecovery(row.id, result.transactionRecovery);
+          if (!matchingSession(row, readExternalSession(), options))
+            throw new Error("Desktop read authorization changed");
+          return externalOutcome(stored, true)!;
+        }
         if (result.status === "pending") return { ...base, status: "pending", ...uncertainExecution(row) };
         if (!result.output) return { ...base, status: "unknown", ...uncertainExecution(row), reason: "Missing approved output" };
         outcome = { ...base, status: "approved", output: result.output };
@@ -1242,18 +1262,35 @@ export async function acknowledgeRecoverableRequest(
   }
   const row = await exactRecord(requestIdOrRecoveryId, options);
   const final = replay(row);
-  if (!final || (final.status !== "approved" && final.status !== "rejected"))
+  const failure = row.transport === "desktop-bridge" ? externalOutcome(row) : null;
+  const notSubmitted = failure?.submissionDisposition === "not-submitted";
+  if ((!final || (final.status !== "approved" && final.status !== "rejected")) && !notSubmitted)
     throw new InferAdapterError(InferErrorCode.InternalError, "Read a verified final outcome before acknowledging this request");
   if (row.state === "acknowledged") return;
   const session = readExternalSession();
   // Missing historical metadata is not proof of a legacy peer: retain possible
   // Desktop v1 debt until its original result is remotely acknowledged.
-  if (row.transport === "desktop-bridge" && row.remoteAcknowledgementRequired !== false &&
-      (row.remoteAcknowledgementRequired === true || (row.requestCommitment && row.invocationId))) {
+  if (row.transport === "desktop-bridge" && (notSubmitted || (row.remoteAcknowledgementRequired !== false &&
+      (row.remoteAcknowledgementRequired === true || (row.requestCommitment && row.invocationId))))) {
     if (!row.requestCommitment || !row.invocationId ||
         session?.integrationContractVersion !== 1 || !session.capabilities?.durableInvocationLookup ||
         !sameScope(row, session) || !sameBridgeOrigin(row, session, options))
       throw new InferAdapterError(InferErrorCode.Unauthorized, "Reconnect the original account and network to acknowledge its retained result");
+    if (notSubmitted) {
+      const remote = await readResultForSession({
+        invocationId: row.invocationId, requestCommitment: row.requestCommitment,
+        requestPayload: row.pending.requestPayload, originalSessionId: row.sessionId,
+        bridgeOrigin: row.endpoint, requestId: row.requestId, newSessionId: session.sessionId,
+        scope: { origin: row.origin, transport: "desktop-bridge", accountAddress: row.address,
+          network: row.network, chainId: row.chainId, method: row.method }, session, options
+      });
+      if (!remote.ok || remote.status !== "not-submitted")
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Original terminal failure could not be revalidated before acknowledgement");
+      await saveDurableExternalTransactionRecovery(row.id, remote.transactionRecovery);
+      const current = readExternalSession();
+      if (!sameScope(row, current) || current.sessionId !== session.sessionId || !sameBridgeOrigin(row, current, options))
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Desktop acknowledgement authority changed");
+    }
     await acknowledgeDesktopResult({
       invocationId: row.invocationId, requestCommitment: row.requestCommitment,
       bridgeOrigin: row.endpoint, requestId: row.requestId, newSessionId: session.sessionId,
@@ -1261,6 +1298,11 @@ export async function acknowledgeRecoverableRequest(
         network: row.network, chainId: row.chainId, method: row.method },
       session, options
     });
+    if (notSubmitted) {
+      const current = readExternalSession();
+      if (!sameScope(row, current) || current.sessionId !== session.sessionId || !sameBridgeOrigin(row, current, options))
+        throw new InferAdapterError(InferErrorCode.Unauthorized, "Desktop acknowledgement authority changed");
+    }
   }
   await transitionDurableRequest(row.id, "acknowledge");
   if (matchingSession(row, session, options)) {
@@ -1289,7 +1331,7 @@ export async function archiveRecoverableRequest(
     throw new InferAdapterError(InferErrorCode.Unauthorized,
       "Request is not active in this browser origin");
   }
-  if (row.final) {
+  if (row.final || (row.transport === "desktop-bridge" && externalOutcome(row)?.submissionDisposition === "not-submitted")) {
     throw new InferAdapterError(InferErrorCode.InvalidParams,
       "Verified final outcomes must be acknowledged after durable acceptance");
   }

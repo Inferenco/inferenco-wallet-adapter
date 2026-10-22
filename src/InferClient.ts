@@ -783,7 +783,9 @@ export class InferClient extends EventEmitter<InferClientEvents> {
         const nativeFence = nativeProviderBinding(this.options)?.capture();
         const outcome = await this.readRecoverableRequest(request.recoveryId);
         nativeFence?.();
-        if (outcome.status !== "approved" && outcome.status !== "rejected") continue;
+        const desktopNotSubmitted = outcome.transport === "desktop-bridge" && outcome.status === "unknown" &&
+          outcome.submissionDisposition === "not-submitted" && outcome.failureCode === "EXECUTION_FAILED_BEFORE_BROADCAST";
+        if (outcome.status !== "approved" && outcome.status !== "rejected" && !desktopNotSubmitted) continue;
         const stillActive = (await this.listRecoverableRequests()).some((item) =>
           item.recoveryId === request.recoveryId && item.method === request.method
         );
