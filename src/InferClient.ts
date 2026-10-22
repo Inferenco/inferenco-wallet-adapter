@@ -438,7 +438,8 @@ async function retryLocalBridgeConnectAfterDeeplink(
  */
 async function pollPreauthUntilResolved(
   requestId: string,
-  options: InferWalletOptions
+  options: InferWalletOptions,
+  unvalidatedSession: InferExternalSession | null
 ): Promise<InferExternalSession | null> {
   let settled = false;
   const tryFinish = (resolve: (v: InferExternalSession | null) => void) =>
@@ -475,7 +476,7 @@ async function pollPreauthUntilResolved(
   // Peer-tab wake. Returns null on its own timeout; in that case
   // the poll loop's null is the eventual winner.
   const externalWait = (async (): Promise<InferExternalSession | null> => {
-    const session = await waitForExternalSession(options);
+    const session = await waitForExternalSession(options, unvalidatedSession);
     if (settled || session === null) return null;
     return session;
   })();
@@ -981,6 +982,7 @@ export class InferClient extends EventEmitter<InferClientEvents> {
       // the params.
       const consumedCallback = await consumeExternalCallbackIfPresent(this.options);
       assertCurrent();
+      const cachedSession = readExternalSession();
       const externalSession = await readValidatedExternalSession(this.options);
       assertCurrent();
       if (externalSession) {
@@ -1039,7 +1041,8 @@ if (typeof window !== "undefined" && isMobileBrowser()) {
         if (preauth) {
           const session = await pollPreauthUntilResolved(
             preauth.requestId,
-            this.options
+            this.options,
+            cachedSession
           );
           assertCurrent();
           if (session) {

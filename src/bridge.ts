@@ -1240,21 +1240,30 @@ function hasPendingMobilePairingResume(): boolean {
 }
 
 export async function waitForExternalSession(
-  options: InferWalletOptions = {}
+  options: InferWalletOptions = {},
+  ignoredSession: InferExternalSession | null = null
 ): Promise<InferExternalSession | null> {
   if (!isBrowser()) return null;
   installExternalSessionResumeListeners();
   storeCallbackSession();
 
+  // Reconnect may retain an unreachable session for request recovery. It
+  // must not win a fresh approval wait, even if re-emitted by a peer tab.
+  // Compare the session and bridge identity, not mutable display metadata.
+  const acceptable = (session: InferExternalSession | null): session is InferExternalSession =>
+    session !== null && !(ignoredSession &&
+      session.transport === ignoredSession.transport &&
+      session.sessionId === ignoredSession.sessionId &&
+      session.bridgeUrl === ignoredSession.bridgeUrl);
   const immediateSession = readExternalSession();
-  if (immediateSession) {
+  if (acceptable(immediateSession)) {
     return immediateSession;
   }
 
   return await new Promise((resolve) => {
     let settled = false;
     const finish = (session: InferExternalSession | null) => {
-      if (settled) {
+      if (settled || (session !== null && !acceptable(session))) {
         return;
       }
       settled = true;
@@ -1293,7 +1302,8 @@ export async function waitForExternalSession(
     }, bridgePollIntervalMs(options));
 
     const timeoutId = window.setTimeout(() => {
-      finish(readExternalSession());
+      const session = readExternalSession();
+      finish(acceptable(session) ? session : null);
     }, bridgePollTimeoutMs(options));
   });
 }
